@@ -80,12 +80,12 @@ pub(super) fn check(
             target: Some(target),
         } => format!(
             "the base is its fetched tip, and the default target '{}' is there too",
-            codeflow_core::git::display_text(target)
+            super::shown_reference(root, target)
         ),
     };
     println!(
         "codeflow ci: line tip: the head is judged as the next tip of '{}' ({how})",
-        codeflow_core::git::display_text(&line)
+        super::shown_reference(root, &line)
     );
     if let Err(error) = judge(root, &line, &source, run.head, tagged) {
         refuse(root, tagged, &error, Some(&line), &source);
@@ -192,7 +192,7 @@ fn judge(
         return Ok(());
     }
     let place = format!("'origin/{line}'");
-    match epic_line_bound_at(root, line, &tip_text, &place).map_err(|error| error.to_string())? {
+    match epic_line_bound_at(root, line, &tip_text, &place).map_err(|error| error.shown(root))? {
         EpicLineBinding::Bound => {}
         EpicLineBinding::Refused(reason) | EpicLineBinding::Unbound(reason) => {
             return Err(format!(
@@ -293,7 +293,10 @@ fn refuse(
         sha: None,
         violation: Violation::always_blocking(
             RULE,
-            format!("cannot judge the head as an epic line's next tip: {message}"),
+            codeflow_core::security::git::without_remote_names(
+                root,
+                &format!("cannot judge the head as an epic line's next tip: {message}"),
+            ),
             &remedy,
         ),
     });

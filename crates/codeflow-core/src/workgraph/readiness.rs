@@ -90,11 +90,13 @@ pub struct Entry {
     /// beyond the task's own record, in display form. Set on a
     /// [`State::Landed`] entry; empty otherwise (TSK-1038).
     pub landed_branches: Vec<String>,
-    /// The same landed branches as git stores them, for machine output.
+    /// The landed branches for machine output: exact text, or the display
+    /// form for a name that is not valid UTF-8, except where a withheld
+    /// remote name is replaced by the placeholder.
     pub landed_branch_names: Vec<String>,
-    /// The same branches as git stores them, for machine output: the exact
-    /// text, or the display form for a name that is not valid UTF-8, which
-    /// no text can hold exactly (TSK-388).
+    /// The branches for machine output: exact except where a withheld remote
+    /// name is replaced by the placeholder, or the display form for a name
+    /// that is not valid UTF-8 (TSK-388).
     pub branch_names: Vec<String>,
     /// Branches on unrelated remotes, reported as information rather than claims.
     pub informational_branches: Vec<String>,
@@ -219,13 +221,13 @@ type Resolved = Result<Option<(String, git2::Oid)>, String>;
 /// upstream have diverged.
 fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
     let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.shown(repo_root))?;
     let Some(resolved) = resolved else {
         return Ok(None);
     };
     Ok(
         super::work_start::target_reference_read(repo, &resolved.target)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| error.shown(repo_root))?
             .map(|(reference, commit)| (reference, commit.id())),
     )
 }
@@ -279,22 +281,22 @@ fn claim_reference(
         None => return Ok(reference),
     };
     let fetched = format!("refs/remotes/{remote}/{branch}");
-    let Some(fetched_tip) =
-        super::work_start::reference_commit(repo, &fetched).map_err(|error| error.to_string())?
+    let Some(fetched_tip) = super::work_start::reference_commit(repo, &fetched)
+        .map_err(|error| error.shown(repo.commondir()))?
     else {
         return Ok(reference);
     };
     if fetched_tip == tip {
         return Ok(fetched);
     }
-    Err(format!(
+    Err(crate::security::git::without_remote_names(repo.commondir(), &format!(
         "work claim cuts a task branch from the fetched tip of '{}', and the local branch {} at {tip} differs from {} at {fetched_tip}; land the local commits through a pull request first, or claim from a checkout whose local branch matches the fetched line",
         crate::git::display_text(declared),
         crate::git::display_text(&reference),
         // The fetched ref holds a configured remote's name, shown only when
         // plain (TSK-416 review round 7).
         crate::security::git::shown_ref(repo.commondir(), &fetched),
-    ))
+    )))
 }
 
 /// The remote `work claim` fetches before it judges `declared`: the remote
@@ -354,7 +356,7 @@ pub(crate) fn target_fetch_remote(
         // A failed lookup cannot establish whether a short spelling holds
         // an unconfigured remote identity. Do not relay the name or error.
         Err(error) => Err(format!(
-            "cannot read target base branch (name and Git diagnostic withheld): class={:?}, code={:?}",
+            "cannot read the target's local branch (name and Git diagnostic withheld): class={:?}, code={:?}",
             error.class(),
             error.code()
         )),
@@ -1041,34 +1043,6 @@ struct Judged<'a> {
     line: &'a LandLine,
 }
 
-/// Relayed refusals keep exact refs in the error used for decisions and
-/// sanitize each ref-bearing field only when producing output.
-fn readiness_error(repo: &Repository, error: &super::work_start::WorkStartError) -> String {
-    use super::work_start::WorkStartError;
-    let refs: Vec<&str> = match error {
-        WorkStartError::Target(target)
-        | WorkStartError::MergeBase(target)
-        | WorkStartError::UnstableTarget(target) => vec![target],
-        WorkStartError::DependencyOnOtherLine { line, .. }
-        | WorkStartError::DependencyLineUnknown { line, .. } => vec![line],
-        WorkStartError::TargetMismatch {
-            declared,
-            requested,
-            ..
-        } => vec![declared, requested],
-        _ => Vec::new(),
-    };
-    let root = repo.commondir();
-    let mut text = error.to_string();
-    for reference in refs {
-        text = text.replace(
-            reference,
-            &crate::security::git::shown_escaped_ref(root, reference),
-        );
-    }
-    crate::security::git::without_remote_names(root, &text)
-}
-
 /// The state and reason of one open task, and the landed branches that make
 /// it [`State::Landed`]; `None` for a closed task. Only a task that would
 /// otherwise be ready can be finished without its record knowing: a claim, a
@@ -1097,7 +1071,7 @@ fn derive_state(
                 NotReady::Waiting => State::Waiting,
                 NotReady::Invalid => State::Invalid,
             };
-            Some((state, readiness_error(on.repo, &error), Vec::new()))
+            Some((state, error.shown(on.repo.commondir()), Vec::new()))
         }
     }
 }
@@ -1114,6 +1088,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     // name withheld unless plain (TSK-416 review round 7).
     let withheld = crate::security::git::WithheldRemotes::read(repo_root);
     let shown = |name: &GitName| withheld.scrub(&name.display().to_string());
+    let machine_shown = |name: &GitName| withheld.scrub(&exact_text(name));
     let prefixes = work_prefixes(repo_root).map_err(|error| error.to_string())?;
     let default = super::default_work_target(repo_root).map_err(|error| error.to_string())?;
     let mut out = Backlog {
@@ -1172,10 +1147,8 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             let (names, done) = split_landed(&repo, repo_root, claims, *tip);
             // The report shows names; the decisions above used exact bytes.
             out.landed.extend(done.iter().map(shown));
-            let (branch_names, names): (Vec<String>, Vec<String>) = names
-                .iter()
-                .map(|name| (exact_text(name), shown(name)))
-                .unzip();
+            let branch_names = names.iter().map(machine_shown).collect();
+            let names: Vec<_> = names.iter().map(shown).collect();
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
@@ -1209,7 +1182,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 branches: names,
                 branch_names,
                 landed_branches: landed_work.iter().map(shown).collect(),
-                landed_branch_names: landed_work.iter().map(exact_text).collect(),
+                landed_branch_names: landed_work.iter().map(machine_shown).collect(),
                 informational_branches: withheld
                     .scrub_all(&carried.information(&record.id, reference)),
             });
@@ -1916,7 +1889,7 @@ impl StackHints {
             &pins,
             &mut self.branches,
         )
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.shown(root))?;
         Ok(values)
     }
 }
@@ -1988,7 +1961,12 @@ fn claim_target(root: &Path, task_id: &str) -> Result<Option<String>, String> {
         // only when plain (TSK-416 review round 7).
         let shown: Vec<String> = targets
             .iter()
-            .map(|target| crate::security::git::shown_ref(repo.commondir(), target))
+            .map(|target| {
+                crate::security::git::without_remote_names(
+                    repo.commondir(),
+                    &crate::security::git::shown_ref(repo.commondir(), target),
+                )
+            })
             .collect();
         return Err(format!(
             "{task_id} has ambiguous fetched targets: {}",
@@ -2245,7 +2223,7 @@ pub fn claim_on(
         .map_err(|error| {
             format!(
                 "not ready on {reference_shown}: {}",
-                readiness_error(&repo, &error)
+                error.shown(repo.commondir())
             )
         })?;
     let information = refuse_claimed_or_landed(
@@ -2547,6 +2525,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn work_start_renderer_covers_all_target_and_line_variants() {
+        use super::super::work_start::WorkStartError;
+        let dir = repo();
+        let root = dir.path();
+        let target = "refs/remotes/unknown-SECRETVALUE/missing".to_string();
+        let errors = [
+            WorkStartError::Target(target.clone()),
+            WorkStartError::MergeBase(target.clone()),
+            WorkStartError::UnstableTarget(target.clone()),
+            WorkStartError::DependencyOnOtherLine {
+                task_id: "TSK-002".into(),
+                dependency: "TSK-001".into(),
+                line: target.clone(),
+            },
+            WorkStartError::DependencyLineUnknown {
+                task_id: "TSK-002".into(),
+                dependency: "TSK-001".into(),
+                line: target.clone(),
+            },
+            WorkStartError::TargetMismatch {
+                task_id: "TSK-002".into(),
+                declared: target.clone(),
+                requested: "main".into(),
+            },
+        ];
+        for error in errors {
+            let exact = error.to_string();
+            let shown = error.shown(root);
+            assert!(!shown.contains("SECRETVALUE"), "{shown}");
+            assert!(
+                shown.contains(crate::security::git::WITHHELD_REMOTE),
+                "{shown}"
+            );
+            assert_eq!(
+                error.to_string(),
+                exact,
+                "rendering keeps exact error fields"
+            );
+        }
+    }
+
+    #[test]
+    fn differing_claim_reference_withholds_embedded_remote_names() {
+        let dir = repo();
+        commit(dir.path(), "base");
+        let repo = Repository::open(dir.path()).unwrap();
+        let tip = repo.head().unwrap().target().unwrap();
+        git(dir.path(), &["commit", "--allow-empty", "-qm", "advance"]).unwrap();
+        let advanced = repo.head().unwrap().target().unwrap();
+        let remote = "cred@SECRETVALUE";
+        repo.config()
+            .unwrap()
+            .set_str(&format!("remote.{remote}.url"), "/unused")
+            .unwrap();
+        let branch = format!("integration/{remote}");
+        repo.reference(
+            &format!("refs/remotes/origin/{branch}"),
+            advanced,
+            true,
+            "test",
+        )
+        .unwrap();
+        let said =
+            claim_reference(&repo, &branch, true, format!("refs/heads/{branch}"), tip).unwrap_err();
+        assert!(said.contains("local branch"), "{said}");
+        assert!(said.contains("differs from"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
+
+    #[test]
     fn relayed_readiness_errors_withhold_targets_and_lines() {
         let dir = repo();
         let root = dir.path();
@@ -2647,7 +2695,10 @@ mod tests {
         ] {
             let said = target_fetch_remote(&repo, declared).unwrap_err();
             assert!(!said.contains("SECRETVALUE"), "{said}");
-            assert!(said.contains("cannot read target base branch"), "{said}");
+            assert!(
+                said.contains("cannot read the target's local branch"),
+                "{said}"
+            );
         }
     }
 

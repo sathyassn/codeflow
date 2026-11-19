@@ -852,17 +852,25 @@ fn work_start_reports_an_unconfigured_claim_remote() {
     );
     assert!(
         started.contains("note: other branches were not checked")
-            && started.contains("git.claim_remotes names 'archive'"),
+            && started.contains(&format!(
+                "git.claim_remotes names '{}'",
+                codeflow_core::security::git::WITHHELD_REMOTE
+            )),
         "{started}"
     );
+    assert!(!started.contains("archive"), "{started}");
     let refused = refused(
         &codeflow(&root, &["work", "claim", "TSK-001"]),
         "claim with an unconfigured remote",
     );
     assert!(
-        refused.contains("git.claim_remotes names 'archive'"),
+        refused.contains(&format!(
+            "git.claim_remotes names '{}'",
+            codeflow_core::security::git::WITHHELD_REMOTE
+        )),
         "{refused}"
     );
+    assert!(!refused.contains("archive"), "{refused}");
 }
 
 /// One approving Reviews row for the whole unit at each commit an acceptance

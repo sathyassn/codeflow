@@ -142,6 +142,259 @@ fn claim_withholds_a_missing_fetched_source() {
     assert!(!text.contains("SECRETVALUE"), "{text}");
 }
 
+fn withheld_start_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = fixture();
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/main");
+    git(
+        dir.path(),
+        &["remote", "add", remote, bare.path().to_str().unwrap()],
+    );
+    write(
+        dir.path(),
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "docs: target"]);
+    git(dir.path(), &["push", "-q", remote, "main"]);
+    (dir, bare, target)
+}
+
+#[test]
+fn start_withholds_an_advanced_claim_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    succeeds(&cli(root, &["work", "claim", "TSK-001"], None));
+    let branch = claimed(root, "TSK-001");
+    git(root, &["commit", "--allow-empty", "-qm", "chore: advance"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", &branch]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(said.contains("advanced to"), "{said}");
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn start_withholds_a_required_claim_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["commit", "--allow-empty", "-qm", "chore: advance"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("HEAD does not contain required base"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn start_withholds_a_mismatched_target() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/cred@SECRETVALUE/other",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: another target"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main:other"]);
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001", "--into", "main"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("not requested target"), "{said}");
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn next_json_withholds_remote_names_inside_claim_branches() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-cred@SECRETVALUE";
+    git(root, &["branch", branch]);
+    git(root, &["branch", "task/TSK-001-other"]);
+    let out = cli(root, &["work", "next", "--json"], None);
+    succeeds(&out);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["state"], "active", "{json}");
+    assert!(!task["branches"].as_array().unwrap().is_empty(), "{json}");
+    assert!(
+        !json["conflicts"]["TSK-001"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+    assert!(!text(&out).contains("SECRETVALUE"), "{}", text(&out));
+}
+
+#[test]
+fn next_json_keeps_ordinary_claim_branches_byte_exact() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-café@topic";
+    git(root, &["branch", branch]);
+    let out = cli(root, &["work", "next", "--json"], None);
+    succeeds(&out);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["branches"], serde_json::json!([branch]), "{json}");
+}
+
+#[test]
+fn next_json_withholds_landed_branches_and_keeps_plain_names_exact() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let (dir, _bare, _) = withheld_start_fixture();
+        let root = dir.path();
+        git(root, &["switch", "-qc", branch]);
+        write(root, "implementation", "work\n");
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "feat: work"]);
+        git(root, &["switch", "-q", "main"]);
+        git(root, &["merge", "--no-ff", "-qm", "merge work", branch]);
+        git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+        let out = cli(root, &["work", "next", "--json"], None);
+        succeeds(&out);
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let task = json["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == "TSK-001")
+            .unwrap();
+        assert_eq!(task["state"], "landed", "{json}");
+        assert!(
+            !task["landed_branches"].as_array().unwrap().is_empty(),
+            "{json}"
+        );
+        assert!(!text(&out).contains("SECRETVALUE"), "{}", text(&out));
+        if !branch.contains("SECRETVALUE") {
+            assert_eq!(
+                task["landed_branches"],
+                serde_json::json!([branch]),
+                "{json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn next_withholds_an_unknown_dependency_line() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/unknown-SECRETVALUE/other",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: unknown line"]);
+    let out = cli(root, &["work", "next"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(
+        said.contains("which is not fetched here: unknown"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn ci_withholds_rejected_declared_line_in_output() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/EPC-999-cred@SECRETVALUE",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: declared line"]);
+    for branch in ["task/TSK-001-work", "task/TSK-001-cred@SECRETVALUE"] {
+        for line_tip in [false, true] {
+            let mut args = vec!["ci", "--base", "HEAD", "--head", "HEAD", "--branch", branch];
+            if line_tip {
+                args.extend(["--line-tip", "integration/EPC-999-cred@SECRETVALUE"]);
+            }
+            let out = cli(root, &args, None);
+            let said = text(&out);
+            assert!(said.contains("branch declared target"), "{said}");
+            if line_tip {
+                assert!(said.contains("line tip: the head is judged"), "{said}");
+            }
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn start_withholds_an_unfetched_dependency_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    // The claim is fixed before introducing the predecessor. Resolving the
+    // dependency source refuses before dependency validation, with a shown ref.
+    succeeds(&cli(root, &["work", "claim", "TSK-001"], None));
+    let branch = claimed(root, "TSK-001");
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/cred@SECRETVALUE/missing",
+        ),
+    );
+    let task = std::fs::read_to_string(root.join("project-management/tasks/TSK-001.md"))
+        .unwrap()
+        .replace("depends_on: []", "depends_on: [TSK-002]");
+    write(root, "project-management/tasks/TSK-001.md", &task);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: dependency"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", &branch]);
+    git(root, &["merge", "-q", "main"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("is not fetched here; fetch its remote"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
 #[cfg(unix)]
 #[test]
 fn claim_redacts_remote_userinfo_in_git_diagnostics() {

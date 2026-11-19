@@ -28,6 +28,13 @@ pub const TRACKING_STATE_MESSAGE: &str = "cannot determine durable-work tracking
 /// Maximum provider wait for the review evidence of one predecessor pin.
 pub const REVIEW_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
+fn shown_ref(root: &Path, reference: &str) -> String {
+    crate::security::git::without_remote_names(
+        root,
+        &crate::security::git::shown_ref(root, reference),
+    )
+}
+
 /// Render the tracking-state refusal consistently across commands.
 #[must_use]
 pub fn tracking_state_message(error: impl std::fmt::Display) -> String {
@@ -205,6 +212,33 @@ pub enum NotReady {
 }
 
 impl WorkStartError {
+    /// Render a refusal for output, keeping exact fields available to decisions.
+    #[must_use]
+    pub fn shown(&self, root: &Path) -> String {
+        let refs: Vec<&str> = match self {
+            Self::Target(target) | Self::MergeBase(target) | Self::UnstableTarget(target) => {
+                vec![target]
+            }
+            Self::DependencyOnOtherLine { line, .. } | Self::DependencyLineUnknown { line, .. } => {
+                vec![line]
+            }
+            Self::TargetMismatch {
+                declared,
+                requested,
+                ..
+            } => vec![declared, requested],
+            _ => Vec::new(),
+        };
+        let mut text = self.to_string();
+        for reference in refs.into_iter().filter(|reference| !reference.is_empty()) {
+            text = text.replace(
+                reference,
+                &crate::security::git::shown_escaped_ref(root, reference),
+            );
+        }
+        crate::security::git::without_remote_names(root, &text)
+    }
+
     /// The catalogued step that clears this refusal of a task's admission:
     /// a task blocked on the target is unblocked in its own pull request
     /// (TSK-1036); any other refusal reconciles the planning anchor.
@@ -471,6 +505,14 @@ pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2:
 /// (TSK-416 review).
 #[must_use]
 pub fn fetch_origin(root: &Path, branch: &str) -> String {
+    if branch.starts_with("refs/remotes/")
+        && crate::security::git::shown_escaped_ref(root, branch) != branch
+    {
+        return format!(
+            "fetch its owning remote after checking the target; {}",
+            crate::security::git::WITHHELD_REMOTE_STEP
+        );
+    }
     format!(
         "fetch it ({})",
         step(&Pasted::new(root, "git fetch").value("origin").value(branch))
@@ -1022,6 +1064,30 @@ pub fn epic_line_proof(
     base: &str,
     head: &str,
 ) -> Result<EpicLineProof, String> {
+    unchecked_epic_line_proof(repo_root, branch, base_ref, base, head)
+        .map(|proof| match proof {
+            EpicLineProof::NotLine(reason) => {
+                EpicLineProof::NotLine(crate::security::git::without_remote_names(
+                    repo_root,
+                    &if base_ref.is_empty() {
+                        reason
+                    } else {
+                        reason.replace(base_ref, &shown_ref(repo_root, base_ref))
+                    },
+                ))
+            }
+            verified @ EpicLineProof::Verified(..) => verified,
+        })
+        .map_err(|reason| crate::security::git::without_remote_names(repo_root, &reason))
+}
+
+fn unchecked_epic_line_proof(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<EpicLineProof, String> {
     // The name grammar reads nothing, so its refusal is a negative proof.
     let epic_id = match super::line_adoption::epic_id(branch) {
         Ok(epic_id) => epic_id,
@@ -1058,7 +1124,7 @@ pub fn epic_line_proof(
         )?),
         None => None,
     };
-    let line_place = format!("'origin/{branch}'");
+    let line_place = format!("'origin/{}'", shown_ref(repo_root, branch));
     let mut anchors = vec![(&at_base, "the target")];
     if let Some(records) = &at_line {
         anchors.push((records, line_place.as_str()));
@@ -1088,7 +1154,7 @@ pub fn epic_line_proof(
     // cancelled at an anchor or the head, or a head that changes or removes
     // a trusted declaration or deletes the declaring epic (TSK-1286). A
     // task of the line's own epic only lifts the need for a declared task.
-    let declared = match declared_line_tasks(&anchors, &at_head, branch) {
+    let declared = match declared_line_tasks(repo_root, &anchors, &at_head, branch) {
         Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
         Ok(declared) => declared,
     };
@@ -1255,9 +1321,16 @@ pub fn epic_line_binding(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
-    let not_own = format!("names {epic_id}, which is not the epic of branch '{branch}'");
+    let not_own = format!(
+        "names {epic_id}, which is not the epic of branch '{}'",
+        shown_ref(repo_root, branch)
+    );
     // A planning branch must name the line's own epic; it never binds
     // through a declaration (TSK-1286 keeps the planning rule as it was).
     let claim = if let Some(plan) = branch.strip_prefix("plan/") {
@@ -1283,13 +1356,17 @@ pub fn epic_line_binding(
                 .is_none_or(|reason| reason.trim().is_empty())
             {
                 return Ok(EpicLineBinding::Refused(format!(
-                    "standalone task on branch '{branch}' has no nonblank standalone_reason"
+                    "standalone task on branch '{}' has no nonblank standalone_reason",
+                    shown_ref(repo_root, branch)
                 )));
             }
             let target = record.integration_target.as_deref().unwrap_or_default();
             if logical_target(target) != line {
                 return Ok(EpicLineBinding::Refused(format!(
-                    "standalone task on branch '{branch}' declares target '{target}', not this line '{line}'"
+                    "standalone task on branch '{}' declares target '{}', not this line '{}'",
+                    shown_ref(repo_root, branch),
+                    shown_ref(repo_root, target),
+                    shown_ref(repo_root, line)
                 )));
             }
             Claim::Line
@@ -1303,16 +1380,16 @@ pub fn epic_line_binding(
     };
     let records = anchor_records(repo_root, anchor)?;
     let Claim::Declared(own) = claim else {
-        return Ok(bound_in(&records, line, epic_id, place));
+        return Ok(bound_in(repo_root, &records, line, epic_id, place));
     };
     Ok(declared_binding(
+        repo_root,
         &records,
         line,
         epic_id,
         &own,
         head_value.as_deref(),
-        place,
-        &not_own,
+        (place, &not_own),
     ))
 }
 
@@ -1439,7 +1516,7 @@ pub(crate) fn epic_facts_at(
                 parent_line: record.parent_line,
             })
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.shown(repo_root))
 }
 
 /// Whether the trusted `records` (named `place`) let a task of `own`, an
@@ -1453,16 +1530,16 @@ pub(crate) fn epic_facts_at(
 /// outweigh a declaration at another; then the line itself must be bound
 /// there ([`bound_in`]).
 fn declared_binding(
+    root: &Path,
     records: &BTreeMap<String, Record>,
     line: &str,
     epic_id: &str,
     own: &str,
     head_value: Option<&str>,
-    place: &str,
-    not_own: &str,
+    (place, not_own): (&str, &str),
 ) -> EpicLineBinding {
     let field = super::line_adoption::PARENT_LINE_FIELD;
-    let membership = line_membership(line, own, &record_facts(records), place);
+    let membership = line_membership(root, line, own, &record_facts(records), place);
     // Refusals first, in this order, so no positive result can skip one:
     // the declaring epic closed here, then a head that changes or removes
     // the declaration found here, then the line's own epic closed here
@@ -1471,12 +1548,16 @@ fn declared_binding(
         return EpicLineBinding::Refused(format!("{not_own}: {reason}"));
     }
     if membership == LineMembership::Declared && head_value != Some(line) {
-        let shown = head_value.map_or_else(|| "none".to_string(), |value| format!("'{value}'"));
+        let shown = head_value.map_or_else(
+            || "none".to_string(),
+            |value| format!("'{}'", shown_ref(root, value)),
+        );
+        let line = shown_ref(root, line);
         return EpicLineBinding::Refused(format!(
             "{not_own}: {own} declares {field} '{line}' on {place}, but the head's {own} record declares {shown}; a branch cannot change the line its own epic lands on, so restore the field and change it through a planning pull request into the line"
         ));
     }
-    let binding = bound_in(records, line, epic_id, place);
+    let binding = bound_in(root, records, line, epic_id, place);
     if binding != EpicLineBinding::Bound {
         return binding;
     }
@@ -1513,10 +1594,14 @@ pub fn epic_line_bound_at(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
     let records = anchor_records(repo_root, anchor)?;
-    Ok(bound_in(&records, line, epic_id, place))
+    Ok(bound_in(repo_root, &records, line, epic_id, place))
 }
 
 /// Whether the trusted records at commit `tip` bind `line`, judged by
@@ -1534,14 +1619,24 @@ pub(crate) fn line_bound_at_tip(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo.commondir(), &reason),
+            ))
+        }
     };
     let tree = repo
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| format!("{tip}: {error}"))?;
     let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
-    Ok(bound_in(&records, line, epic_id, "the tip"))
+    Ok(bound_in(
+        repo.commondir(),
+        &records,
+        line,
+        epic_id,
+        "the tip",
+    ))
 }
 
 /// Whether one trusted record set (named `place`) binds `line`, whose name
@@ -1549,6 +1644,7 @@ pub(crate) fn line_bound_at_tip(
 /// archived, and a task there targets this exact line as a task of that
 /// epic or of an epic that declares the line as its `parent_line` there.
 fn bound_in(
+    root: &Path,
     records: &BTreeMap<String, Record>,
     line: &str,
     epic_id: &str,
@@ -1568,10 +1664,11 @@ fn bound_in(
             epic.status
         ));
     }
-    if let Some(reason) = chained_owner(records, line, place) {
+    if let Some(reason) = chained_owner(root, records, line, place) {
         return EpicLineBinding::Refused(reason);
     }
-    if !line_has_member_task(records, line, place) {
+    if !line_has_member_task(root, records, line, place) {
+        let line = shown_ref(root, line);
         return EpicLineBinding::Unbound(format!(
             "is not the target of any task of {epic_id} on {place}, nor of a task of an epic declaring {} '{line}' there",
             super::line_adoption::PARENT_LINE_FIELD
@@ -1610,6 +1707,7 @@ pub(crate) struct EpicFacts {
 /// never binds and no prefix or case spelling of the line matches, and a
 /// line whose own epic itself declares a `parent_line` refuses.
 pub(crate) fn line_membership(
+    root: &Path,
     line: &str,
     epic: &str,
     lookup: &dyn Fn(&str) -> Option<EpicFacts>,
@@ -1632,16 +1730,18 @@ pub(crate) fn line_membership(
     match facts.parent_line.as_deref() {
         None => LineMembership::Not(format!("{epic} declares no {field} on {place}")),
         Some(declared) if declared != line => LineMembership::Not(format!(
-            "{epic} declares {field} '{declared}' on {place}, not '{line}'"
+            "{epic} declares {field} '{}' on {place}, not '{}'",
+            shown_ref(root, declared),
+            shown_ref(root, line)
         )),
         Some(_) => match lookup(line_epic) {
             None => LineMembership::Not(format!(
                 "{epic}'s {field} names {line_epic}, which has no epic record on {place}"
             )),
             Some(owner) => match owner.parent_line.as_deref() {
-                Some(parent) => {
-                    LineMembership::Refused(owner_parent_refusal(line, line_epic, parent, place))
-                }
+                Some(parent) => LineMembership::Refused(owner_parent_refusal(
+                    root, line, line_epic, parent, place,
+                )),
                 None => LineMembership::Declared,
             },
         },
@@ -1650,8 +1750,16 @@ pub(crate) fn line_membership(
 
 /// The refusal when `line`'s own epic `line_epic` itself declares a
 /// `parent_line` (`parent`) on `place`: one level only (TSK-1286 AC-3).
-fn owner_parent_refusal(line: &str, line_epic: &str, parent: &str, place: &str) -> String {
+fn owner_parent_refusal(
+    root: &Path,
+    line: &str,
+    line_epic: &str,
+    parent: &str,
+    place: &str,
+) -> String {
     let field = super::line_adoption::PARENT_LINE_FIELD;
+    let line = shown_ref(root, line);
+    let parent = shown_ref(root, parent);
     format!(
         "{line_epic}, the epic of '{line}', itself declares {field} '{parent}' on {place}; one level only, so no other epic's {field} binds this line"
     )
@@ -1661,7 +1769,12 @@ fn owner_parent_refusal(line: &str, line_epic: &str, parent: &str, place: &str) 
 /// a `parent_line` in `records` (named `place`) and a task there targets
 /// the line as a task of an epic declaring it, the refusal naming the cause.
 /// A line with only its own epic's tasks is untouched.
-fn chained_owner(records: &BTreeMap<String, Record>, line: &str, place: &str) -> Option<String> {
+fn chained_owner(
+    root: &Path,
+    records: &BTreeMap<String, Record>,
+    line: &str,
+    place: &str,
+) -> Option<String> {
     let line_epic = super::line_adoption::epic_id(line).ok()?;
     let epic_record = |id: &str| {
         records
@@ -1681,7 +1794,7 @@ fn chained_owner(records: &BTreeMap<String, Record>, line: &str, place: &str) ->
                         .is_some_and(|declarer| declarer.parent_line.as_deref() == Some(line))
             })
     });
-    declaring.then(|| owner_parent_refusal(line, line_epic, parent, place))
+    declaring.then(|| owner_parent_refusal(root, line, line_epic, parent, place))
 }
 
 /// The epic facts of a parsed record set, for [`line_membership`].
@@ -1699,7 +1812,12 @@ fn record_facts(records: &BTreeMap<String, Record>) -> impl Fn(&str) -> Option<E
 
 /// Whether a task in `records` targets exactly `line` as a task of the
 /// line's epic or of an epic that declares the line there.
-fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &str) -> bool {
+fn line_has_member_task(
+    root: &Path,
+    records: &BTreeMap<String, Record>,
+    line: &str,
+    place: &str,
+) -> bool {
     records.values().any(|record| {
         record.kind == RecordKind::Task
             && record
@@ -1708,7 +1826,7 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
                 .is_some_and(|target| logical_target(target) == line)
             && record.epic_id.as_deref().is_some_and(|epic| {
                 matches!(
-                    line_membership(line, epic, &record_facts(records), place),
+                    line_membership(root, line, epic, &record_facts(records), place),
                     LineMembership::Own | LineMembership::Declared
                 )
             })
@@ -1729,6 +1847,7 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
 /// Returns the refusal for a cancelled or archived declaring epic, or for
 /// a head that changes, removes or deletes a trusted declaration.
 fn declared_line_tasks(
+    root: &Path,
     anchors: &[(&BTreeMap<String, Record>, &str)],
     head: &BTreeMap<String, Record>,
     line: &str,
@@ -1736,7 +1855,7 @@ fn declared_line_tasks(
     let field = super::line_adoption::PARENT_LINE_FIELD;
     let mut declared = BTreeMap::new();
     for (records, place) in anchors {
-        if let Some(reason) = chained_owner(records, line, place) {
+        if let Some(reason) = chained_owner(root, records, line, place) {
             return Err(reason);
         }
         for record in records.values() {
@@ -1748,7 +1867,7 @@ fn declared_line_tasks(
                     .integration_target
                     .as_deref()
                     .is_some_and(|target| logical_target(target) == line)
-                && line_membership(line, epic, &record_facts(records), place)
+                && line_membership(root, line, epic, &record_facts(records), place)
                     == LineMembership::Declared
             {
                 declared.entry(epic.to_string()).or_insert(*place);
@@ -1758,16 +1877,19 @@ fn declared_line_tasks(
     for (epic, trusted_at) in &declared {
         for (records, place) in anchors.iter().copied().chain([(head, "the head")]) {
             if let LineMembership::Refused(reason) =
-                line_membership(line, epic, &record_facts(records), place)
+                line_membership(root, line, epic, &record_facts(records), place)
             {
-                return Err(format!("{epic} declares {field} '{line}', but {reason}"));
+                return Err(format!(
+                    "{epic} declares {field} '{}', but {reason}",
+                    shown_ref(root, line)
+                ));
             }
         }
         if let LineMembership::Not(reason) =
-            line_membership(line, epic, &record_facts(head), "the head")
+            line_membership(root, line, epic, &record_facts(head), "the head")
         {
             return Err(format!(
-                "{epic} declares {field} '{line}' on {trusted_at}, but {reason}; a branch cannot change or remove the line an epic lands on, so change it through a planning pull request into the line"
+                "{epic} declares {field} '{}' on {trusted_at}, but {reason}; a branch cannot change or remove the line an epic lands on, so change it through a planning pull request into the line", shown_ref(root, line)
             ));
         }
     }
@@ -1841,7 +1963,11 @@ pub fn task_line_binding(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
     let Some(record) = task_record_at_revision(repo_root, task, head)? else {
         return Ok(EpicLineBinding::Refused(format!(
@@ -1879,15 +2005,15 @@ pub fn task_line_binding(
         let records = anchor_records(repo_root, anchor)?;
         let binding = match &claim {
             Claim::Declared(own) => declared_binding(
+                repo_root,
                 &records,
                 line,
                 epic_id,
                 own,
                 head_value.as_deref(),
-                place,
-                &not_own,
+                (place, &not_own),
             ),
-            Claim::Line => bound_in(&records, line, epic_id, place),
+            Claim::Line => bound_in(repo_root, &records, line, epic_id, place),
         };
         match binding {
             EpicLineBinding::Bound => bound = true,
@@ -2410,6 +2536,7 @@ pub fn reviewed_pins(
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let mut branches = None;
     reviewed_pins_in(&repo, &mut branches, values, lookup, false)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
 }
 
 /// [`reviewed_pins`] over branches read at most once. `review_first` asks
@@ -2552,6 +2679,7 @@ fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
 pub fn stack_base(root: &Path, pins: &[ReviewedPin]) -> Result<Option<git2::Oid>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     stack_base_in(&repo, &mut None, pins)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
 }
 
 /// [`stack_base`] over branches read at most once.
@@ -2813,9 +2941,9 @@ pub fn stacked_pins(
     lookup: &ReviewLookup<'_>,
 ) -> Result<Vec<ReviewedPin>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let head_id = head_commit(&repo, Some(head)).map_err(|error| error.to_string())?;
+    let head_id = head_commit(&repo, Some(head)).map_err(|error| error.shown(repo_root))?;
     let (merge_base, mut records) =
-        anchored_records(&repo, target, head_id).map_err(|error| error.to_string())?;
+        anchored_records(&repo, target, head_id).map_err(|error| error.shown(repo_root))?;
     let merge_base = Oid::from_str(&merge_base).map_err(|error| error.to_string())?;
     if !records.contains_key(task_id) {
         // A standalone record new on this branch carries its edges at head.
@@ -3089,8 +3217,9 @@ pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, 
     if !is_stable_work_target(&target) {
         return Err("override target must be a stable non-task branch".into());
     }
-    let (base, records) = anchored_records(&repo, &target, head.id()).map_err(|e| e.to_string())?;
-    validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.to_string())?;
+    let (base, records) =
+        anchored_records(&repo, &target, head.id()).map_err(|e| e.shown(repo_root))?;
+    validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.shown(repo_root))?;
     let commit = repo
         .find_commit(git2::Oid::from_str(&base).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -3181,7 +3310,7 @@ pub fn anchored_project_file(
         })?
         .to_owned();
     let base = check_work_start_for_branch(repo_root, task_id, &target, &branch)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.shown(repo_root))?
         .merge_base;
     let base = Oid::from_str(&base).map_err(|e| e.to_string())?;
     let tree = repo
@@ -3198,18 +3327,36 @@ pub fn anchored_project_file(
         Err(e) if e.code() == git2::ErrorCode::NotFound => {
             refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
         }
-        Err(e) => return Err(format!("cannot read {record} on {target}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {record} on {}: {}",
+                shown_ref(repo_root, &target),
+                crate::security::git::without_remote_names(repo_root, &e.to_string())
+            ))
+        }
     }
     let content = match tree.get_path(Path::new(path)) {
         Err(e) if e.code() == git2::ErrorCode::NotFound => None,
-        Err(e) => return Err(format!("cannot read {path} on {target}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {path} on {}: {}",
+                shown_ref(repo_root, &target),
+                crate::security::git::without_remote_names(repo_root, &e.to_string())
+            ))
+        }
         Ok(entry) => {
             if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
-                return Err(format!("{path} on {target} must be a regular file"));
+                return Err(format!(
+                    "{path} on {} must be a regular file",
+                    shown_ref(repo_root, &target)
+                ));
             }
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
             if blob.size() > MAX_BYTES {
-                return Err(format!("{path} on {target} exceeds {MAX_BYTES} bytes"));
+                return Err(format!(
+                    "{path} on {} exceeds {MAX_BYTES} bytes",
+                    shown_ref(repo_root, &target)
+                ));
             }
             Some(blob.content().to_vec())
         }
@@ -3851,6 +3998,10 @@ fn pinned_dependency(
                     crate::security::git::shown_tracking(repo.commondir(), name)
                 }
             })
+            .collect();
+        let unfetched: Vec<_> = unfetched
+            .iter()
+            .map(|name| shown_ref(repo.commondir(), name))
             .collect();
         return Err(refuse(not_landed_reason(&read, &unfetched)));
     }
@@ -4533,10 +4684,10 @@ impl ReviewRepositories {
         match config.get_bytes(&format!("branch.{branch}.remote")) {
             Ok(bytes) => {
                 let name = GitName::from_bytes(bytes);
-                let text = name.rule_text().map_err(|error| {
+                let text = name.rule_text().map_err(|_| {
                     format!(
-                        "cannot verify review for this pin: the configured remote is not valid UTF-8 ({})",
-                        error.display()
+                        "cannot verify review for this pin: the configured remote is not valid UTF-8; {}",
+                        crate::security::git::WITHHELD_REMOTE_STEP
                     )
                 })?;
                 names.insert(text.to_string());
@@ -4650,6 +4801,91 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn fetch_recovery_withholds_unclassified_tracking_targets() {
+        let dir = fixture();
+        let said = fetch_origin(dir.path(), "refs/remotes/unknown-SECRETVALUE/main");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        assert!(!said.contains("git fetch origin refs/remotes"), "{said}");
+    }
+
+    #[test]
+    fn stack_base_refusals_withhold_visible_branch_names() {
+        let dir = fixture();
+        let root = dir.path();
+        let repo = Repository::open(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let who = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let advanced = repo
+            .commit(None, &who, &who, "advance", &head.tree().unwrap(), &[&head])
+            .unwrap();
+        repo.reference(
+            "refs/heads/task/TSK-001-cred@SECRETVALUE",
+            advanced,
+            true,
+            "test",
+        )
+        .unwrap();
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision: head.id(),
+        };
+        let said = stack_base(root, &[pin]).unwrap_err();
+        assert!(said.contains("visible heads"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
+
+    #[test]
+    fn pin_refusal_withholds_unfetched_tracking_targets() {
+        let dir = fixture();
+        let root = dir.path();
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let tree = head.tree().unwrap();
+        let who = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let future = repo
+            .commit(None, &who, &who, "future pin", &tree, &[&head])
+            .unwrap();
+        let mut records = records_from_tree(&repo, &tree).unwrap();
+        records.get_mut("TSK-001").unwrap().integration_target =
+            Some("refs/remotes/unknown-SECRETVALUE/other".into());
+        let dependency = &mut records.get_mut("TSK-002").unwrap().depends_on[0];
+        dependency.kind = DependencyKind::Research;
+        dependency.pin = Some(future.to_string());
+        let error = pinned_dependency(
+            &repo,
+            &records,
+            "TSK-002",
+            "main",
+            &records["TSK-002"].depends_on[0],
+        )
+        .unwrap_err();
+        let said = error.shown(root);
+        assert!(said.contains("not fetched"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
+
+    #[test]
+    fn pin_review_withholds_an_unreadable_remote_name() {
+        use std::io::Write as _;
+        let dir = fixture();
+        let repo = Repository::open(dir.path()).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(repo.path().join("config"))
+            .unwrap();
+        file.write_all(b"\n[branch \"task/TSK-002-work\"]\nremote = cred-SECRETVALUE\xff\n")
+            .unwrap();
+        drop(file);
+        let said = review_repository(dir.path(), "task/TSK-002-work").unwrap_err();
+        assert!(said.contains("not valid UTF-8"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
 
     /// Round 23: only git's "not found" from the merge-base walk is a
     /// missing common ancestor; a history object that cannot be read is a
@@ -5042,6 +5278,120 @@ mod tests {
             "protected branch",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn line_binding_parser_refusals_withhold_invalid_parent_lines() {
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let changed = second_epic(Some("refs/remotes/unknown-SECRETVALUE/other"), "planning");
+        let dir = declared_fixture(Some(&declared), Some(&changed));
+        let binding = bind_declared(dir.path());
+        let EpicLineBinding::Refused(reason) = binding else {
+            panic!("{binding:?}")
+        };
+        assert!(reason.contains("parent_line"), "{reason}");
+        assert!(!reason.contains("SECRETVALUE"), "{reason}");
+        let own = serde_yaml::Value::String("integration/EPC-001-cred@SECRETVALUE".into());
+        let reason =
+            super::super::line_adoption::check_parent_line("EPC-001", Some(&own)).unwrap_err();
+        assert!(reason.contains("own line"), "{reason}");
+        assert!(!reason.contains("SECRETVALUE"), "{reason}");
+    }
+
+    #[test]
+    fn line_binding_refusals_withhold_changed_parent_lines() {
+        for hidden in [
+            "integration/EPC-009-cred@SECRETVALUE",
+            "integration/EPC-009-cred@SECRETVALUE/child",
+        ] {
+            let declared = second_epic(Some(DECLARED_LINE), "planning");
+            let changed = second_epic(Some(hidden), "planning");
+            let dir = declared_fixture(Some(&declared), Some(&changed));
+            let repo = Repository::open(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            let binding = bind_declared(dir.path());
+            let EpicLineBinding::Refused(reason) = binding else {
+                panic!("{binding:?}")
+            };
+            assert!(
+                reason.contains("head's EPC-002 record declares"),
+                "{reason}"
+            );
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+            let binding = task_line_binding(
+                dir.path(),
+                "TSK-002",
+                "HEAD",
+                DECLARED_LINE,
+                &[("main", "target")],
+            )
+            .unwrap();
+            let EpicLineBinding::Refused(reason) = binding else {
+                panic!("{binding:?}")
+            };
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+            let proof_dir = declared_fixture(Some(&declared), Some(&declared));
+            let proof_root = proof_dir.path();
+            let proof_repo = Repository::open(proof_root).unwrap();
+            proof_repo
+                .config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            git(proof_root, &["branch", "-f", "main", "HEAD"]);
+            fs::write(
+                proof_root.join("project-management/epics/EPC-002.md"),
+                &changed,
+            )
+            .unwrap();
+            git(proof_root, &["commit", "-am", "change declaration"]);
+            let proof = epic_line_proof(proof_root, DECLARED_LINE, "main", "main", "HEAD").unwrap();
+            let EpicLineProof::NotLine(reason) = proof else {
+                panic!("{proof:?}")
+            };
+            assert!(reason.contains("cannot change or remove"), "{reason}");
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn design_authority_file_refusals_withhold_tracking_targets() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        let target = "refs/remotes/cred@SECRETVALUE/main";
+        let path = root.join("project-management/tasks/TSK-002.md");
+        fs::write(
+            &path,
+            fs::read_to_string(&path).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {target}"),
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("large"), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "design authority"]);
+        let repo = Repository::open(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        repo.reference(target, repo.head().unwrap().target().unwrap(), true, "test")
+            .unwrap();
+        git(root, &["switch", "task/TSK-002-work"]);
+        git(root, &["merge", "--ff-only", "main"]);
+        for (path, phrase) in [
+            ("project-management", "must be a regular file"),
+            ("large", "exceeds"),
+        ] {
+            let said = anchored_project_file(root, "TSK-002", path).unwrap_err();
+            assert!(said.contains(phrase), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+        }
     }
 
     /// TSK-1286: a task of an epic whose record at the trusted anchor declares

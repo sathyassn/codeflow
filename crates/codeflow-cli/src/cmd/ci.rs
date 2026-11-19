@@ -727,10 +727,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         println!("{}", finding.line("codeflow ci", "note"));
         skipped.push("branch-naming");
     } else {
-        println!(
-            "codeflow ci: branch '{}'",
-            codeflow_core::git::display_text(&branch)
-        );
+        println!("codeflow ci: branch '{}'", shown_reference(&root, &branch));
         if let Some(v) = evaluate_branch(git, &branch) {
             tagged.push(v);
         }
@@ -906,7 +903,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     if let Some(out) = &args.blocking_rules_out {
         write_blocking_rules(out, &tagged);
     }
-    report(&tagged, &ran, &skipped)
+    report(&root, &tagged, &ran, &skipped)
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's
@@ -1715,7 +1712,7 @@ fn evaluate_commit_range(
                 "codeflow ci: range {}..{} ({}) — {} non-merge commit(s), {} merge(s)",
                 short(&base_sha),
                 head,
-                range_source,
+                codeflow_core::security::git::without_remote_names(root, range_source),
                 commits.len() - merges,
                 merges
             );
@@ -1790,6 +1787,13 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
         WorkStartError::Repository(_)
             | WorkStartError::UnresolvableTip(_)
             | WorkStartError::InvalidGraph(_)
+    )
+}
+
+fn shown_reference(root: &Path, reference: &str) -> String {
+    codeflow_core::security::git::without_remote_names(
+        root,
+        &codeflow_core::security::git::shown_ref(root, reference),
     )
 }
 
@@ -1915,9 +1919,16 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
         }
         Err(error) => {
             let finding = codeflow_core::remedy::Finding::new(
-                format!("a predecessor head in this range is not honoured as reviewed: {error}"),
-                codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                    .with(&[("target", &target.target), ("id", &task_id)]),
+                codeflow_core::security::git::without_remote_names(
+                    root,
+                    &format!(
+                        "a predecessor head in this range is not honoured as reviewed: {error}"
+                    ),
+                ),
+                codeflow_core::remedy::WORK_START_MERGE_PLANNING.with(&[
+                    ("target", &shown_reference(root, &target.target)),
+                    ("id", &task_id),
+                ]),
             );
             println!("{}", finding.line("codeflow ci", "note"));
             Vec::new()
@@ -1988,12 +1999,12 @@ fn evaluate_work_start(
                 tagged.push(TaggedViolation {
                     sha: None,
                     violation: if work_start_reader_error(&error) {
-                        tracking_state_violation(error)
+                        tracking_state_violation(error.shown(root))
                     } else {
                         Violation::new(
                             "work.stable_planning_anchor",
                             level,
-                            error.to_string(),
+                            error.shown(root),
                             codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", &task_id)]),
                         )
                     },
@@ -2014,13 +2025,19 @@ fn evaluate_work_start(
             tagged.push(TaggedViolation {
                 sha: None,
                 violation: if work_start_reader_error(&error) {
-                    tracking_state_violation(error)
+                    tracking_state_violation(error.shown(root))
                 } else {
                     Violation::new(
                         "work.stable_planning_anchor",
                         level,
-                        error.to_string(),
-                        error.admission_remedy(&target, &task_id),
+                        error.shown(root),
+                        error.admission_remedy(
+                            &codeflow_core::security::git::without_remote_names(
+                                root,
+                                &codeflow_core::security::git::shown_escaped_ref(root, &target),
+                            ),
+                            &task_id,
+                        ),
                     )
                 },
             });
@@ -2200,25 +2217,26 @@ fn print_source_banner(root: &Path) {
 /// verified in full, which is not a pass), else 0. A skipped branch-naming
 /// check is reported but not fatal: a detached-head run without a CI branch
 /// variable is a legitimate state.
-fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
+fn report(root: &Path, tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     for t in tagged {
         let plane = match &t.sha {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule == workflow_change::RULE {
-            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        let rendered = if t.violation.rule == workflow_change::RULE {
+            workflow_change::render(&t.violation, &plane)
         } else if t.violation.rule.starts_with("work.") {
-            eprintln!(
-                "{}",
-                t.violation.render_invariant(
-                    &plane,
-                    ".codeflow/project.toml full tier or an existing durable task layout"
-                )
-            );
+            t.violation.render_invariant(
+                &plane,
+                ".codeflow/project.toml full tier or an existing durable task layout",
+            )
         } else {
-            eprintln!("{}", t.violation.render(&plane));
-        }
+            t.violation.render(&plane)
+        };
+        eprintln!(
+            "{}",
+            codeflow_core::security::git::without_remote_names(root, &rendered)
+        );
     }
 
     let violations: Vec<Violation> = tagged.iter().map(|t| t.violation.clone()).collect();
@@ -5429,27 +5447,41 @@ mod tests {
 
     #[test]
     fn report_clean_all_ran_exits_zero() {
-        assert_eq!(report(&[], &["commit", "branch-naming"], &[]), 0);
+        assert_eq!(
+            report(Path::new("."), &[], &["commit", "branch-naming"], &[]),
+            0
+        );
     }
 
     #[test]
     fn report_skipped_commit_checks_exits_two() {
         // A skipped commit check verified nothing — never a clean exit 0.
-        assert_eq!(report(&[], &["branch-naming"], &["commit"]), 2);
+        assert_eq!(
+            report(Path::new("."), &[], &["branch-naming"], &["commit"]),
+            2
+        );
     }
 
     #[test]
     fn report_skipped_branch_naming_alone_exits_zero() {
         // A detached-head run without a CI branch variable is legitimate; the
         // skip is named in the summary but is not fatal.
-        assert_eq!(report(&[], &["commit"], &["branch-naming"]), 0);
+        assert_eq!(
+            report(Path::new("."), &[], &["commit"], &["branch-naming"]),
+            0
+        );
     }
 
     #[test]
     fn report_blocking_violation_exits_one_even_when_skipped() {
         // A found violation outranks the incomplete-run signal.
         assert_eq!(
-            report(&[block_violation()], &["branch-naming"], &["commit"]),
+            report(
+                Path::new("."),
+                &[block_violation()],
+                &["branch-naming"],
+                &["commit"]
+            ),
             1
         );
     }

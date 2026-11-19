@@ -2419,7 +2419,7 @@ fn judge_reopened(
                 repo.commondir(),
                 &format!(
                     "the target `{}`, which this task's record names, does not resolve here; {}",
-                    crate::git::display_text(name),
+                    crate::security::git::shown_ref(repo.commondir(), name),
                     super::work_start::fetch_origin(repo.commondir(), name)
                 ),
             ));
@@ -3611,6 +3611,7 @@ fn record_change(before: &RecordView, after: Option<&RecordView>) -> String {
 /// re-homes onto the line proves its history on the default branch in the
 /// import check instead (TSK-1378 AC-12, `imports::home::judge_arrival`).
 fn line_records_changed(
+    root: &std::path::Path,
     (head, target): (&Graph, &Graph),
     changed_paths: &[String],
     epic: &str,
@@ -3658,7 +3659,7 @@ fn line_records_changed(
         let change = record_change(before, after);
         found.push(finding(
             FROZEN_RULE,
-            format!("{change} in a sync of the default branch into {line}; a sync does not change a record whose home is the line, which changes through a planning amendment on the line that names the epic (ADR-0078)"),
+            crate::security::git::without_remote_names(root, &format!("{change} in a sync of the default branch into {line}; a sync does not change a record whose home is the line, which changes through a planning amendment on the line that names the epic (ADR-0078)")),
         ));
     }
     found
@@ -5132,6 +5133,7 @@ pub fn pull_request_findings_into(
                     &mut judging,
                 ));
                 found.extend(line_records_changed(
+                    repo_root,
                     (&at_head, &at_target),
                     &all_paths,
                     epic,

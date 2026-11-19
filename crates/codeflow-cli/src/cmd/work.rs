@@ -257,7 +257,8 @@ fn next_json(root: &std::path::Path, backlog: &Backlog) -> serde_json::Value {
             ),
             "state": entry.state.as_str(),
             "reason": entry.reason,
-            // The names git stores; `display_json` escapes them on output.
+            // Exact names except where a withheld remote name is replaced;
+            // `display_json` escapes them on output.
             "branches": entry.branch_names,
             // Set on a `landed` task: the branches whose work reached the
             // target and the command that settles the record (TSK-1038).
@@ -311,7 +312,8 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         Ok(claim) => {
             println!(
                 "work claim: {task_id} -> {} from {}",
-                claim.branch, claim.from
+                codeflow_core::security::git::without_remote_names(&root, &claim.branch),
+                claim.from
             );
             if !claim.omitted_words.is_empty() {
                 println!(
@@ -329,7 +331,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
             }
             println!(
                 "  next: check out {} and run `codeflow work start {task_id}`",
-                claim.branch
+                codeflow_core::security::git::without_remote_names(&root, &claim.branch)
             );
             0
         }
@@ -459,15 +461,15 @@ fn plan_check(
 
     let declared = match target {
         Some(target) => Some(target.to_string()),
-        None => declared_work_target(root, task_id).map_err(|error| vec![error.to_string()])?,
+        None => declared_work_target(root, task_id).map_err(|error| vec![error.shown(root)])?,
     };
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
-        Err(error) => return Err(vec![error.to_string()]),
+        Err(error) => return Err(vec![error.shown(root)]),
     };
     let report =
         codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, pins)
-            .map_err(|error| vec![error.to_string()])?;
+            .map_err(|error| vec![error.shown(root)])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
         report.task_id,
@@ -475,7 +477,10 @@ fn plan_check(
         report.branch,
         // A fork's tracking ref holds its remote's name, shown only when
         // plain (TSK-416 review round 7).
-        codeflow_core::security::git::without_remote_names(root, &report.target)
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &codeflow_core::security::git::shown_ref(root, &report.target)
+        )
     );
     if let Some(note) = report.base_note {
         println!("  {}", crate::cmd::shown(&note));

@@ -108,10 +108,10 @@ pub fn direct_commit_refusal(
         )
     };
     (
-        format!(
+        crate::security::git::without_remote_names(root, &format!(
             "{} would receive a commit made directly on the line ({ids})",
             crate::git::display_text(line)
-        ),
+        )),
         format!(
             "land it by a pull request: save it on a task or planning branch, then {reset_step} and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
         ),
@@ -171,19 +171,19 @@ pub(crate) fn parse_parent_line(value: Option<&Value>) -> Result<Option<String>,
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => {
-            let id = epic_id(text).map_err(|reason| format!("{PARENT_LINE_FIELD}: {reason}"))?;
+            let id = epic_id(text).map_err(|_| format!("{PARENT_LINE_FIELD}: the declared value is not an integration line (integration/EPC-NNN-<slug>); name withheld"))?;
             // `epic_id` proved the text is `integration/<id>-...`.
             let slug = text
                 .get("integration/".len() + id.len() + 1..)
                 .unwrap_or_default();
             if slug.is_empty() {
                 return Err(format!(
-                    "{PARENT_LINE_FIELD}: '{text}' has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
+                    "{PARENT_LINE_FIELD}: the declared value has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
                 ));
             }
             if !super::work_start::is_stable_work_target(text) {
                 return Err(format!(
-                    "{PARENT_LINE_FIELD}: '{text}' is not a valid branch name"
+                    "{PARENT_LINE_FIELD}: the declared value is not a valid branch name; name withheld"
                 ));
             }
             Ok(Some(text.clone()))
@@ -205,7 +205,7 @@ pub fn check_parent_line(own_epic: &str, value: Option<&Value>) -> Result<Option
     };
     if epic_id(&line) == Ok(own_epic) {
         return Err(format!(
-            "{PARENT_LINE_FIELD} names {own_epic}'s own line '{line}'; an epic lands on its own line without declaring it"
+            "{PARENT_LINE_FIELD} names {own_epic}'s own line; an epic lands on its own line without declaring it"
         ));
     }
     Ok(Some(line))
