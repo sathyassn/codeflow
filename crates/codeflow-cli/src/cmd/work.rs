@@ -168,10 +168,10 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         }
     }
     if as_json {
-        // JSON keeps each value exact; its bytes hold no hidden character
+        // JSON withholds remote identities and escapes hidden characters
         // (`display_json`, TSK-388).
         println_block!(codeflow_core::git::TextBlock::json(
-            &next_json(&backlog).to_string()
+            &next_json(&root, &backlog).to_string()
         ));
         return 0;
     }
@@ -191,7 +191,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     }
     for state in listed {
         for entry in backlog.in_state(state) {
-            println!("{}", entry_line(entry));
+            println!("{}", entry_line(&root, entry));
         }
     }
     let active = backlog.in_state(State::Active).count();
@@ -201,8 +201,8 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     0
 }
 
-fn entry_line(entry: &Entry) -> String {
-    use codeflow_core::git::{display_message, display_text};
+fn entry_line(root: &std::path::Path, entry: &Entry) -> String {
+    use codeflow_core::git::display_message;
     let scope = entry.epic_id.as_deref().unwrap_or("standalone");
     // A title is record text and a target a branch name: shown escaped,
     // with a further line of either indented (TSK-388).
@@ -211,7 +211,10 @@ fn entry_line(entry: &Entry) -> String {
         entry.state.as_str(),
         entry.task_id,
         display_message(&entry.title),
-        display_text(&entry.target)
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &codeflow_core::security::git::shown_ref(root, &entry.target)
+        )
     );
     if !entry.reason.is_empty() {
         line.push_str("\n         ");
@@ -235,7 +238,7 @@ fn entry_line(entry: &Entry) -> String {
     line
 }
 
-fn next_json(backlog: &Backlog) -> serde_json::Value {
+fn next_json(root: &std::path::Path, backlog: &Backlog) -> serde_json::Value {
     json!({
         "snapshot": backlog.snapshots.iter().map(|snapshot| json!({
             "target": snapshot.target,
@@ -248,7 +251,10 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "id": entry.task_id,
             "title": entry.title,
             "epic": entry.epic_id,
-            "target": entry.target,
+            "target": codeflow_core::security::git::without_remote_names(
+                root,
+                &codeflow_core::security::git::shown_escaped_ref(root, &entry.target)
+            ),
             "state": entry.state.as_str(),
             "reason": entry.reason,
             // The names git stores; `display_json` escapes them on output.

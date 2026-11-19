@@ -37,7 +37,7 @@ fn an_unreadable_home_ref_withholds_the_remote_name() {
 }
 
 #[test]
-fn an_unconfigured_tracking_target_withholds_the_remote_name() {
+fn an_invalid_configured_tracking_target_withholds_the_remote_name() {
     let fixture = Fixture::new(&[]);
     with_credential_remote(&fixture);
     let repo = Repository::open(fixture.root()).unwrap();
@@ -71,16 +71,33 @@ fn import_path_resolution_withholds_unreadable_revision_names() {
     ] {
         for (base, head) in [(bad, "HEAD"), ("HEAD", bad)] {
             let said = super::imported_record_paths(fixture.root(), base, head).unwrap_err();
+            let role = if base == bad { "base" } else { "head" };
+            assert!(said.contains(&format!("import {role} revision")), "{said}");
             refusals.push(said);
         }
     }
     assert!(
         refusals
             .iter()
-            .all(|said| !said.contains("SECRETVALUE")
-                && said.contains("cannot resolve import revision")),
+            .all(|said| !said.contains("SECRETVALUE") && said.contains("cannot resolve import")),
         "{refusals:?}"
     );
+}
+
+#[test]
+fn an_unreadable_home_ref_keeps_a_shown_remote() {
+    let fixture = Fixture::new(&[]);
+    let repo = Repository::open(fixture.root()).unwrap();
+    repo.remote("mirror", "/nowhere").unwrap();
+    let said = super::unread_home(
+        &repo,
+        "mirror",
+        "refs/remotes/mirror/main",
+        &git2::Error::from_str("unreadable ref"),
+    );
+    assert!(said.contains("mirror/main"), "{said}");
+    assert!(said.contains("unreadable ref"), "{said}");
+    assert!(said.contains("fetch the configured remote"), "{said}");
 }
 
 pub(super) const LINE: &str = "integration/EPC-001-outcome";

@@ -354,7 +354,7 @@ pub(crate) fn target_fetch_remote(
         // A failed lookup cannot establish whether a short spelling holds
         // an unconfigured remote identity. Do not relay the name or error.
         Err(error) => Err(format!(
-            "cannot read target branch (name and Git diagnostic withheld): class={:?}, code={:?}",
+            "cannot read target base branch (name and Git diagnostic withheld): class={:?}, code={:?}",
             error.class(),
             error.code()
         )),
@@ -1041,6 +1041,34 @@ struct Judged<'a> {
     line: &'a LandLine,
 }
 
+/// Relayed refusals keep exact refs in the error used for decisions and
+/// sanitize each ref-bearing field only when producing output.
+fn readiness_error(repo: &Repository, error: &super::work_start::WorkStartError) -> String {
+    use super::work_start::WorkStartError;
+    let refs: Vec<&str> = match error {
+        WorkStartError::Target(target)
+        | WorkStartError::MergeBase(target)
+        | WorkStartError::UnstableTarget(target) => vec![target],
+        WorkStartError::DependencyOnOtherLine { line, .. }
+        | WorkStartError::DependencyLineUnknown { line, .. } => vec![line],
+        WorkStartError::TargetMismatch {
+            declared,
+            requested,
+            ..
+        } => vec![declared, requested],
+        _ => Vec::new(),
+    };
+    let root = repo.commondir();
+    let mut text = error.to_string();
+    for reference in refs {
+        text = text.replace(
+            reference,
+            &crate::security::git::shown_escaped_ref(root, reference),
+        );
+    }
+    crate::security::git::without_remote_names(root, &text)
+}
+
 /// The state and reason of one open task, and the landed branches that make
 /// it [`State::Landed`]; `None` for a closed task. Only a task that would
 /// otherwise be ready can be finished without its record knowing: a claim, a
@@ -1069,7 +1097,7 @@ fn derive_state(
                 NotReady::Waiting => State::Waiting,
                 NotReady::Invalid => State::Invalid,
             };
-            Some((state, error.to_string(), Vec::new()))
+            Some((state, readiness_error(on.repo, &error), Vec::new()))
         }
     }
 }
@@ -2177,8 +2205,16 @@ pub fn claim_on(
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let has_origin = origin_available(repo.find_remote("origin"))?;
     let remotes = claim_remotes(&repo, repo_root, Some(&declared))?;
-    let (reference, target_tip) = resolve_target(repo_root, &repo, &declared)?
-        .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
+    let (reference, target_tip) =
+        resolve_target(repo_root, &repo, &declared)?.ok_or_else(|| {
+            format!(
+                "target '{}' does not resolve here",
+                crate::security::git::without_remote_names(
+                    repo_root,
+                    &crate::security::git::shown_ref(repo_root, &declared)
+                )
+            )
+        })?;
     let reference = claim_reference(&repo, &declared, has_origin, reference, target_tip)?;
     let stack = super::work_start::stack_base(repo_root, pins)?;
     let selected = super::claim_base::select(repo_root, task_id, &declared, pins)?;
@@ -2206,7 +2242,12 @@ pub fn claim_on(
         crate::security::git::without_remote_names(repo_root, &shown_read(&reference));
     super::claim_base::project_dependencies(&repo, &mut records, task_id, target_tip, tip, pins)?;
     super::work_start::validate_anchored_task_on(&repo, &records, task_id, &reference, pins)
-        .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
+        .map_err(|error| {
+            format!(
+                "not ready on {reference_shown}: {}",
+                readiness_error(&repo, &error)
+            )
+        })?;
     let information = refuse_claimed_or_landed(
         &repo,
         repo_root,
@@ -2506,6 +2547,97 @@ mod tests {
     use super::*;
 
     #[test]
+    fn relayed_readiness_errors_withhold_targets_and_lines() {
+        let dir = repo();
+        let root = dir.path();
+        let target = "refs/remotes/unknown-SECRETVALUE/other";
+        task_in(root, "TSK-001", None, target, "todo", "[]", "");
+        task_in(root, "TSK-002", None, "main", "todo", "[TSK-001]", "");
+        commit(root, "tasks");
+        // An unknown dependency line flows through derive_state into Entry.reason.
+        let repo = Repository::open(root).unwrap();
+        let tip = repo.head().unwrap().peel_to_commit().unwrap();
+        let records = records_from_tree(&repo, &tip.tree().unwrap()).unwrap();
+        let on = Judged {
+            repo: &repo,
+            records: &records,
+            reference: "main",
+            tip: tip.id(),
+            line: &LandLine::new(),
+        };
+        let (_, reason, _) = derive_state(&on, &records["TSK-002"], &[], &[], true).unwrap();
+        assert!(!reason.contains("SECRETVALUE"), "{reason}");
+        assert!(
+            reason.contains(crate::security::git::WITHHELD_REMOTE),
+            "{reason}"
+        );
+    }
+
+    #[test]
+    fn claim_source_refusals_withhold_unclassified_targets() {
+        let dir = repo();
+        commit(dir.path(), "records");
+        let repo = Repository::open(dir.path()).unwrap();
+        for target in [
+            "refs/remotes/unknown-SECRETVALUE/main",
+            "refs/remotes/cred:SECRETVALUE/main",
+        ] {
+            let said = super::super::claim_base::source(&repo, target).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            assert!(
+                said.contains(crate::security::git::WITHHELD_REMOTE),
+                "{said}"
+            );
+        }
+    }
+
+    #[test]
+    fn unreadable_claim_remote_keeps_a_shown_name_and_scrubbed_error() {
+        let dir = repo();
+        set_claim_remotes(dir.path(), &["mirror"]);
+        let repo = Repository::open(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.mirror.url", "/nowhere")
+            .unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.mirror.fetch", "refs/heads/*:refs/remotes/no-star")
+            .unwrap();
+        let said = claim_remotes(&repo, dir.path(), None).unwrap_err();
+        assert!(said.contains("cannot read remote 'mirror'"), "{said}");
+        assert!(!said.contains("Git diagnostic withheld"), "{said}");
+    }
+
+    #[test]
+    fn snapshot_problems_withhold_an_unconfigured_remote() {
+        let dir = repo();
+        commit(dir.path(), "records");
+        let repo = Repository::open(dir.path()).unwrap();
+        let target = "refs/remotes/unknown-SECRETVALUE/main";
+        let mut targets = Targets::new(dir.path(), &repo);
+        targets
+            .seen
+            .insert(target.into(), Err(format!("cannot read {target}")));
+        let mut snapshots = Vec::new();
+        read_tips(
+            &repo,
+            &mut targets,
+            BTreeSet::from([target.into()]),
+            &mut snapshots,
+            &crate::security::git::WithheldRemotes::read(dir.path()),
+        )
+        .unwrap();
+        let backlog = Backlog {
+            snapshots,
+            ..Backlog::default()
+        };
+        let text = backlog.snapshot_line();
+        assert!(!text.contains("SECRETVALUE"), "{text}");
+        assert!(text.contains("cannot read"), "{text}");
+    }
+
+    #[test]
     fn target_lookup_withholds_invalid_unclassified_names() {
         let dir = tempfile::tempdir().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
@@ -2515,7 +2647,7 @@ mod tests {
         ] {
             let said = target_fetch_remote(&repo, declared).unwrap_err();
             assert!(!said.contains("SECRETVALUE"), "{said}");
-            assert!(said.contains("cannot read target branch"), "{said}");
+            assert!(said.contains("cannot read target base branch"), "{said}");
         }
     }
 
@@ -3291,6 +3423,7 @@ mod tests {
         let repo = Repository::open(dir.path()).unwrap();
         let error = target_fetch_remote(&repo, "side").unwrap_err();
         assert!(error.contains("not valid UTF-8"), "{error}");
+        assert!(!error.contains("caf"), "{error}");
     }
 
     /// Review finding on issue 79: a branch whose name is not valid UTF-8 and

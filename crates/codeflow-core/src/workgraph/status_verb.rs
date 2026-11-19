@@ -543,7 +543,12 @@ fn target_commit(
             pinned_commit(repo, target)?.map_err(|error| {
                 withheld(
                     repo,
-                    &format!("cannot read acceptance target '{target}': {error}"),
+                    &format!(
+                        "cannot read acceptance target '{}': class={:?}, code={:?}",
+                        crate::security::git::shown_ref(repo.commondir(), target),
+                        error.class(),
+                        error.code()
+                    ),
                 )
             })
         })
@@ -824,6 +829,15 @@ fn default_target(
             let remote = super::work_start::remote_of(repo, base);
             let remote_spelling = base.starts_with("refs/remotes/")
                 || (!base.starts_with("refs/") && base.contains('/'));
+            if !base.starts_with("refs/")
+                && base.contains('/')
+                && !repo
+                    .remotes()
+                    .map(|names| names.iter().flatten().flatten().any(|name| name == remote))
+                    .unwrap_or(false)
+            {
+                return "`--base` names no commit and no configured remote here (value withheld); name a fetched line as `<remote>/<branch>` for a configured remote, or by its full ref".to_string();
+            }
             if remote_spelling
                 && !crate::security::git::remote_name_shown(repo.commondir(), &remote)
             {
@@ -1579,14 +1593,47 @@ mod tests {
             let said = default_target(&repo, &change).unwrap_err();
             assert!(!said.contains("SECRETVALUE"), "{said}");
             assert!(!said.contains("git fetch"), "{said}");
+            if base.starts_with("refs/remotes/") {
+                assert!(said.contains("fresh clone"), "{said}");
+            } else {
+                assert!(said.contains("no configured remote"), "{said}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_slash_branch_explains_fetched_line_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        for base in ["integration/EPC-041-x", "cred@SECRETVALUE/EPC-041-x"] {
+            let change = StatusChange {
+                base: Some(base.into()),
+                ..StatusChange::default()
+            };
+            let said = default_target(&repo, &change).unwrap_err();
             assert!(
-                said.contains(&crate::security::git::withheld_remote_step(
-                    dir.path(),
-                    "cred:SECRETVALUE"
-                )),
+                said.contains("no commit and no configured remote"),
                 "{said}"
             );
+            assert!(said.contains("<remote>/<branch>"), "{said}");
+            assert!(!said.contains("fresh clone"), "{said}");
+            assert!(!said.contains(base), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
         }
+    }
+
+    #[test]
+    fn acceptance_target_refusals_withhold_unconfigured_tracking_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let said = target_commit(&repo, Some("refs/remotes/cred@SECRETVALUE/main")).unwrap_err();
+        assert!(said.contains("cannot read acceptance target"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        assert!(
+            said.contains(crate::security::git::WITHHELD_REMOTE),
+            "{said}"
+        );
     }
 
     #[test]

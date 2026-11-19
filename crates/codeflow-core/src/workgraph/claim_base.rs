@@ -72,6 +72,14 @@ pub fn head_contains(root: &Path, head: &str, base: &str) -> Result<bool, String
 
 /// Resolve only a fetched ref owned by the source's configured remote.
 pub(crate) fn source(repo: &Repository, target: &str) -> Result<(String, Oid), String> {
+    unchecked_source(repo, target).map_err(|reason| {
+        let root = repo.commondir();
+        let shown = crate::security::git::shown_escaped_ref(root, target);
+        crate::security::git::without_remote_names(root, &reason.replace(target, &shown))
+    })
+}
+
+fn unchecked_source(repo: &Repository, target: &str) -> Result<(String, Oid), String> {
     if !work_start::is_stable_work_target(target) {
         return Err(format!("'{target}' is not a stable work source"));
     }

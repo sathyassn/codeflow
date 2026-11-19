@@ -78,6 +78,70 @@ fn succeeds(out: &Output) {
     );
 }
 
+#[test]
+fn next_withholds_the_declared_target_in_text_and_json() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/main");
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: target"]);
+    git(root, &["remote", "add", remote, "/unused"]);
+    git(root, &["update-ref", &target, "HEAD"]);
+    for args in [vec!["work", "next"], vec!["work", "next", "--json"]] {
+        let out = cli(root, &args, None);
+        succeeds(&out);
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("TSK-001"), "{text}");
+        assert!(!text.contains("SECRETVALUE"), "{text}");
+        assert!(
+            text.contains(codeflow_core::security::git::WITHHELD_REMOTE),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn claim_withholds_a_missing_fetched_source() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/missing");
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", remote, bare.path().to_str().unwrap()],
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: target"]);
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    assert!(!out.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("is not fetched here"), "{text}");
+    assert!(!text.contains("SECRETVALUE"), "{text}");
+}
+
 #[cfg(unix)]
 #[test]
 fn claim_redacts_remote_userinfo_in_git_diagnostics() {

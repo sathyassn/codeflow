@@ -1188,17 +1188,17 @@ pub fn imported_record_paths(
     head: &str,
 ) -> Result<Vec<String>, String> {
     let repo = Repository::discover(root).map_err(|error| error.to_string())?;
-    let resolve = |name: &str| {
+    let resolve = |role: &str, name: &str| {
         repo.revparse_single(name)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
             .map_err(|error| format!(
-                "cannot resolve import revision (name and Git diagnostic withheld): class={:?}, code={:?}",
+                "cannot resolve import {role} revision (name and Git diagnostic withheld): class={:?}, code={:?}",
                 error.class(), error.code()
             ))
     };
-    let base = resolve(base)?;
-    let head = resolve(head)?;
+    let base = resolve("base", base)?;
+    let head = resolve("head", head)?;
     let graph = Graph::from_revision(&repo, &head.to_string())?;
     Ok(imported_records(&repo, base, head, &graph)?
         .into_values()
