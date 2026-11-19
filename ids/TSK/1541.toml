@@ -1,0 +1,11 @@
+id = "TSK-1541"
+uid = "b663ddaa-e2ce-445c-90e0-2ad28437b75f"
+kind = "TSK"
+title = "Line pull requests get a workflow once the operator places it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:15:06Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
