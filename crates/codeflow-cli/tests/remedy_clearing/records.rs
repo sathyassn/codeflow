@@ -1262,3 +1262,74 @@ fn clears_id_registry_uid() {
         },
     );
 }
+
+// ---------------------------------------------------------------------------
+// Sections the project requires in its records (TSK-1421).
+// ---------------------------------------------------------------------------
+
+/// Set `git.<key>` in the project's policy file to `names`.
+fn require_sections(root: &Path, key: &str, names: &[&str]) {
+    let rel = ".codeflow/policy.json";
+    let mut policy: serde_json::Value = serde_json::from_str(&read(root, rel)).unwrap();
+    policy
+        .as_object_mut()
+        .unwrap()
+        .entry("git")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap()
+        .insert(key.to_string(), serde_json::json!(names));
+    write(
+        root,
+        rel,
+        &(serde_json::to_string_pretty(&policy).unwrap() + "\n"),
+    );
+}
+
+#[test]
+fn clears_record_section_missing() {
+    let dir = planned();
+    let root = project(&dir);
+    // The project starts requiring a section the committed task predates,
+    // so the unchanged task is warned.
+    require_sections(&root, "task_required_sections", &["Risks"]);
+    commit_all(&root, "chore: require a risks section");
+    prove(
+        "RECORD_SECTION_MISSING",
+        "missing section \"## Risks\"",
+        || validate(&root),
+        |printed| {
+            assert!(printed.contains(TASK), "{printed}");
+            let task = read(&root, TASK);
+            assert!(task.contains("\n## Closeout"), "{task}");
+            write(
+                &root,
+                TASK,
+                &task.replacen(
+                    "\n## Closeout",
+                    "\n## Risks\n\n- none known\n\n## Closeout",
+                    1,
+                ),
+            );
+        },
+    );
+}
+
+#[test]
+fn clears_record_sections_untrusted() {
+    let hosted = Hosted::new();
+    let root = &hosted.root;
+    require_sections(root, "task_required_sections", &["Risks"]);
+    // Without the remote HEAD the landed policy cannot be read, so the
+    // sections come from HEAD and the working copy.
+    git(root, &["remote", "set-head", "origin", "-d"]);
+    prove(
+        "RECORD_SECTIONS_UNTRUSTED",
+        "required record sections were read from HEAD",
+        || validate(root),
+        |printed| {
+            let step = printed_command(printed, "RECORD_SECTIONS_UNTRUSTED", None);
+            run_printed(root, &step, &[], &[]);
+        },
+    );
+}
