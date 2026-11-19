@@ -1289,19 +1289,27 @@ fn clears_ci_base_refused() {
     let dir = ci_repo(DEFAULTS);
     let root = dir.path();
     commit(root, "x.txt", "feat: add x");
-    // A replace ref git cannot follow stops git on the base; git refuses to
-    // write one, so the ref file is written directly.
+    // Leave history free of overlays, but empty main's loose commit object
+    // so Git itself refuses the base.
     let base = text(&run("git", root, &["rev-parse", "main"]));
-    let replace = format!(".git/refs/replace/{}", base.trim());
-    write(root, &replace, "0123456789012345678901234567890123456789\n");
+    let base = base.trim();
+    let object = format!(".git/objects/{}/{}", &base[..2], &base[2..]);
+    let original = std::fs::read(root.join(&object)).unwrap();
+    // Loose objects are read-only, so replace the file rather than opening it.
+    std::fs::remove_file(root.join(&object)).unwrap();
+    write(root, &object, "");
     let finding = "git refused it";
     prove(
         "CI_BASE_REFUSED",
         finding,
         || ci(root, &[]),
         |printed| {
-            assert!(printed.contains("fatal: replacement"), "{printed}");
-            std::fs::remove_file(root.join(&replace)).unwrap();
+            assert!(
+                printed.contains("error: object file ") && printed.contains(" is empty"),
+                "{printed}"
+            );
+            // Repair the object so the printed command can verify the range.
+            std::fs::write(root.join(&object), &original).unwrap();
             let step = printed_command(printed, "CI_BASE_REFUSED", None);
             run_printed(
                 root,
