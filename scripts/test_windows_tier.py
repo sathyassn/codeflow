@@ -63,10 +63,10 @@ def needs(**results):
     return out
 
 
-FULL_PUSH = dict(reuse=("success", {"run": ""}), windows="success", windows_build="success",
+FULL_RUN = dict(reuse=("success", {"run": ""}), windows="success", windows_build="success",
                  windows_tests="success", windows_journeys=("success", {"missing": ""}),
                  windows_release_journey="success")
-FULL_PR = {**FULL_PUSH, "reuse": "skipped"}
+FULL_WITHOUT_REUSE = {**FULL_RUN, "reuse": "skipped"}
 
 
 class VerdictTests(unittest.TestCase):
@@ -86,20 +86,20 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(VERDICT_ENV, {"NEEDS": "${{ toJSON(needs) }}"})
         self.assertIn("shell: python3 -I {0}", JOBS["windows-verdict"])
 
-    def test_a_full_run_passes_on_a_push_and_on_a_pull_request_into_main(self):
+    def test_a_full_run_passes_with_successful_or_skipped_reuse(self):
         # While main is relaxed (operator decision, 2026-11-11) the verdict
         # runs only on the schedule and a manual dispatch, which give the push
         # form (reuse skipped); the pull request form returns with main's
         # checks.
-        self.assertEqual(self.verdict(FULL_PUSH)[0], 0)
-        code, out = self.verdict(FULL_PR)
+        self.assertEqual(self.verdict(FULL_RUN)[0], 0)
+        code, out = self.verdict(FULL_WITHOUT_REUSE)
         self.assertEqual(code, 0, out)
         self.assertIn("every Windows job passed", out)
 
     def test_windows_not_selected_is_never_a_pass(self):
         # Every Windows job skipped with no reuse is what a line pull request
         # would look like here. It fails: there is no "not selected" pass.
-        skipped = {job: "skipped" for job in FULL_PUSH}
+        skipped = {job: "skipped" for job in FULL_RUN}
         code, out = self.verdict(skipped)
         self.assertEqual(code, 1, out)
         self.assertIn("the Windows gates did not run", out)
@@ -108,26 +108,26 @@ class VerdictTests(unittest.TestCase):
     def test_one_job_left_green_among_skips_fails(self):
         for job in ("windows", "windows_build", "windows_tests", "windows_journeys", "windows_release_journey"):
             with self.subTest(job=job):
-                results = {name: "skipped" for name in FULL_PUSH}
+                results = {name: "skipped" for name in FULL_RUN}
                 code, out = self.verdict({**results, job: "success"})
                 self.assertEqual(code, 1, out)
                 self.assertIn("concluded skipped; a full run needs it", out)
 
     def test_a_red_checks_job_is_named_as_the_checks(self):
-        code, out = self.verdict({**FULL_PUSH, "windows": "failure"})
+        code, out = self.verdict({**FULL_RUN, "windows": "failure"})
         self.assertEqual(code, 1)
         self.assertIn("::error::windows checks concluded failure", out)
 
     def test_an_undeclared_skip_fails_and_is_named(self):
-        code, out = self.verdict({**FULL_PUSH, "windows_tests": "skipped"})
+        code, out = self.verdict({**FULL_RUN, "windows_tests": "skipped"})
         self.assertEqual(code, 1)
         self.assertIn("windows tests concluded skipped; a full run needs it", out)
-        code, out = self.verdict({**FULL_PR, "windows_release_journey": "skipped"})
+        code, out = self.verdict({**FULL_WITHOUT_REUSE, "windows_release_journey": "skipped"})
         self.assertEqual(code, 1)
         self.assertIn("windows release journey concluded skipped; a full run needs it", out)
 
     def test_a_cancelled_partition_is_named_with_its_missing_report(self):
-        code, out = self.verdict({**FULL_PUSH, "windows_tests": "cancelled",
+        code, out = self.verdict({**FULL_RUN, "windows_tests": "cancelled",
                                   "windows_journeys": ("failure", {"missing": "3 11"})})
         self.assertEqual(code, 1)
         self.assertIn("windows tests concluded cancelled", out)
@@ -135,7 +135,7 @@ class VerdictTests(unittest.TestCase):
         self.assertIn("Windows test partition(s) 3 11 ended without a report", out)
 
     def test_every_job_that_is_not_green_is_named(self):
-        code, out = self.verdict({**FULL_PUSH, "windows": "failure", "windows_build": "cancelled",
+        code, out = self.verdict({**FULL_RUN, "windows": "failure", "windows_build": "cancelled",
                                   "windows_release_journey": "failure"})
         self.assertEqual(code, 1)
         for name in ("windows checks concluded failure", "windows test build concluded cancelled",
@@ -143,30 +143,30 @@ class VerdictTests(unittest.TestCase):
             self.assertIn(name, out)
 
     def test_a_missing_dependency_entry_fails(self):
-        for job in FULL_PR:
+        for job in FULL_WITHOUT_REUSE:
             with self.subTest(job=job):
-                results = needs(**FULL_PR)
+                results = needs(**FULL_WITHOUT_REUSE)
                 del results[job.replace("_", "-")]
                 code, out = self.verdict(results, raw=True)
                 self.assertEqual(code, 1, out)
                 self.assertIn(f"missing dependency {job.replace('_', '-')}", out)
 
     def test_a_missing_dependency_result_fails(self):
-        for job in FULL_PR:
+        for job in FULL_WITHOUT_REUSE:
             with self.subTest(job=job):
-                results = needs(**FULL_PR)
+                results = needs(**FULL_WITHOUT_REUSE)
                 del results[job.replace("_", "-")]["result"]
                 code, out = self.verdict(results, raw=True)
                 self.assertEqual(code, 1, out)
                 self.assertIn("missing", out)
 
     def test_a_new_job_the_verdict_needs_must_succeed(self):
-        code, out = self.verdict({**FULL_PUSH, "windows_new_check": "skipped"})
+        code, out = self.verdict({**FULL_RUN, "windows_new_check": "skipped"})
         self.assertEqual(code, 1)
         self.assertIn("windows-new-check concluded skipped; a full run needs it", out)
 
     def test_reuse_passes_only_when_every_job_was_skipped_and_a_run_is_named(self):
-        skipped = {job: "skipped" for job in FULL_PUSH if job != "reuse"}
+        skipped = {job: "skipped" for job in FULL_RUN if job != "reuse"}
         code, out = self.verdict({**skipped, "reuse": ("success", {"run": "123"})})
         self.assertEqual(code, 0, out)
         self.assertIn("actions/runs/123", out)

@@ -80,10 +80,10 @@ RUNS = {
 # adds the image and reuse jobs, and every Linux and Windows suite runs only
 # on the schedule and a manual run. The two required verdicts never run on a
 # line pull request, so they cannot pass there with their suites not
-# selected. The daily column is the daily Windows run of windows-daily-run.yml
-# at the commit the dispatcher resolved: every Windows job and no Linux job
-# (AC-11's active-line scope remains owed to the Director). The worker includes
-# Linux and Windows without release gates, stays disabled and is never merge evidence. Each row names its jobs' workflow: ci for
+# selected. The daily column describes the disabled windows-daily-run.yml
+# worker at the resolved commit: Linux and Windows without release gates.
+# AC-11's active-line scope remains owed to the Director; this table enables
+# no workflow. Each row names its jobs' workflow: ci for
 # codeflow-ci.yml, line for the line workflow, daily for the daily runner.
 PLACEMENT = """\
 job                       workflow  line PR  draft line PR  main PR  draft main PR  other PR  line push  main push  scheduled  manual  daily
