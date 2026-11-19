@@ -273,9 +273,10 @@ fn start_output_withholds_branch_names_and_preserves_plain_names() {
         git(
             root,
             &[
-                "update-ref",
-                "refs/remotes/cred@SECRETVALUE/task/TSK-001-remote",
-                "HEAD",
+                "push",
+                "-q",
+                "cred@SECRETVALUE",
+                "HEAD:refs/heads/task/TSK-001-remote",
             ],
         );
         git(root, &["switch", "-qc", own]);
@@ -284,6 +285,7 @@ fn start_output_withholds_branch_names_and_preserves_plain_names() {
         let said = text(&out);
         assert!(said.contains("anchored at"), "{said}");
         assert!(said.contains("task/TSK-001-other"), "{said}");
+        assert!(said.contains("task/TSK-001-remote"), "{said}");
         assert!(!said.contains("SECRETVALUE"), "{said}");
         if !own.contains("SECRETVALUE") {
             assert!(said.contains(&format!("for {own} ->")), "{said}");

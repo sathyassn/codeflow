@@ -383,7 +383,11 @@ pub fn reference_tip(root: &Path, name: &str) -> Result<Option<String>, String> 
 
 fn reference_error(root: &Path, name: &str, reason: &str) -> String {
     let shown = crate::security::git::shown_ref(root, name);
-    let reason = reason.replace(name, &shown);
+    reference_error_shown(root, name, &shown, reason)
+}
+
+fn reference_error_shown(root: &Path, name: &str, shown: &str, reason: &str) -> String {
+    let reason = reason.replace(name, shown);
     let reason = if name.starts_with("refs/remotes/") {
         let remote = Repository::discover(root).map_or_else(
             |_| {
@@ -431,10 +435,13 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
             // commit refuses rather than being skipped.
             Err(_) => None,
         };
+        let full_text = full.display().to_string();
+        let full_shown = crate::security::git::shown_escaped_ref(root, &full_text);
         let tip = reference.peel_to_commit().map_err(|e| {
-            reference_error(
+            reference_error_shown(
                 root,
-                &full.display().to_string(),
+                &full_text,
+                &full_shown,
                 &format!("cannot read the tip of '{}': {e}", full.display()),
             )
         })?;
@@ -444,9 +451,10 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
         match line {
             Some(name) => lines.push(name),
             None => {
-                return Err(reference_error(
+                return Err(reference_error_shown(
                     root,
-                    &full.display().to_string(),
+                    &full_text,
+                    &full_shown,
                     &format!(
                         "a fetched line at {commit} has a name that is not UTF-8: '{}'",
                         full.display()
@@ -479,6 +487,35 @@ pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fetched_line_errors_escape_a_name_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let repo = git2::Repository::init(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.origin.url", "/unused")
+            .unwrap();
+        let signature = git2::Signature::now("Fixture", "fixture@example.test").unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let head = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "base",
+                &repo.find_tree(tree).unwrap(),
+                &[],
+            )
+            .unwrap();
+        let name = "refs/remotes/origin/integration/EPC-001-\u{202e}";
+        repo.reference(name, repo.blob(b"not a commit").unwrap(), true, "test")
+            .unwrap();
+        let said = super::fetched_lines_at(root, &head.to_string()).unwrap_err();
+        let shown = crate::git::display_text(name);
+        assert!(said.contains(&format!("'{shown}'")), "{said}");
+        assert!(!said.contains(&crate::git::display_text(&shown)), "{said}");
+    }
     #[test]
     fn reference_errors_withhold_tracking_names_and_keep_local_names() {
         let dir = tempfile::tempdir().unwrap();
