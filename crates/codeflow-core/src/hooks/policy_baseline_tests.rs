@@ -212,6 +212,53 @@ fn required_record_sections_merge_as_their_union() {
     assert!(!weaker(&merged, &base).unwrap());
 }
 
+/// Review F2: a side that lists no record sections leaves the key out, and
+/// it still merges with the other side's sections. For task, epic and spec
+/// records: an empty side keeps the other's sections in either order, a
+/// nonempty merge is the union, dropping a section is weaker, and adding
+/// one is never reported weaker.
+#[test]
+fn required_record_sections_merge_when_one_side_lists_none() {
+    let sections = |p: &Policy, kind: &str| match kind {
+        "task" => p.git.task_required_sections.clone(),
+        "epic" => p.git.epic_required_sections.clone(),
+        _ => p.git.spec_required_sections.clone(),
+    };
+    let plain = policy(r#"{"schema_version": 1}"#);
+    for kind in ["task", "epic", "spec"] {
+        let listing = |list: &str| {
+            policy(&format!(
+                r#"{{"schema_version": 1, "git": {{"{kind}_required_sections": {list}}}}}"#
+            ))
+        };
+        let risks = listing(r#"["Risks"]"#);
+        let rollback = listing(r#"["Rollback"]"#);
+        let two = listing(r#"["Risks", "Limits"]"#);
+        let merged = |a: &Policy, b: &Policy| sections(&stricter(a, b).unwrap(), kind);
+        let got = (
+            merged(&plain, &risks),
+            merged(&risks, &plain),
+            merged(&risks, &rollback),
+            merged(&two, &risks),
+            weaker(&risks, &plain).unwrap(),
+            weaker(&plain, &risks).unwrap(),
+            weaker(&risks, &two).unwrap(),
+            weaker(&two, &risks).unwrap(),
+        );
+        let want = (
+            vec!["Risks".to_string()],
+            vec!["Risks".to_string()],
+            vec!["Risks".to_string(), "Rollback".to_string()],
+            vec!["Risks".to_string(), "Limits".to_string()],
+            false,
+            true,
+            true,
+            false,
+        );
+        assert_eq!(got, want, "{kind} sections");
+    }
+}
+
 /// Every list in the policy is classed: a new list key must say whether
 /// more entries refuse more or allow more, or this test fails. The schema
 /// registry names every key, including those `null` or omitted by default;
