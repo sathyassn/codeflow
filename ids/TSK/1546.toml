@@ -1,0 +1,11 @@
+id = "TSK-1546"
+uid = "46df45e1-7548-4c6e-9b75-3a9bf966a64f"
+kind = "TSK"
+title = "Seat-start steps run process probes that sandboxed Codex seats refuse"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:25:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
