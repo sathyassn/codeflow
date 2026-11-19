@@ -6043,6 +6043,7 @@ fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
     let dir = sibling_repo();
     let url = push_url(dir.path(), "upstream");
     git(dir.path(), &["push", "-q", &url, "main"]);
+    set_remote_head(dir.path(), "upstream", "main", &rev(dir.path(), "main"));
     let decoy = dir.path().join(".git").join("decoy.git");
     git(
         dir.path(),
