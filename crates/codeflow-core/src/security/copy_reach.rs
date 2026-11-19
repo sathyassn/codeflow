@@ -454,9 +454,7 @@ fn holds_enforcement_name(dir: &Path) -> Result<Option<PathBuf>, String> {
             // WALK_LIMIT ends a cycle with a refusal.
             let directory = if kind.is_symlink() {
                 std::fs::metadata(entry.path())
-                    .map_err(|e| {
-                        format!("cannot read the link {}: {e}", entry.path().display())
-                    })?
+                    .map_err(|e| format!("cannot read the link {}: {e}", entry.path().display()))?
                     .is_dir()
             } else {
                 kind.is_dir()
