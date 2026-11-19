@@ -1,0 +1,11 @@
+id = "TSK-1549"
+uid = "540359ca-ae9f-4593-b6cc-2e4539e10d9c"
+kind = "TSK"
+title = "The portal and starter osv-scanner files agree"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:31:52Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
