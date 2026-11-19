@@ -194,6 +194,24 @@ fn any_other_value_is_the_baselines() {
     assert_eq!(merged.git.root_branch, "main");
 }
 
+/// More required record sections refuse more records, so the stricter
+/// policy holds the sections either side lists (TSK-1421).
+#[test]
+fn required_record_sections_merge_as_their_union() {
+    let base = policy(
+        r#"{"schema_version": 1, "git": {"task_required_sections": ["Risks"], "spec_required_sections": ["Rollout"]}}"#,
+    );
+    let other = policy(
+        r#"{"schema_version": 1, "git": {"task_required_sections": ["Rollback"], "spec_required_sections": ["Rollout", "Limits"]}}"#,
+    );
+    let merged = stricter(&base, &other).unwrap();
+    assert_eq!(merged.git.task_required_sections, ["Risks", "Rollback"]);
+    assert_eq!(merged.git.spec_required_sections, ["Rollout", "Limits"]);
+    assert!(merged.git.epic_required_sections.is_empty());
+    assert!(weaker(&base, &merged).unwrap());
+    assert!(!weaker(&merged, &base).unwrap());
+}
+
 /// Every list in the policy is classed: a new list key must say whether
 /// more entries refuse more or allow more, or this test fails. The schema
 /// registry names every key, including those `null` or omitted by default;

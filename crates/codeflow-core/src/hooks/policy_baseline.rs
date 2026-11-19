@@ -339,6 +339,11 @@ const UNION_LISTS: &[&str] = &[
     // A range touching a product path needs a journey criterion, so more
     // paths refuse more.
     "git.product_paths",
+    // A record lacking a listed section is refused, so more sections refuse
+    // more records (TSK-1421).
+    "git.task_required_sections",
+    "git.epic_required_sections",
+    "git.spec_required_sections",
 ];
 
 /// Lists where more entries allow more: the intersection is the stricter
