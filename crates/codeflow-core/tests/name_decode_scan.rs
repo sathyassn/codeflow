@@ -848,8 +848,8 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-1190: the attached branch name finds the carried task, whose
     // declared landing line sets the informational comparison base. A name
     // that is not UTF-8 gives no branch, never a lossy one, so the
-    // comparison is unproven and targets get the changed paths as
-    // `unknown`.
+    // comparison is unproven (targets get the changed paths as `unknown`)
+    // unless --since names the base.
     (
         "codeflow-core/src/testing/target_inputs.rs",
         "TargetInputs::comparison",
@@ -7858,7 +7858,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/hooks/policy_baseline.rs", "read_owned", "ErrorKind::NotFound", 1, "TSK-1057: Only native NotFound from an O_NOFOLLOW open reads as no file (a link fails with another error); every other open error is a malformed baseline that blocks the policy check. A missing record whose repository the ledger lists reads as missing and blocks; only a repository absent from both reads as never initialized. The store is the operator-authority directory that agent presets and edit-guard keep agents from writing."),
     ("crates/codeflow-core/src/hooks/policy_baseline.rs", "read_owned", "is_file", 1, "TSK-1057: Type check on the opened descriptor's metadata; anything but a regular file is a malformed baseline that blocks the policy check, so nothing is read as absent."),
     ("crates/codeflow-core/src/security/copy_reach.rs", "read_source", "is_dir", 1, "TSK-408: Type check on metadata_optional, which already succeeded and follows links, so a link to a directory is read for its names; a non-directory is judged as one entry by its own name. Proven absence and every read error leave the source unread, which refuses where the landing holds enforcement files."),
-    ("crates/codeflow-core/src/security/copy_reach.rs", "holds_enforcement_name", "is_dir", 1, "TSK-408: Type check on a read_dir entry's own file type only chooses whether to descend; every entry's name, a link's included, is still compared, and a file type that cannot be read refuses."),
+    ("crates/codeflow-core/src/security/copy_reach.rs", "holds_enforcement_name", "is_dir", 2, "TSK-408: Type checks that choose what the walk descends into: a directory entry, and a link whose followed metadata is a directory, since a copy that follows links writes the target. Every entry's name is still compared; a file type or link that cannot be read refuses, and WALK_LIMIT or the system's link limit ends a cycle with a refusal."),
 ];
 
 #[test]
