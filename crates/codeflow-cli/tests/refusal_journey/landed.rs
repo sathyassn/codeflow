@@ -28,7 +28,7 @@ use std::process::{Command, Output, Stdio};
 
 /// The recovery step an effective-URL refusal gives: the operator removes
 /// the rewrite rule with an editor, since printing the configuration can
-/// show a credential (`NO_CONFIG_LISTING` in hooks/ref_authority.rs).
+/// show a credential (`NO_CONFIG_LISTING` in `hooks/ref_authority.rs`).
 const EDITOR_ADVICE: &str = "removes that rule in the configuration files with an editor, since printing the configuration shows remote URLs";
 
 struct Repo {
