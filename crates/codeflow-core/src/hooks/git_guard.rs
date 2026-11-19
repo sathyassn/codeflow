@@ -1910,7 +1910,7 @@ fn output_value_multiple_words(word: &str) -> bool {
                         continue;
                     }
                     let end = tail
-                        .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+                        .find(|ch: char| ch.is_ascii() && !ch.is_ascii_alphanumeric() && ch != '_')
                         .unwrap_or(tail.len());
                     let plain_name = is_identifier(&tail[..end]) && !tail[end..].starts_with('[');
                     let special = tail.chars().next().is_some_and(|ch| {
@@ -9342,10 +9342,10 @@ fn parameter_arithmetic(chars: &[char], dollar: usize) -> bool {
 fn parameter_name_end(chars: &[char], start: usize) -> Option<usize> {
     let first = *chars.get(start)?;
     let mut at = start + 1;
-    if first.is_ascii_alphabetic() || first == '_' {
+    if first.is_ascii_alphabetic() || first == '_' || !first.is_ascii() {
         while chars
             .get(at)
-            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || !c.is_ascii())
         {
             at += 1;
         }
@@ -9378,14 +9378,20 @@ fn literal_parameter_form(body: &[char]) -> bool {
         if !body[1].is_ascii_alphabetic() && body[1] != '_' {
             return false;
         }
-        return parameter_name_end(body, 1)
-            .is_some_and(|at| matches!(&body[at..], ['@' | '*'] | ['[', '@' | '*', ']']));
+        return parameter_name_end(body, 1).is_some_and(|at| {
+            body[1..at].iter().all(char::is_ascii)
+                && matches!(&body[at..], ['@' | '*'] | ['[', '@' | '*', ']'])
+        });
     }
     // A standalone special parameter is distinct from a length prefix.
     let length = first == '#' && body.len() > 1 && body[1] != ':';
     let Some(mut at) = parameter_name_end(body, usize::from(length)) else {
         return false;
     };
+    // Broader unbraced name recognition must not settle an earlier unread form.
+    if !body[usize::from(length)..at].iter().all(char::is_ascii) {
+        return false;
+    }
     if body.get(at) == Some(&'[') {
         let Some(end) = literal_subscript_end(body, at) else {
             return false;
@@ -9484,6 +9490,7 @@ fn continued_parameter_arithmetic(chars: &[char], start: usize) -> bool {
         }
         if !(c.is_ascii_alphanumeric()
             || c == '_'
+            || !c.is_ascii()
             || parameter.len() == 1 && parameter_name_end(&[c], 0).is_some())
         {
             break;
@@ -15173,8 +15180,9 @@ const LITERAL_MARK: u32 = 0xF_0000;
 /// stays an expansion ([`ShellWord::marked`]).
 const QUOTED_LIVE_MARK: u32 = 0xF_0080;
 
-/// The stand-in for `c` made literal by a quote or escape; a character
-/// past ASCII is never shell syntax, so it stays as written ([`unmarked_as`]).
+/// The stand-in for an ASCII `c` made literal by a quote or escape.
+/// Other characters stay as written ([`unmarked_as`]); parameter-name readers
+/// conservatively include them because some shells accept non-ASCII names.
 fn literal_mark(c: char) -> char {
     if c.is_ascii() {
         char::from_u32(LITERAL_MARK + u32::from(c)).unwrap_or(c)
@@ -15186,8 +15194,7 @@ fn literal_mark(c: char) -> char {
 /// `c`, read unquoted, in a marked word ([`ShellWord::marked`]). A written
 /// character that falls among the stand-ins becomes U+FFFD, so no text a
 /// command carries reads back as a quote mark or as the ASCII character a
-/// stand-in names; like the character it replaces, U+FFFD is never shell
-/// syntax.
+/// stand-in names. Parameter-name readers conservatively include U+FFFD too.
 fn unmarked_as(c: char) -> char {
     if (LITERAL_MARK..QUOTED_LIVE_MARK + 0x80).contains(&u32::from(c)) {
         char::REPLACEMENT_CHARACTER

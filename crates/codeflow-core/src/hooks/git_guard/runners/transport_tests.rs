@@ -232,6 +232,10 @@ fn parameter_evaluation_keeps_probe_inputs_unread() {
         ": \"${x@P}\"",
         ": \"${(P)x}\"",
         ": \"${(e)x}\"",
+        // Existing braced-name refusals remain controls for the shared scan.
+        ": \"${aé}\"",
+        ": \"${!aé*}\"",
+        ": \"${#aé[0]}\"",
         "[[ -v $x ]]",
         "[ -v \"$x\" ]",
         "test -v \"$x\"",
@@ -519,9 +523,7 @@ fn extended_parameter_values_keep_word_count_uncertainty() {
         }
     }
     // Existing ASCII subscript refusal and scalar allowance controls.
-    assert!(
-        super::super::super::configuration_shell_change("print -f \"x$a[@]\" data").is_some()
-    );
+    assert!(super::super::super::configuration_shell_change("print -f \"x$a[@]\" data").is_some());
     assert!(super::super::super::configuration_shell_change("print -f \"x$a\" data").is_none());
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
@@ -888,6 +890,7 @@ fn literal_parameter_forms_keep_probe_inputs_known() {
         ": \"${BASH_SOURCE[0]}\"",
         ": \"${PIPESTATUS[0]}\"",
         ": \"$a[0]\"",
+        ": \"$aé[0]\"",
         ": \"${#a[0]}\"",
         ": \"${p}\"",
         ": \"${12}\"",

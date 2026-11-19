@@ -710,9 +710,10 @@ the form refuses:
     same uncertainty. This is a conservative reader, not a complete shell
     evaluator; the recognized forms do not establish exhaustive coverage.
     Arithmetic operand positions include the supported zsh builtin forms.
-    Continued unbraced parameter subscripts, including special parameter names,
-    retain evaluation evidence. Operand checks retain the unfilled reading in
-    its shell context; filled words add checks and never suppress that reading.
+    Unbraced parameter subscripts, continued forms included, retain evaluation
+    evidence for special and non-ASCII parameter names too.
+    Operand checks retain the unfilled reading in its shell context; filled
+    words add checks and never suppress that reading.
     The supported formatted-output readers share option-value boundaries.
     Nonliteral words in option or format positions retain arithmetic and
     object-input uncertainty, including words after a literal format while
@@ -721,8 +722,8 @@ the form refuses:
     its own reading of options that may conceal a destination. An option
     value with an unsettled word count adds configuration uncertainty even
     when its first character is literal. Quoted scalar formats retain their
-    single-word provenance for plain names and supported single-character
-    special parameters. Other quoted parameter forms retain word-count
+    single-word provenance for plain ASCII names and supported
+    single-character special parameters. Other quoted parameter forms retain word-count
     uncertainty. Fully literal and literal-led data words do not
     add configuration uncertainty.
     Supported top-level writes, loops and sourced commands invalidate tracked
@@ -739,6 +740,8 @@ the form refuses:
     Unsettled option values can refuse commands even with recursion off.
     Quoted substitutions, quoted subscripts, complex quoted parameter forms
     and unquoted brace forms are conservative refusals in option values.
+    Non-ASCII parameter names also retain uncertainty in option values,
+    even where a shell would keep their expansion to one word.
     Supported writer forms can lose tracking even when they do not actually
     write. Recognized external
     launchers can also discard tracking although their child cannot change
