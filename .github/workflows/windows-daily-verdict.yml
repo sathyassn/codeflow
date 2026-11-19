@@ -1,8 +1,8 @@
-# Judges the daily Windows runs from what GitHub records about them, six hours after
-# windows-daily.yml started them. A run that is missing, late or does not match counts
-# as no evidence, and this workflow fails. A daily result is never merge evidence.
-# A line left out has no daily evidence: this workflow can pass without it, and that
-# pass says nothing about it.
+# Disabled with the separate daily dispatcher during the 2026-11-11
+# relaxation. When restored by the operator, judge its full Linux and Windows
+# workers and report each measured SHA and coverage total. Missing, late,
+# mismatched or below-floor results get no credit. A daily result is never
+# merge evidence; a line left out has no daily evidence.
 name: daily Windows verdict
 
 on:
