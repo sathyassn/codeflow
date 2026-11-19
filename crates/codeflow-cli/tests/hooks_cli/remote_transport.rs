@@ -2074,9 +2074,45 @@ fn git_guard_preserves_output_data() {
 }
 
 #[test]
+fn git_guard_judges_expanding_option_values() {
+    let scratch = Scratch::landed(None);
+    git(scratch.root(), &["checkout", "-qb", "task/output-values"]);
+    let mut wrong = Vec::new();
+    for context in [
+        "printf -v y %s ME; set -- %s -vHO$y; print -f \"x$@\" data",
+        "print -f x$=f data",
+        "print -f x$(value) data",
+    ] {
+        for command in ["git fetch --no-recurse-submodules origin", "git commit -m done"] {
+            let out = scratch.judge_inheriting(
+                "git-guard",
+                &format!("{context}; {command}"),
+                ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+            );
+            if out.status.code() == Some(0) || !stderr(&out).contains("git.policy_authority") {
+                wrong.push(format!("{context}; {command}: {}", stderr(&out)));
+            }
+        }
+    }
+    // Existing quoted-format and echo controls.
+    for context in ["print -f \"Processing $f\\n\" -- title", "echo \"$msg\""] {
+        let out = scratch.judge_inheriting(
+            "git-guard",
+            &format!("{context}; git commit -m done"),
+            ("GIT_REPLACE_REF_BASE", "refs/replace/"),
+        );
+        if out.status.code() != Some(0) {
+            wrong.push(format!("control {context}: {}", stderr(&out)));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn git_guard_invalidates_indirect_writers() {
     let scratch = Scratch::landed(None);
     let mut wrong = Vec::new();
+    // Existing refusal controls; these do not isolate literal tracking.
     for context in [
         "r=origin; for r in x::y; do git fetch \"$r\"; done",
         "r=origin; select r in x::y; do git fetch \"$r\"; done",

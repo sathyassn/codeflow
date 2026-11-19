@@ -428,6 +428,93 @@ fn output_data_without_operands_stays_known() {
 }
 
 #[test]
+fn output_option_values_preserve_word_boundaries() {
+    let mut wrong = Vec::new();
+    for context in [
+        "print -f \"x$@\" data",
+        "print -f x$=f data",
+        "print -f x$f data",
+        "print -f x$(value) data",
+        "print -f x`value` data",
+        "print -f x* data",
+        "print -f x{a,b} data",
+        "print -f \"x$*\" data",
+        "print -f \"x${a[@]}\" data",
+        "print -f \"x${=f}\" data",
+        "print -fx$=f data",
+        "print -f \"x$(value)\" data",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_none() {
+            wrong.push(format!("missing refusal: {context}"));
+        }
+    }
+    // Existing quoted-format and echo controls must remain allowed.
+    for context in [
+        "print -f \"Processing $f\\n\" -- title",
+        "print -f 'Files (%d)\\n' -- 3",
+        "print -f 'x$@' -- data",
+        "print -f \"x\\$@\" -- data",
+        "echo \"$msg\"",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_some() {
+            wrong.push(format!("control refused: {context}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn prefixed_writers_invalidate_tracked_values() {
+    let mut wrong = Vec::new();
+    for writer in [
+        "read o", "getln o", "mapfile o", "readarray o", "getopts a o",
+        "unset o", "set -- value", "shift", "eval change", "let o=1",
+        "integer o", "float o", "declare o", "typeset o", "local o",
+        "readonly o", "export o", "wait -p o", "for o in value",
+        "select o in value", "foreach o (value)", "source file", ". file",
+        "vared o", "coproc change", "zparseopts -A o a",
+        "zstyle -s pattern style o", "zformat -f o format",
+        "strftime -s o format", "sysread -o o", "zstat -A o file",
+        "private o", "printf -v o %s value", "print -v o value",
+        "printf %n o", "print -f %n -- o",
+    ] {
+        for prefix in [
+            "X=1", "noglob", "nocorrect", "-", "X=1 noglob nocorrect",
+            "noglob X=1", "exec", "env X=1", "time", "nice -n 10",
+            "timeout 1", "stdbuf -o L", "nohup", "ionice -c 3",
+            "caffeinate -t 1", "xcrun --sdk sdk", "arch -arch arm64",
+            "command -p X=1", "builtin X=1",
+        ] {
+            let context = format!("{prefix} {writer}");
+            let mut literals = super::super::super::Literals::default();
+            literals.note_segment("o=origin");
+            literals.note_segment(&context);
+            if literals.fill("$o") != "$o" {
+                wrong.push(context);
+            }
+        }
+    }
+    // Existing transparent-wrapper controls.
+    for context in ["read o", "builtin read o", "command -p read o"] {
+        let mut literals = super::super::super::Literals::default();
+        literals.note_segment("o=origin");
+        literals.note_segment(context);
+        if literals.fill("$o") != "$o" {
+            wrong.push(format!("control: {context}"));
+        }
+    }
+    for context in ["$prefix read o", "noglob $program o", "env -S \"$launch\""] {
+        let mut literals = super::super::super::Literals::default();
+        literals.note_segment("o=origin");
+        literals.note_segment(context);
+        if literals.fill("$o") != "$o" {
+            wrong.push(format!("unresolved prefix: {context}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
 fn indirect_writers_clear_tracked_values() {
     let mut wrong = Vec::new();
     for context in [
