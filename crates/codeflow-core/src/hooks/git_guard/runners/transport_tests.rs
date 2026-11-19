@@ -465,6 +465,44 @@ fn output_option_values_preserve_word_boundaries() {
 }
 
 #[test]
+fn quoted_option_values_require_settled_expansions() {
+    let mut wrong = Vec::new();
+    for context in [
+        "print -f \"x$argv[@]\" data",
+        "print -f \"x$a[@]\" data",
+        "print -f \"x$f[1]\" data",
+        "print -f \"x$^name\" data",
+        "print -f \"x$~name\" data",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_none() {
+            wrong.push(format!("missing refusal: {context}"));
+        }
+    }
+    // Existing scalar, literal-format and echo controls remain allowed.
+    for context in [
+        "print -f \"Processing $f\\n\" -- title",
+        "print -f \"x${f}\" data",
+        "print -f 'x$argv[@]' data",
+        "print -f \"x$1$#$?$$$!$-\" data",
+        "echo \"$msg\"",
+    ] {
+        if super::super::super::configuration_shell_change(context).is_some() {
+            wrong.push(format!("control refused: {context}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn filled_operands_retain_arithmetic_evidence() {
+    let context = "v=-v; x=$(cat f); test $v \"$x\"; git fetch origin";
+    assert!(
+        super::super::super::expand_shell_commands(context).arithmetic,
+        "missing arithmetic evidence: {context}"
+    );
+}
+
+#[test]
 fn configuration_readers_preserve_quoted_formats() {
     let mut wrong = Vec::new();
     // Controls for quote provenance at each configuration reader.
