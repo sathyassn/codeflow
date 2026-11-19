@@ -354,18 +354,13 @@ fn a_base_git_refuses_is_reported_with_git_s_cause() {
     commit(root, "feat: add y");
     // Keep the ref valid and the history free of overlays, but truncate
     // main's loose commit object so Git itself refuses to resolve it.
-    let out = std::process::Command::new("git")
-        .args(["rev-parse", "main"])
-        .current_dir(root)
-        .output()
-        .unwrap();
-    assert!(out.status.success(), "{out:?}");
-    let sha = String::from_utf8(out.stdout).unwrap();
-    let sha = sha.trim();
-    let object = format!(".git/objects/{}/{}", &sha[..2], &sha[2..]);
-    // Loose objects are read-only, so replace the file rather than opening it.
-    std::fs::remove_file(root.join(&object)).unwrap();
-    write(root, &object, "");
+    let sha = object_of(root, "main");
+    remove_object(root, &sha);
+    write(
+        root,
+        &format!(".git/objects/{}/{}", &sha[..2], &sha[2..]),
+        "",
+    );
     let out = ci(root);
     let said = said(&out);
     assert_ne!(out.status.code(), Some(0), "{said}");
