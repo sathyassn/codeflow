@@ -1,0 +1,11 @@
+id = "TSK-1548"
+uid = "7ac136c9-b89c-4c08-8d5f-17f5c3f669c9"
+kind = "TSK"
+title = "The TSK-1518 landing carries its commit shape, history checks and review nits"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-19T20:29:37Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
