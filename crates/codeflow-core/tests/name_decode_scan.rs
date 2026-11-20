@@ -423,6 +423,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "display",
     ),
+    // git fetch stderr in an error message shown to a person, never compared
+    (
+        "codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "from_utf8_lossy",
+        1,
+        "display",
+    ),
     // a git or tool error message shown to a person, never compared
     (
         "codeflow-core/src/ids/issue.rs",
@@ -534,14 +542,6 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "name",
         1,
         "format-contract",
-    ),
-    // Only the stderr of a failed `git remote get-url --push` is shown in the refusal; the exit status decides, and the push URLs on stdout are decoded strictly.
-    (
-        "codeflow-core/src/remote.rs",
-        "origin_on",
-        "from_utf8_lossy",
-        1,
-        "display",
     ),
     // BranchStep::name returns its existing &str unchanged for display; this is not a git2 name decoder.
     (
@@ -659,6 +659,14 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "codeflow-core/src/validate/mod.rs",
         "validate_epic",
+        "from_utf8_lossy",
+        1,
+        "format-contract",
+    ),
+    // TSK-1421: validate_workgraph calls project_sections only after strict parse_frontmatter succeeds, and the body is a slice of that validated UTF-8 after a line break, so this conversion cannot replace bytes; it only finds level-2 headings.
+    (
+        "codeflow-core/src/validate/mod.rs",
+        "project_sections",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -1915,14 +1923,6 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         "obtain-absent:from_str",
         1,
         "unproven",
-    ),
-    // Trims the stderr of a failed `git remote get-url --push` only to show it in the refusal; the exit status decides.
-    (
-        "crates/codeflow-core/src/remote.rs",
-        "origin_on",
-        "trim",
-        1,
-        "display",
     ),
     // A gh answer that does not parse reads as Null, so the check returns a note that names no default branch or no readable rules, never a pass.
     (
@@ -3543,6 +3543,22 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "framing:ids-git-git-branch-refs-records",
     ),
+    // Explicit LF records of Git-generated ASCII object ids from `rev-list --no-object-names`; no name is printed or read.
+    (
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "split_terminator",
+        1,
+        "framing:ids-git-git-fetch-missing-records",
+    ),
+    // Trims only Git fetch stderr in an error value after nonzero exit; the exit status decides failure.
+    (
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
+        "trim",
+        1,
+        "display",
+    ),
     // Trims only Git stderr in an error value after nonzero exit; successful decision answers decode strictly.
     (
         "crates/codeflow-core/src/ids/git.rs",
@@ -5041,6 +5057,46 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "crates/codeflow-core/src/validate/portal/lookups.rs",
         "verify_lookup_page",
+        "trim",
+        1,
+        "schema-reject-only",
+    ),
+    // TSK-1421: any failure to read the trusted commit, its tree, the path or the blob returns false, so the record counts as changed and a missing listed section is refused, never warned.
+    (
+        "crates/codeflow-core/src/validate/record_sections.rs",
+        "Required::unchanged",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-1421: head_policy runs only after the landed policy failed (Required::doubt). A HEAD that cannot be read leaves no trusted commit, so Required::unchanged returns false and every record lacking a section the working copy lists is refused; codeflow ci, which judges at the base, stays the gate.
+    (
+        "crates/codeflow-core/src/validate/record_sections.rs",
+        "head_policy",
+        "obtain-absent:Repository::discover",
+        1,
+        "unproven",
+    ),
+    // TSK-1421: as for Repository::discover in head_policy; an unborn or unreadable HEAD leaves no trusted commit, so records lacking a section are refused.
+    (
+        "crates/codeflow-core/src/validate/record_sections.rs",
+        "head_policy",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // TSK-1421: as for Repository::discover in head_policy; a HEAD that does not peel to a commit leaves no trusted commit, so records lacking a section are refused.
+    (
+        "crates/codeflow-core/src/validate/record_sections.rs",
+        "head_policy",
+        "obtain-absent:peel_to_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-1421: rejects a blank or `#`-led section name in policy; Unicode trimming only rejects more names, and accepted names are stripped by CommonMark's space and tab rule in ProjectSections::from_git.
+    (
+        "crates/codeflow-core/src/validate/record_sections.rs",
+        "is_valid_name",
         "trim",
         1,
         "schema-reject-only",
@@ -6744,6 +6800,11 @@ const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
         "ids-git-git-branch-refs-records",
         "crates/codeflow-core/src/ids/git.rs",
         "Git::branch_refs",
+    ),
+    (
+        "ids-git-git-fetch-missing-records",
+        "crates/codeflow-core/src/ids/git.rs",
+        "Git::fetch_missing",
     ),
     (
         "ids-inventory-lifetime-start-records",

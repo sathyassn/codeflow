@@ -196,6 +196,19 @@ pub struct CiArgs {
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
 
+    /// The registry's objects are here: the pre-push hook fetched what a
+    /// partial clone left out before it ran this check, so the registry
+    /// reads never fetch lazily and a missing registry object refuses
+    /// (TSK-327). Hosted CI never passes it.
+    #[arg(long, hide = true)]
+    pub registry_objects_local: bool,
+
+    /// Milliseconds left before the caller ends this run: every bounded
+    /// read is capped at that time. The pre-push hook passes its deadline
+    /// (TSK-327); it only shortens reads.
+    #[arg(long, value_name = "MS", hide = true)]
+    pub deadline_ms: Option<u64>,
+
     /// Print how long each check took, on stderr after the verdict, one
     /// line per check and then the total. The times only report; they
     /// change no verdict.
@@ -371,6 +384,13 @@ fn ci_environment(
 }
 
 pub fn run(args: &CiArgs) -> i32 {
+    if let Some(left) = args.deadline_ms {
+        // The pre-push hook ends this run at its deadline; every bounded
+        // read here ends by then by itself (TSK-327).
+        codeflow_core::git::remote_query::bound_reads_by(
+            std::time::Instant::now() + std::time::Duration::from_millis(left),
+        );
+    }
     let mut timings = timing::Timings::start();
     let code = run_timed(args, &mut timings);
     if args.timings {
@@ -521,6 +541,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     ) else {
         return 2;
     };
+    // The working copy's record sections join the judging policy's
+    // (TSK-1421), so they are kept before the working policy is consumed.
+    let working_sections =
+        codeflow_core::validate::record_sections::ProjectSections::from_git(&working.git);
     let Some(judging) = judging_policy(
         &root,
         authority.as_ref(),
@@ -797,6 +821,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             &names,
             &line_target,
             &target_tip,
+            args.registry_objects_local,
             &mut tagged,
             &mut ran,
             timings,
@@ -931,7 +956,15 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             .and_then(classification::Class::task_id)
             .is_some()
     {
-        visible_graph_check(&root, level, &mut tagged, &mut ran);
+        // Extra record sections (TSK-1421): the judging policy's lists joined
+        // with the working copy's, so a head can add a section but never drop
+        // one; records unchanged since the base are warned, not refused.
+        let required = codeflow_core::validate::record_sections::Required::judged(
+            &judging.policy.git,
+            &working_sections,
+            Some(base_sha.clone().unwrap_or_else(|| head.clone())),
+        );
+        visible_graph_check(&root, &required, level, &mut tagged, &mut ran);
     }
     timings.lap("visible-graph");
 
@@ -1411,6 +1444,7 @@ fn record_checks(
     names: &Names<'_>,
     line_target: &str,
     target_tip: &Result<String, NoTarget>,
+    registry_local: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
     timings: &mut timing::Timings,
@@ -1475,7 +1509,7 @@ fn record_checks(
         ran,
     );
     timings.lap("work-records");
-    id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    id_registry::dispatch(root, base_candidates, head, registry_local, tagged, ran);
     timings.lap("id-registry");
 }
 
@@ -2004,6 +2038,7 @@ pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Re
 /// `git.work_planning` level (TSK-133).
 fn visible_graph_check(
     root: &Path,
+    required: &codeflow_core::validate::record_sections::Required,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -2012,7 +2047,7 @@ fn visible_graph_check(
     // in the output.
     ran.push("work.valid_graph");
     println!("codeflow ci: work.valid_graph: the docs validation of this run");
-    let workgraph = validate_workgraph(root);
+    let workgraph = validate_workgraph(root, required);
     if !workgraph.is_clean() {
         let findings = workgraph
             .issues
@@ -2989,20 +3024,28 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let out = codeflow_core::workgraph::history::command()
+    use codeflow_core::git::remote_query::{bounded_local, LocalAnswer, QueryLimits};
+    let mut command = codeflow_core::workgraph::history::command();
+    command
         .arg("-C")
         .arg(root)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|error| format!("cannot query origin URL: {error}"))?;
-    if !out.status.success() {
-        return if out.status.code() == Some(2) {
-            Ok(None)
-        } else {
-            Err(format!("cannot query origin URL: {}", out.status))
-        };
-    }
-    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+        .args(["remote", "get-url", "origin"]);
+    // Read within the destination lookup's wait (TSK-327): a read that
+    // stalls, overflows or cannot run refuses; only exit 2 means absent.
+    let limits = QueryLimits::from_authority_or_default(root);
+    let stdout = match bounded_local(command, limits.timeout())
+        .map_err(|why| format!("cannot query origin URL: {why}"))?
+    {
+        LocalAnswer::Answer(stdout) => stdout,
+        LocalAnswer::Exit(Some(2)) => return Ok(None),
+        LocalAnswer::Exit(code) => {
+            return Err(format!(
+                "cannot query origin URL: git exited with {}",
+                code.map_or_else(|| "no exit code".to_string(), |code| code.to_string())
+            ))
+        }
+    };
+    let bytes = stdout.strip_suffix(b"\n").unwrap_or(&stdout);
     let url = std::str::from_utf8(bytes)
         .map_err(|_| {
             "the URL of `origin` is not valid UTF-8, so its policy cannot be asked".to_string()

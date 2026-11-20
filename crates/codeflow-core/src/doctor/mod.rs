@@ -2152,11 +2152,11 @@ fn run_captured_with(
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
+    // The child leads its own group, owned here: every path below ends the
+    // group before the child is reaped, and the watcher ends it if doctor
+    // is killed first (TSK-327).
+    let mut owner =
+        crate::git::owned::GroupOwner::prepare(&mut command).map_err(|error| error.to_string())?;
     // The input is written from its own thread (`git::spawn_with_input_stopping`),
     // so an answer larger than a pipe cannot block the write and with it the
     // timeout below. A child that exits without reading closes the pipe; its
@@ -2165,32 +2165,40 @@ fn run_captured_with(
     // descendant that keeps the pipe open and never reads would leave it
     // blocked, so the tree is stopped and the run times out.
     let (mut child, writer) = match stdin {
-        Some(text) => crate::git::spawn_with_input_stopping(
-            &mut command,
-            text.as_bytes().to_vec(),
-            terminate_process_tree,
-        )
-        .map(|(child, writer)| (child, Some(writer)))
-        .map_err(|error| error.to_string())?,
+        Some(text) => {
+            crate::git::spawn_with_input_stopping(&mut command, text.as_bytes().to_vec(), |child| {
+                owner.spawned(child);
+                terminate_process_tree(&mut owner, child);
+            })
+            .map(|(child, writer)| (child, Some(writer)))
+            .map_err(|error| error.to_string())?
+        }
         // No input: the child inherits doctor's stdin, as documented above.
         None => (command.spawn().map_err(|error| error.to_string())?, None),
     };
+    owner.spawned(&child);
     let stdout = child.stdout.take().map(spawn_probe_reader);
     let stderr = child.stderr.take().map(spawn_probe_reader);
     let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            break status;
+    // The child's exit, observed without reaping it, so the group it leads
+    // is ended before it is reaped.
+    loop {
+        match crate::git::remote_query::has_exited(&mut child) {
+            Ok(true) => break,
+            Ok(false) if started.elapsed() < timeout => std::thread::sleep(VERSION_PROBE_POLL),
+            outcome => {
+                terminate_process_tree(&mut owner, &mut child);
+                let _ = child.wait();
+                return Err(match outcome {
+                    Err(error) => error.to_string(),
+                    Ok(_) => probe_timeout_message(timeout),
+                });
+            }
         }
-        if started.elapsed() >= timeout {
-            terminate_process_tree(&mut child);
-            let _ = child.wait();
-            return Err(probe_timeout_message(timeout));
-        }
-        std::thread::sleep(VERSION_PROBE_POLL);
-    };
+    }
     let stdout = receive_probe_reader(stdout, started, timeout).map_err(|error| {
-        terminate_process_tree(&mut child);
+        terminate_process_tree(&mut owner, &mut child);
+        let _ = child.wait();
         if error == "timed out" {
             probe_timeout_message(timeout)
         } else {
@@ -2198,7 +2206,8 @@ fn run_captured_with(
         }
     })?;
     let stderr = receive_probe_reader(stderr, started, timeout).map_err(|error| {
-        terminate_process_tree(&mut child);
+        terminate_process_tree(&mut owner, &mut child);
+        let _ = child.wait();
         if error == "timed out" {
             probe_timeout_message(timeout)
         } else {
@@ -2208,12 +2217,16 @@ fn run_captured_with(
     if let Some(writer) = writer {
         while !writer.is_finished() {
             if started.elapsed() >= timeout {
-                terminate_process_tree(&mut child);
+                terminate_process_tree(&mut owner, &mut child);
+                let _ = child.wait();
                 return Err(probe_timeout_message(timeout));
             }
             std::thread::sleep(VERSION_PROBE_POLL);
         }
     }
+    // Whatever is left of the child's group ends before it is reaped.
+    owner.signal();
+    let status = child.wait().map_err(|error| error.to_string())?;
     let loss = CaptureLoss {
         stdout_dropped: stdout.dropped,
         stderr_dropped: stderr.dropped,
@@ -2237,17 +2250,13 @@ fn probe_timeout_message(timeout: Duration) -> String {
     )
 }
 
-fn terminate_process_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        if let Ok(process_group) = i32::try_from(child.id()) {
-            // SAFETY: the child was placed in a new process group whose id is
-            // its pid. SIGKILL is best-effort; child.kill remains a backstop.
-            unsafe {
-                libc::killpg(process_group, libc::SIGKILL);
-            }
-        }
-    }
+/// End the child's whole group (its owner's watcher keeps the id reserved
+/// until then) and kill the child, without reaping it.
+fn terminate_process_tree(
+    owner: &mut crate::git::owned::GroupOwner,
+    child: &mut std::process::Child,
+) {
+    owner.signal();
     #[cfg(windows)]
     {
         // Spawn without waiting so an unavailable or wedged helper cannot
@@ -8395,6 +8404,44 @@ mod tests {
             .expect("run_captured returned instead of waiting on the blocked write");
         assert!(run.unwrap_err().contains("timed out"));
         assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    }
+
+    /// TSK-327: a run that times out on its blocked write reaps the child
+    /// it killed. The child records its pid, exits, and leaves a descendant
+    /// holding stdin unread; once the run returns, the child is no longer
+    /// waitable. Before, this return killed the group but never reaped the
+    /// child, so it stayed a zombie of this process. The reader-error
+    /// returns take the same reap; no child can make a pipe read fail, so
+    /// they have no test of their own.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_timeout_reaps_the_child_it_killed() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("child");
+        let script = format!(
+            "echo $$ > '{}'; exec 3<&0; sleep 30 >/dev/null 2>&1 & exit 0",
+            pidfile.display()
+        );
+        let input = "x".repeat(4 * 1024 * 1024);
+        let run = run_captured(
+            "sh",
+            &["-c", &script],
+            Duration::from_millis(500),
+            Some(&input),
+            None,
+        );
+        assert!(run.unwrap_err().contains("timed out"));
+        let child: libc::pid_t = std::fs::read_to_string(&pidfile)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: `WNOHANG` never blocks; a reaped child is not ours to wait
+        // for, so the call fails with ECHILD, while a zombie returns its pid.
+        let waited = unsafe { libc::waitpid(child, std::ptr::null_mut(), libc::WNOHANG) };
+        let error = std::io::Error::last_os_error();
+        assert_eq!(waited, -1, "the child {child} was left unreaped");
+        assert_eq!(error.raw_os_error(), Some(libc::ECHILD));
     }
 
     #[cfg(unix)]

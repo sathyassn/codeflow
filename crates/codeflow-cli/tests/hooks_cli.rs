@@ -6008,6 +6008,343 @@ fn push_set_queries_the_destination_once_for_multiple_refs() {
     );
 }
 
+/// TSK-327 AC-1: an `insteadOf` in the repository, global or system
+/// configuration that matches the URL the push uses would send the hook's
+/// destination query to another repository, here a decoy that advertises a
+/// different branch set. The hook refuses the push as an unchecked
+/// destination instead of judging it against the decoy; without the
+/// rewrite the same push passes.
+#[cfg(unix)]
+#[test]
+fn push_set_refuses_a_destination_query_a_rewrite_would_redirect() {
+    let dir = sibling_repo();
+    let url = push_url(dir.path(), "upstream");
+    git(dir.path(), &["push", "-q", &url, "main"]);
+    let decoy = dir.path().join(".git").join("decoy.git");
+    git(
+        dir.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            decoy.to_str().unwrap(),
+        ],
+    );
+    git(
+        dir.path(),
+        &[
+            "push",
+            "-q",
+            decoy.to_str().unwrap(),
+            "main",
+            "main:decoy-only",
+        ],
+    );
+    let good = rev(dir.path(), "feat/good");
+    let stdin = format!("refs/heads/feat/good {good} refs/heads/feat/good {ZERO_SHA}\n");
+    let hook = |scope: Option<&str>| {
+        let mut cmd = codeflow();
+        cmd.args(["git-hook", "pre-push", "upstream", &url])
+            .current_dir(dir.path());
+        let rewrite = format!("[url \"{}\"]\n\tinsteadOf = {url}\n", decoy.display());
+        let file = dir.path().join(".git").join("planted-config");
+        match scope {
+            Some("global") => {
+                std::fs::write(&file, rewrite).unwrap();
+                cmd.env("GIT_CONFIG_GLOBAL", &file);
+            }
+            Some("system") => {
+                std::fs::write(&file, rewrite).unwrap();
+                cmd.env("GIT_CONFIG_SYSTEM", &file)
+                    .env_remove("GIT_CONFIG_NOSYSTEM");
+            }
+            // The deprecated file only `git config` reads hides the
+            // repository's rewrite from that read, not from the query.
+            Some("hidden") => {
+                std::fs::write(&file, "").unwrap();
+                cmd.env("GIT_CONFIG", &file);
+            }
+            _ => {}
+        }
+        run_with_stdin(&mut cmd, &stdin)
+    };
+    let control = hook(None);
+    assert_eq!(
+        control.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&control.stderr)
+    );
+    let key = format!("url.{}.insteadOf", decoy.display());
+    for scope in ["repository", "global", "system", "hidden"] {
+        if scope == "repository" || scope == "hidden" {
+            git(dir.path(), &["config", &key, &url]);
+        }
+        let out = hook(Some(scope));
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_ne!(out.status.code(), Some(0), "{scope}: {err}");
+        assert!(err.contains("ci.destination_unavailable"), "{scope}: {err}");
+        assert!(err.contains("cannot be verified"), "{scope}: {err}");
+        assert!(err.contains("insteadOf"), "{scope}: {err}");
+        if scope == "repository" || scope == "hidden" {
+            git(dir.path(), &["config", "--unset", &key]);
+        }
+    }
+}
+
+/// TSK-327 AC-6: a scratch adopter whose configured remote is an empty
+/// repository, while a rewrite to a populated one is included on a
+/// `gitdir` condition that a fetch through a symbolic link to the checkout
+/// applies. With `GIT_CONFIG` naming an empty file, which only `git config`
+/// reads, the identity check's listing used to miss the include, so the
+/// empty answer selected initialization policy from `HEAD` in place of the
+/// landed policy. The listing now reads what a fetch reads, so the load
+/// refuses and names the included file. Without the include the same
+/// adopter is initialization.
+#[cfg(unix)]
+#[test]
+fn ac6_a_hidden_rewrite_never_selects_initialization() {
+    let top = tempfile::tempdir().unwrap();
+    let empty = top.path().join("empty.git");
+    let populated = top.path().join("populated.git");
+    for bare in [&empty, &populated] {
+        git(
+            top.path(),
+            &["init", "-q", "--bare", "-b", "main", bare.to_str().unwrap()],
+        );
+    }
+    let real = top.path().join("real");
+    let link = top.path().join("link");
+    std::fs::create_dir(&real).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &real,
+        &["init", "--yes", "--minimal"],
+    );
+    // `init` commits the scaffold; the adopter works on a branch.
+    ok("git", &real, &["switch", "-c", "feat/ac6"]);
+    git(
+        &populated,
+        &[
+            "fetch",
+            "-q",
+            real.to_str().unwrap(),
+            "HEAD:refs/heads/main",
+        ],
+    );
+    git(&real, &["remote", "add", "origin", empty.to_str().unwrap()]);
+    let hidden = top.path().join("hidden.config");
+    std::fs::write(&hidden, "").unwrap();
+    let source = |hide: bool| {
+        let mut cmd = codeflow();
+        cmd.args(["doctor", "--check", "policy-source"])
+            .current_dir(&real);
+        if hide {
+            cmd.env("GIT_CONFIG", &hidden);
+        }
+        let out = cmd.output().unwrap();
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr)
+    };
+    let control = source(true);
+    assert!(
+        control.contains("initialization: origin advertises no refs"),
+        "{control}"
+    );
+    let rewrite = top.path().join("rewrite.config");
+    std::fs::write(
+        &rewrite,
+        format!(
+            "[url \"{}\"]\n\tinsteadOf = {}\n",
+            populated.display(),
+            empty.display()
+        ),
+    )
+    .unwrap();
+    git(
+        &real,
+        &[
+            "config",
+            &format!("includeIf.gitdir:{}/.git.path", link.display()),
+            rewrite.to_str().unwrap(),
+        ],
+    );
+    for (case, text) in [("plain", source(false)), ("hidden", source(true))] {
+        assert!(!text.contains("initialization"), "{case}: {text}");
+        assert!(text.contains("rewrite.config"), "{case}: {text}");
+        assert!(text.contains("never read from HEAD"), "{case}: {text}");
+    }
+}
+
+/// TSK-327 AC-6, the guard wait: the landed-policy emptiness query's
+/// destination check reads `git config -z --list` within the guard's
+/// lookup wait. A `git` first on `PATH` passes every other call to the
+/// real git, so the identity check finishes, and stalls only that listing
+/// for 40 s. Before the change the read had no deadline: the load waited
+/// out the stall and then chose initialization. Now it refuses within the
+/// wait (10 s) and never chooses initialization.
+#[cfg(unix)]
+#[test]
+fn ac6_a_stalled_destination_check_refuses_within_the_guard_wait() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git is on PATH");
+    let top = tempfile::tempdir().unwrap();
+    let empty = top.path().join("empty.git");
+    git(
+        top.path(),
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            empty.to_str().unwrap(),
+        ],
+    );
+    let adopter = top.path().join("adopter");
+    std::fs::create_dir(&adopter).unwrap();
+    ok(
+        env!("CARGO_BIN_EXE_codeflow"),
+        &adopter,
+        &["init", "--yes", "--minimal"],
+    );
+    ok("git", &adopter, &["switch", "-c", "feat/stall"]);
+    git(
+        &adopter,
+        &["remote", "add", "origin", empty.to_str().unwrap()],
+    );
+    let stub = top.path().join("stub");
+    std::fs::create_dir(&stub).unwrap();
+    let script = stub.join("git");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\ncase \" $* \" in\n  *\" config -z --list \") sleep 40 ;;\nesac\nexec '{}' \"$@\"\n",
+            real_git.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(std::iter::once(stub.clone()).chain(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    )))
+    .unwrap();
+    let started = std::time::Instant::now();
+    let out = codeflow()
+        .args(["doctor", "--check", "policy-source"])
+        .current_dir(&adopter)
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    let took = started.elapsed();
+    let text =
+        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!text.contains("initialization"), "{took:?}: {text}");
+    assert!(text.contains("no answer within 10s"), "{took:?}: {text}");
+    assert!(text.contains("never read from HEAD"), "{took:?}: {text}");
+    assert!(
+        took < std::time::Duration::from_secs(30),
+        "{took:?}: {text}"
+    );
+}
+
+/// TSK-327, the push hook: the destination's fetch refspecs decide whether
+/// an empty destination is initialization, so the read of them is bounded
+/// by the lookup's wait. A `git` first on `PATH` passes every other call to
+/// the real git and stalls (45 s) or fails (exit 128) only that read. Before
+/// the change the stalled read had no deadline: the hook waited it out and
+/// then chose initialization. Now both refuse and neither is initialization.
+#[cfg(unix)]
+#[test]
+fn push_set_never_turns_a_stalled_or_failed_destination_read_into_initialization() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let real_git = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git is on PATH");
+    let lone = tempfile::tempdir().unwrap();
+    init_repo(lone.path(), "feat/lone");
+    answering_destination(lone.path(), "origin");
+    let head = rev(lone.path(), "HEAD");
+    let url = push_url(lone.path(), "origin");
+    for (name, action, expected) in [
+        ("stall", "sleep 45", "no answer within 30s"),
+        ("fail", "exit 128", "exit status: 128"),
+    ] {
+        let stub = lone.path().join(".git").join(format!("stub-{name}"));
+        std::fs::create_dir(&stub).unwrap();
+        let script = stub.join("git");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncase \" $* \" in\n  *\" --get-all remote.origin.fetch \") {action} ;;\nesac\nexec '{}' \"$@\"\n",
+                real_git.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let path = std::env::join_paths(std::iter::once(stub).chain(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        )))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let out = run_with_stdin(
+            codeflow()
+                .args(["git-hook", "pre-push", "origin", &url])
+                .current_dir(lone.path())
+                .env("PATH", &path),
+            &format!("refs/heads/feat/lone {head} refs/heads/feat/lone {ZERO_SHA}"),
+        );
+        let took = started.elapsed();
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert_eq!(out.status.code(), Some(1), "{name} {took:?}: {err}");
+        assert!(!err.contains("initialization"), "{name} {took:?}: {err}");
+        assert!(err.contains(expected), "{name} {took:?}: {err}");
+        assert!(
+            took < std::time::Duration::from_secs(42),
+            "{name} {took:?}: {err}"
+        );
+    }
+}
+
+#[test]
+fn push_set_refuses_initialization_under_a_command_line_transport_setting() {
+    // TSK-327: an empty destination is initialization only when the query
+    // connected as the push did; a command-line transport setting the query
+    // does not apply refuses, and other command-line settings do not.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["checkout", "-b", "feat/x"]);
+    let head = commit_file(dir.path(), "x.txt", "x\n", "Not conventional.");
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q"]);
+    let path = bare.path().to_str().unwrap();
+    let hook = |parameters: &str| {
+        let mut cmd = codeflow();
+        cmd.args(["git-hook", "pre-push", path, path])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_PARAMETERS", parameters);
+        run_with_stdin(
+            &mut cmd,
+            &format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO_SHA}\n"),
+        )
+    };
+    let out = hook("'user.name=Tester'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("initialization:"), "{err}");
+    let out = hook("'http.proxy=http://proxy.invalid'");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_ne!(out.status.code(), Some(0), "{err}");
+    assert!(err.contains("the command-line setting http.proxy"), "{err}");
+    assert!(!err.contains("initialization:"), "{err}");
+}
+
 /// A minimal scaffold on `feat/probe` whose test config holds a heavy quick
 /// target that sleeps past any push and a quick target that fails, with an
 /// answering destination `upstream`.
@@ -6488,6 +6825,48 @@ fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::Tem
         r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
     );
     (bare, local)
+}
+
+#[path = "../../codeflow-core/tests/support/forged_graph.rs"]
+mod forged_graph;
+
+/// TSK-327 AC-2, the preserved invariant of TSK-287 AC-1 and AC-2 on the
+/// combined push set: a forged commit-graph file, a graft or a replace ref
+/// that makes a pushed commit's parent the destination's tip, hiding the
+/// bad commit between them, never shortens the range. The push is refused,
+/// either because the hidden commit is judged or because the overlay
+/// leaves the history unverifiable; it never passes. Without an overlay
+/// the same push is refused for the bad commit itself.
+#[test]
+fn push_set_range_ignores_forged_graphs_grafts_and_replace_refs() {
+    for overlay in ["none", "commit-graph", "graft", "replace"] {
+        let (_bare, local) = stable_destination("chore: legacy base");
+        let root = local.path();
+        git(root, &["checkout", "-q", "-b", "feat/x", "dest/stable"]);
+        let base = rev(root, "HEAD");
+        commit_file(root, "x.txt", "x\n", "Not conventional.");
+        let forged = commit_file(root, "f.txt", "f\n", "feat: add f");
+        let head = commit_file(root, "h.txt", "h\n", "feat: add h");
+        match overlay {
+            "commit-graph" => forged_graph::plant(root, &forged, &base),
+            "graft" => {
+                let info = root.join(".git").join("info");
+                std::fs::create_dir_all(&info).unwrap();
+                std::fs::write(info.join("grafts"), format!("{forged} {base}\n")).unwrap();
+            }
+            "replace" => git(root, &["replace", "--graft", &forged, &base]),
+            _ => {}
+        }
+        let (code, err) = push_hook_onto(root, "dest", "feat/x", &head, ZERO_SHA);
+        assert_eq!(code, Some(1), "{overlay}: {err}");
+        assert!(
+            err.contains("Not conventional.") || err.contains("cannot"),
+            "{overlay}: {err}"
+        );
+        if overlay == "none" {
+            assert!(err.contains("Not conventional."), "{err}");
+        }
+    }
 }
 
 #[test]
@@ -12916,6 +13295,44 @@ fn promisor_hook(
     command.output().unwrap()
 }
 
+/// TSK-327: the commit hooks' promisor setting read is bounded by the
+/// guard's lookup wait. A `git` first on `PATH` stalls only that read
+/// (`config --get-regexp`) for 25 s and passes every other call to the real
+/// git. Before the change the read had no deadline: the merge route's
+/// staged listing waited out the stall. Now it refuses within the wait
+/// (10 s), naming it, before any object is read.
+#[cfg(unix)]
+#[test]
+fn a_stalled_promisor_setting_read_refuses_within_the_guard_wait() {
+    use std::os::unix::fs::PermissionsExt;
+    let (keep, work, fetched) = promisor_repository_missing_blobs();
+    let bin = keep.path().join("stall-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in\n  config\\ --get-regexp*) sleep 25;;\nesac\nexec '{}' \"$@\"\n",
+            real_git_path().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let started = std::time::Instant::now();
+    let out = promisor_hook(&work, &bin, true, false, &[]);
+    let took = started.elapsed();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{took:?}: {stderr}");
+    assert!(
+        stderr.contains("no answer within 10s"),
+        "{took:?}: {stderr}"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "{took:?}: {stderr}"
+    );
+    assert!(!fetched.exists(), "a fetch or transport process started");
+}
+
 /// R15-1 across the supported Git range, through the hook entry points on
 /// the pre-commit route (attribute lookup) and the merge route (staged
 /// listing): a repository with a promisor remote on a Git before 2.46, a
@@ -13087,9 +13504,14 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
         ("numbered", &numbered[..]),
     ] {
         let (keep, work, fetched) = promisor_repository_missing_blobs();
-        // The repository's own configuration has no promisor designation.
+        // The repository's own configuration has no promisor designation;
+        // the filter the partial fetch recorded would be one (TSK-327).
         git(&work, &["config", "--unset", "remote.origin.promisor"]);
         git(&work, &["config", "--unset", "extensions.partialClone"]);
+        git(
+            &work,
+            &["config", "--unset", "remote.origin.partialCloneFilter"],
+        );
         let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
         let out = promisor_hook(&work, &wrapper, false, false, env);
         let stderr = String::from_utf8_lossy(&out.stderr);
