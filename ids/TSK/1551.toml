@@ -1,0 +1,11 @@
+id = "TSK-1551"
+uid = "0f9d1a66-45c7-4b7e-a481-df171c83b0cf"
+kind = "TSK"
+title = "The guard's variable table is right for every form that sets a variable, or the line refuses"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:08:18Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
