@@ -1,0 +1,11 @@
+id = "TSK-1559"
+uid = "faaa99b2-d940-4564-955d-61cb3e36adb7"
+kind = "TSK"
+title = "A test target can be marked release-only, so the local full gate skips it and the release tier runs it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:27:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
