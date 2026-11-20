@@ -1,0 +1,11 @@
+id = "TSK-1554"
+uid = "2728be44-288c-4e89-be0d-4b7d8811fef2"
+kind = "TSK"
+title = "The generation check ignores file mode noise"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:17:36Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
