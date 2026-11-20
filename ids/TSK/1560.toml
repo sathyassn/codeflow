@@ -1,0 +1,11 @@
+id = "TSK-1560"
+uid = "d949e6b9-bae5-411d-88ac-d08a0d2357a1"
+kind = "TSK"
+title = "The guard allows a git program word set by an exactly-tracked literal assignment"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T08:28:39Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
