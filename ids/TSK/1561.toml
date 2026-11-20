@@ -1,0 +1,11 @@
+id = "TSK-1561"
+uid = "2a6a9802-e658-45c9-89cd-afa19998ced3"
+kind = "TSK"
+title = "The guard reads inline code for Perl, Ruby, PowerShell and awk by an allowlist"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T08:30:41Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
