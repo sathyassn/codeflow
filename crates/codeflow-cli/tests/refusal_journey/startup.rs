@@ -515,7 +515,8 @@ const ROUND_15_CONTROLS: &[&str] = &[
     "echo README.md | xargs git add",
     "gtimeout 5 git status",
     "flock /tmp/l git status",
-    "parallel echo ::: hi",
+    // `parallel` is no longer a control: TSK-326 refuses it in agent
+    // sessions, since the commands it builds cannot be read.
     "tmux -S /tmp/sock new-session -d",
     "git config --global user.name Probe",
     "grep \"$PAT\" ~/.zshrc",

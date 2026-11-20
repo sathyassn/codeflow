@@ -46,9 +46,73 @@ pub fn policies(src: &str) -> Option<[&'static str; 2]> {
     (src == "policy.json").then_some([POLICY, STAGING_POLICY])
 }
 
+/// The SHA-256 of every Grok profile (`grok/sandbox.toml`) a `CodeFlow` build
+/// has shipped, oldest first, this version's last.
+///
+/// - `7b0a0b6c…`: 3.0.0 through 3.1.1.
+/// - `19dae22f…` and `975bbb83…`: builds of the 3.2.0 line before TSK-1057,
+///   which never shipped as a release but did install the profile in the
+///   repositories that ran them.
+/// - `d23274b5…`: this version.
+///
+/// A change to the asset fails `every_follower_lists_its_shipped_bytes`
+/// until its new hash is appended here; the earlier ones stay.
+const GROK_PROFILE_SHA256: &[&str] = &[
+    "7b0a0b6c46f9a16468d588f4db4f871302109150166bff01e644bd2c502cd686",
+    "19dae22f569b22fd8f74a742e5be6d517419f32a02fdf9a3ee644bfec73a5ea1",
+    "975bbb83ff7feaf639ef24bfb3f83ffb42613e50ef538f7912c136b0944bff12",
+    "d23274b5b6e0635f047136d5a31621b9f9ac86e21d5f5b313b1c3470a965741c",
+];
+
+/// The SHA-256 of every version of the asset `src` that a `CodeFlow` build
+/// has shipped, for a user-owned file that update replaces while it is
+/// unmodified (`refresh_unmodified`, TSK-1057). A file whose bytes hash to
+/// one of these is `CodeFlow`'s own and carries no adopter edit. The proof is
+/// this list, compiled into the binary: no file in the repository (the
+/// `.codeflow/.baseline/` copy or the installed manifest's hash), which a
+/// session can write, decides it. Empty for any other asset.
+#[must_use]
+pub fn shipped_sha256(src: &str) -> &'static [&'static str] {
+    match src {
+        "grok/sandbox.toml" => GROK_PROFILE_SHA256,
+        _ => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every `refresh_unmodified` entry has its shipped versions listed, the
+    /// current asset's bytes among them, so changing the asset without
+    /// listing its hash fails here (TSK-1057).
+    #[test]
+    fn every_follower_lists_its_shipped_bytes() {
+        let manifest: toml::Value = include_str!("../../../../assets/base/scaffold-manifest.toml")
+            .parse()
+            .unwrap();
+        let followers: Vec<&str> = manifest["entry"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e.get("refresh_unmodified") == Some(&toml::Value::Boolean(true)))
+            .map(|e| e["src"].as_str().unwrap())
+            .collect();
+        assert_eq!(followers, ["grok/sandbox.toml"]);
+        let current = include_str!("../../../../assets/base/grok/sandbox.toml");
+        let listed = shipped_sha256("grok/sandbox.toml");
+        assert!(
+            listed.contains(&super::super::hash::sha256_hex(current.as_bytes()).as_str()),
+            "append the new grok/sandbox.toml hash to GROK_PROFILE_SHA256"
+        );
+        let release = include_str!("../../tests/fixtures/grok-3.1.1/sandbox.toml");
+        assert_eq!(
+            listed[0],
+            super::super::hash::sha256_hex(release.as_bytes()),
+            "the 3.1.1 profile"
+        );
+        assert!(shipped_sha256("policy.json").is_empty());
+    }
 
     #[test]
     fn every_copy_parses_as_a_json_object() {

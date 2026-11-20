@@ -101,7 +101,7 @@
     ".agents/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "aed02264386fad0e96ea6aefbfde7558c5d27036ab560352d9802f532350d9af",
+      "sha256": "9440b8450085cb9b285a7472faeca533deb5ec93e5cb3751b48932a077221668",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/SKILL.md": {
@@ -1463,7 +1463,7 @@
     ".claude/skills/cf-develop/SKILL.md": {
       "src": "agents/skills/cf-develop/SKILL.md",
       "ownership": "managed",
-      "sha256": "aed02264386fad0e96ea6aefbfde7558c5d27036ab560352d9802f532350d9af",
+      "sha256": "9440b8450085cb9b285a7472faeca533deb5ec93e5cb3751b48932a077221668",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/SKILL.md": {
@@ -2759,7 +2759,7 @@
     ".codeflow/rules/git-rules.md": {
       "src": "rules/git-rules.md",
       "ownership": "managed",
-      "sha256": "0f763ceb18d022130639030175e5071091c755db436b7d171e033aeabaaa3fcc",
+      "sha256": "745735c91ea992fff28d34098b37ac71fa1d943dee70dc2e5a3dd66bb65e935b",
       "exec": false
     },
     ".codeflow/rules/workflow-discipline.md": {

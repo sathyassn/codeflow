@@ -538,12 +538,22 @@ fn authority_errors_refuse_and_a_proven_absence_selects_the_defaults() {
 /// that a configuration rewrite makes git use instead. Returns the fixture,
 /// the empty URL and the populated URL; `rewrite` adds the setting that
 /// makes them differ.
+///
+/// The repositories sit under a directory whose name holds a backslash, so
+/// every host meets what Windows paths always carry (TSK-1400): a message
+/// shows each backslash escaped, and configuration text must escape it.
 fn rewritten(
     rewrite: impl Fn(&Fixture, &str, &str),
 ) -> (Fixture, String, String, tempfile::TempDir) {
-    let remotes = tempfile::tempdir().unwrap();
-    let empty = remotes.path().join("empty.git");
-    let populated = remotes.path().join("populated.git");
+    let temp = tempfile::tempdir().unwrap();
+    let remotes = temp.path().join(if cfg!(windows) {
+        "remotes"
+    } else {
+        r"back\slash"
+    });
+    std::fs::create_dir(&remotes).unwrap();
+    let empty = remotes.join("empty.git");
+    let populated = remotes.join("populated.git");
     upstream(&empty, true);
     upstream(&populated, false);
     let empty = empty.to_str().unwrap().to_string();
@@ -552,7 +562,19 @@ fn rewritten(
     rewrite(&f, &empty, &populated);
     let tip = f.commit(&[(".codeflow/policy.json", MAIN_POLICY)], &[]);
     f.on_branch(tip);
-    (f, empty, populated, remotes)
+    (f, empty, populated, temp)
+}
+
+/// `url` as a refusal shows it: each backslash escaped, as every message
+/// shows text a configuration or a remote supplies (TSK-388).
+fn shown(url: &str) -> String {
+    codeflow_core::git::display_text(url)
+}
+
+/// `text` as a quoted git configuration string: a backslash and a double
+/// quote are written escaped, or git reads them as an escape sequence.
+fn config_string(text: &str) -> String {
+    format!("\"{}\"", text.replace('\\', r"\\").replace('"', "\\\""))
 }
 
 fn refusal(f: &Fixture) -> String {
@@ -574,8 +596,8 @@ fn an_insteadof_rewrite_to_a_populated_remote_refuses_naming_both() {
             .unwrap();
     });
     let error = refusal(&f);
-    assert!(error.contains(&empty), "{error}");
-    assert!(error.contains(&populated), "{error}");
+    assert!(error.contains(&shown(&empty)), "{error}");
+    assert!(error.contains(&shown(&populated)), "{error}");
     assert!(error.contains("never read from HEAD"), "{error}");
 }
 
@@ -599,8 +621,8 @@ fn a_push_rewrite_or_push_url_refuses_naming_both() {
     for (what, rewrite) in cases {
         let (f, empty, populated, _keep) = rewritten(rewrite);
         let error = refusal(&f);
-        assert!(error.contains(&empty), "{what}: {error}");
-        assert!(error.contains(&populated), "{what}: {error}");
+        assert!(error.contains(&shown(&empty)), "{what}: {error}");
+        assert!(error.contains(&shown(&populated)), "{what}: {error}");
         assert!(error.contains("pushes to"), "{what}: {error}");
     }
 }
@@ -614,7 +636,11 @@ fn a_rewrite_from_an_included_file_refuses() {
     let (f, empty, populated, _keep) = rewritten(|f, empty, populated| {
         std::fs::write(
             &path,
-            format!("[url \"{populated}\"]\n\tinsteadOf = {empty}\n"),
+            format!(
+                "[url {}]\n\tinsteadOf = {}\n",
+                config_string(populated),
+                config_string(empty)
+            ),
         )
         .unwrap();
         let mut config = f.repo.config().unwrap();
@@ -623,8 +649,8 @@ fn a_rewrite_from_an_included_file_refuses() {
             .unwrap();
     });
     let error = refusal(&f);
-    assert!(error.contains(&empty), "{error}");
-    assert!(error.contains(&populated), "{error}");
+    assert!(error.contains(&shown(&empty)), "{error}");
+    assert!(error.contains(&shown(&populated)), "{error}");
 }
 
 /// TSK-1184 AC-6: an empty fork as the effective remote is still not the
@@ -641,7 +667,7 @@ fn a_rewrite_to_another_empty_repository_refuses() {
             .unwrap();
     });
     let error = refusal(&f);
-    assert!(error.contains(&empty), "{error}");
+    assert!(error.contains(&shown(&empty)), "{error}");
     assert!(error.contains("fork.git"), "{error} ({other})");
 }
 

@@ -20,6 +20,17 @@ in CodeFlow reads one to decide what runs.
 | `--config <path>` | Reads the targets from that file instead of `.codeflow/test-config.json`, with no fallback to it or to stack detection; evidence binds to that file's bytes. A missing path, a symbolic link, or a file that is not regular or readable is refused before any target starts. CI can use it to run a trusted copy of the config against a candidate checkout (TSK-1020) |
 | No selection flags | Executes every eligible target of the mode |
 
+### A run with no comparison base
+
+A run without `--since` on a branch with no task (`plan/`, `chore/`), on a
+detached head, or on a task with no declared target has no comparison base.
+It runs every target and prints `every target: local narrowing is
+unavailable, since no local run record earns selection credit (ADR-0089)`.
+A run given `--since <rev>` prints the same reason after `--since <rev>
+narrows nothing`. Nothing in the output recommends `--since`, because it
+cannot narrow a run. An unknown, renamed or deleted path, or a changed
+config digest, also runs every target.
+
 The pre-push hook runs no quick target (TSK-449), so cite
 `codeflow test --mode quick` when the pull request is made ready. A run
 records its selection with an empty `skipped` list; a target CI skips
@@ -31,6 +42,50 @@ same-user key, an ownership or mode check, or a home-directory lookup is
 not such a recorder. Before 3.2.0 a passed, clean, complete full record of
 the base tree could skip a content target; such a record, and any written
 since, is read by nothing.
+
+### Inputs and exit codes for target commands
+
+Every quick, essential and full target command receives these informational
+inputs. They never change CodeFlow's target selection or earn reuse credit.
+
+| Variable | Value |
+|---|---|
+| `CODEFLOW_BASE` | Exact comparison commit, or `unknown` |
+| `CODEFLOW_HEAD` | Exact HEAD commit at comparison time, or `unknown` when no comparison is proven |
+| `CODEFLOW_CHANGED_PATHS_FILE` | Absolute path to this run's NUL-separated path file, or `unknown` when no comparison is proven |
+| `CODEFLOW_LANDING_LINE` | A safe stable landing name from the carried task's committed `integration_target`, or the caller's informational environment hint when no task field is present (including on a detached candidate); otherwise `unknown` |
+
+`--since` resolves once to a commit. Otherwise the base is the merge base
+of HEAD and the carried task's declared landing line, resolved locally.
+A shallow repository, missing task or line, unreadable diff or unresolved
+revision leaves the comparison unknown. An unknown comparison never offers
+a path file as complete. The schema-2 `run.json` adds a `comparison` object
+with `base`, `head`, `landing_line`, `proven`, `reason` and `paths_file`;
+`proven: false` records the unknown case and `paths_file` is null.
+
+A declared landing line must be a stable work target. It cannot name the
+current branch or resolve to HEAD; either case leaves the comparison unknown.
+Both task fields and parent environment hints export `unknown` unless they
+are stable names containing only ASCII letters, digits, `/`, `-`, `_` and
+`.`. Names containing `..` are rejected. This validation also applies when
+the named ref does not resolve. An explicit `--since HEAD` remains a valid
+comparison request.
+
+The file is a snapshot before targets start, inside the run's own directory.
+It lists repository-relative raw Git path bytes separated by NUL, including
+tracked edits and nonignored untracked paths. Names have no quoting or
+escaping; newlines and non-UTF-8 bytes remain literal. A reader splits on
+NUL and treats each name as data, never shell code. The file is limited to
+16 MiB; a larger list leaves the comparison unknown. Environment values
+require exact UTF-8: an unrepresentable file-path value stays unset.
+
+A target exits 0 to pass. Exit 77 means `skipped, not selected`; every other
+exit code fails. A skip fails the gate in every mode, including `--strict`
+and a protected landing gate, and leaves the run incomplete. It blocks
+dependent targets and earns no pass count, report, coverage or target
+evidence. The run record lists it in `not_selected` and gives its result
+the status `not_selected`, distinct from a selection skip. Hosted shard
+aggregation also refuses execution credit for a skipped JUnit case.
 
 ### Where evidence is written
 
@@ -75,6 +130,44 @@ membership are not skips and do not fail strict mode. In particular,
 `--strict --all --only X` passes when its requested checks run successfully;
 that split run remains incomplete as evidence for a full landing gate.
 
+## Installed CI binary journey
+
+The CI pin journey in `crates/codeflow-cli/tests/ci_pin.rs` archives the
+candidate executable in a local release fixture with `sha256.sum`. It runs
+the managed workflow's install script against that fixture through `file://`,
+checks the registered installation directory, and logs the installed path
+and SHA-256 digest. Its identity test compares that digest with the candidate.
+The archive uses the installer's Linux asset layout and the test host's
+native executable format.
+
+The journey runs the authority checkout's own install and verdict steps.
+The install runs after every head exists, and the verdict step finds
+`codeflow` only in the directory the install registered. Each head commit
+subject carries a value fresh for the run, so its subject and sha differ
+in every run. Each case is proved by its own evidence:
+
+- A valid head passes, and the verdict names its head and the authority
+  commit.
+- A head that lowers its pin to a published 1.0.0 release, a different
+  executable, would install that executable if its pin were read. The
+  installed file's digest is the candidate's and not the 1.0.0
+  executable's.
+- A head that replaces the workflow with an always-green one leaves the
+  executed install and verdict scripts byte for byte the shipped
+  workflow's. The verdict reports the head's workflow edit, which the
+  forged step cannot print.
+- A head that turns `commit_format` off would pass its invalid subject
+  with itself as the authority. The authority's refusal names that
+  subject and the authority commit, with the base or the head checked
+  out.
+
+Two substitution cases replace the installed file after a passing run. An
+executable that prints the expected version and approves everything passes
+the old version-only check and fails every case. An executable that copies
+the head and authority from its arguments and prints a fixed commit-format
+refusal fails, because its refusal cannot name the run's fresh subject
+(TSK-365).
+
 ## Technical
 
 The config is `.codeflow/test-config.json`; its editor schema is
@@ -94,6 +187,17 @@ continue executing their targets until their dependencies are declared.
 | `timeout_seconds` | Base deadline, default 600 seconds. Heavy targets have a ceiling four times this value; light targets retain a fixed deadline |
 | `cleanup_grace_seconds` | Time allowed after a target stops for termination, reaping and pipe draining, default 5 seconds, from 1 through 3600. On Unix a supervised process group still running at half this time is killed; on Windows the target's job is terminated when it stops. Cleanup that does not finish is a non-pass |
 | `stall_timeout_seconds` | Heavy-target inactivity window, default 300 seconds. Early stalls require valid scoped CPU accounting; otherwise the run explicitly uses its ceiling |
+
+A top-level `guards` list maps path globs to the commands that run the tests
+guarding those paths, each rule as `{"paths": [...], "tests": [...]}`.
+`codeflow test guards` reads the change from its comparison base to the
+working tree (the merge base of `HEAD` with the task's line, or
+`--since <rev>`), prints each touched path's guarding tests and each path no
+rule covers as unguarded, and lists the targets the `narrow` and
+`input_class` declarations would select in a mode. No run applies that
+selection while ADR-0089 stands: a deletion, rename, `run_everything` path
+or undeclared path would select every target, and a target that is not
+`content` class, or declares no inputs, would always run.
 
 `timeout_seconds` and `stall_timeout_seconds` accept integers from 1 through 4611686018427386 seconds.
 The loader and schema reject zero, fractional values and values beyond that
@@ -194,3 +298,54 @@ The evidence fields are recorded in
 [ADR-0085](decisions/ADR-0085-gate-selection-requires-evidence-for-the-exact-c.md);
 the withdrawal of selection credit in
 [ADR-0089](decisions/ADR-0089-local-gate-runs-earn-no-selection-credit.md).
+
+### Coverage rules and their defaults
+
+A full run reads each target's coverage artifact and judges it by rules.
+The rules come from one of two places:
+
+```
+target has a coverage block?
+  no  -> nothing is measured; while defaults.coverage is not empty and the
+         target is a test target, one warning names it and the missing
+         producer, and its verdict is unchanged
+  yes -> block sets rules?
+           yes -> its own rules alone
+           no  -> the rules in defaults.coverage, marked
+                  "(rules from defaults.coverage)"; with empty defaults
+                  the block only collects
+```
+
+- Defaults carry rules only. The producer, meaning the artifact's format
+  and path and the full-mode command that writes it, is always the
+  target's own `coverage` block.
+- Inherited rules enforce exactly as a target's own rules do: a shortfall
+  fails the gate, and so does a missing or unreadable artifact.
+- A test target is one whose `runner` names a test runner (anything but
+  `custom`) or that declares a test `report`.
+- A `changed_files` rule needs a comparison base that standalone
+  `codeflow test` lacks, so the loader refuses one in a target's own rules
+  and in defaults that a target would inherit.
+- Quick and essential runs measure no coverage, so neither the rules nor
+  the warning apply there.
+
+`codeflow test setup` writes a coverage block for each target it detects,
+only when it creates the config. The detected target's full command runs
+the stack's producer, and the block sets no rules:
+
+| Stack | Producer | Artifact |
+|---|---|---|
+| Rust (`cargo`) | cargo-llvm-cov | `target/lcov.info` (lcov) |
+| Python (`pytest`) | coverage.py | `coverage.xml` (cobertura) |
+| Node (`vitest`) | `@vitest/coverage-v8` | `coverage/lcov.info` (lcov) |
+| Node (`jest`) | Jest's own coverage | `coverage/lcov.info` (lcov) |
+| Go | `go test -coverprofile` | `coverage.out` (go-cover) |
+
+cargo-llvm-cov does not create its output's folder; cargo creates
+`target/` for its build while `CARGO_TARGET_DIR` is unset, so with that
+variable pointing elsewhere, move the Rust path and `--output-path` under
+it. `codeflow update` never rewrites the test config, and the gate's own
+detection for a project with no config keeps the plain test commands. A
+full gate cannot pass until the producer its full command runs is
+installed, so `codeflow doctor` prints one line naming a missing producer
+and the command that installs it.

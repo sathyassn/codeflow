@@ -53,7 +53,7 @@ use codeflow_core::hooks::policy::{GitPolicy, INTEGRATION_BRANCH_PREFIX};
 use codeflow_core::hooks::Violation;
 use codeflow_core::remedy::{self, Finding};
 use codeflow_core::scaffold::too_old;
-use codeflow_core::workgraph::release_line;
+use codeflow_core::workgraph::{candidate_admission, landing_candidate, release_line};
 
 #[cfg(test)]
 mod tests;
@@ -147,14 +147,17 @@ fn run_checked_with_binary(
         }
     };
     let url = url.or(remote);
+    // The destination's configuration is read within the lookup's limits
+    // (TSK-327), so they are read first.
+    let limits = probe_limits(root, report);
     // Tracking refs describe the fetch location; they stand in for the push
     // location only when the two are the same.
     let tracking = match (remote, url) {
-        (Some(name), Some(url)) if fetches_from(root, name, url)? => Some(name),
+        (Some(name), Some(url)) if fetches_from(root, name, url, limits)? => Some(name),
         _ => None,
     };
     let namespace = match tracking {
-        Some(name) => tracking_namespace(root, name)?,
+        Some(name) => tracking_namespace(root, name, limits)?,
         None => None,
     };
     // Asked once, on first use, for every pushed branch and each
@@ -166,19 +169,22 @@ fn run_checked_with_binary(
     let fetch_failed: OnceCell<String> = OnceCell::new();
     let destination = Destination {
         url,
-        limits: probe_limits(root, report),
+        limits,
         listing: &listing,
         advertised: &advertised,
         answer: &answer,
         anchor: &anchor,
         fetch_failed: &fetch_failed,
-        fork: fork(root, url)?,
+        fork: fork(root, url, limits)?,
         namespace: namespace.as_deref(),
         tracking,
         policy,
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
+    if policy.test_gate_on_push.is_active() {
+        fill_registry(root, report);
+    }
     run_ci_ranges(&exe, root, &pushed, &destination, report, &mut steps)?;
 
     let active = policy.test_gate_on_push.is_active();
@@ -224,6 +230,89 @@ fn push_budget(root: &Path) -> std::time::Duration {
             |landed| landed.policy.git.push_budget_seconds,
         );
     std::time::Duration::from_secs(seconds)
+}
+
+/// How long one pre-push `codeflow ci` run may take before the hook ends it
+/// and refuses the push (TSK-327), and the waits it is the sum of.
+#[derive(Debug, Clone, Copy)]
+struct CheckDeadline {
+    total: std::time::Duration,
+    lookup: std::time::Duration,
+    attempts: u64,
+    fetch: std::time::Duration,
+    budget: std::time::Duration,
+}
+
+impl std::fmt::Display for CheckDeadline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}s: the destination lookup wait {}s × {} attempts, plus the fetch wait {}s, plus the push budget {}s",
+            self.total.as_secs(),
+            self.lookup.as_secs(),
+            self.attempts,
+            self.fetch.as_secs(),
+            self.budget.as_secs()
+        )
+    }
+}
+
+/// The deadline for one pre-push `codeflow ci` run (TSK-327):
+///
+/// `git.remote_query_timeout_seconds` × `git.remote_query_attempts`
+/// + `git.remote_fetch_timeout_seconds` + `git.push_budget_seconds`
+///
+/// which is 30 s × 3 + 120 s + 60 s = 270 s with the shipped values. The
+/// check asks the destination at most as the lookup does, retries
+/// included, fetches the objects it judges within the fetch wait, and its
+/// local checks are expected to fit the push budget, so a run past the sum
+/// has stalled rather than run slow. It is the sum of the waits a project
+/// already sets, read from the same local policy authority, so a project
+/// that raises any of them raises this deadline too and no new setting is
+/// needed. The push budget's own meaning is unchanged: over it, the hook
+/// still only reports ([`push_budget`]); only this sum refuses.
+fn ci_check_deadline(root: &Path) -> CheckDeadline {
+    let limits = remote_query::QueryLimits::from_authority_or_default(root);
+    let budget = push_budget(root);
+    let attempts = limits.attempts();
+    let total = limits
+        .timeout()
+        .saturating_mul(u32::try_from(attempts).unwrap_or(u32::MAX))
+        .saturating_add(limits.fetch_timeout())
+        .saturating_add(budget);
+    CheckDeadline {
+        total,
+        lookup: limits.timeout(),
+        attempts,
+        fetch: limits.fetch_timeout(),
+        budget,
+    }
+}
+
+/// Fetch, in one bounded request, the registry objects a partial clone
+/// left out (TSK-327), before any `codeflow ci` runs: the check then reads
+/// the registry with lazy fetching off (`--registry-objects-local`), so a
+/// missing registry object refuses instead of starting a fetch outside
+/// every deadline. A clone with nothing missing fetches nothing. When the
+/// objects cannot be fetched, the check still runs and refuses only if it
+/// needs one of them; the reason is noted.
+fn fill_registry(root: &Path, report: &mut StageReport) {
+    use codeflow_core::ids::{tracking_ref, Git, AUTHORITY, REGISTRY_REF};
+    let filled = Git::for_pre_push(root).and_then(|git| {
+        let tracking = tracking_ref(AUTHORITY);
+        let mut refs = Vec::new();
+        for name in [tracking.as_str(), REGISTRY_REF] {
+            if git.rev(name)?.is_some() {
+                refs.push(name);
+            }
+        }
+        git.fetch_missing(AUTHORITY, &refs)
+    });
+    if let Err(why) = filled {
+        report.status.push(format!(
+            "note: the registry's missing objects were not fetched, so a check that needs one refuses: {why}"
+        ));
+    }
 }
 
 /// The destination lookup's timeout and attempts (TSK-1301): read from the
@@ -332,6 +421,266 @@ fn refused_already(report: &mut StageReport, branch: &str) -> bool {
     refused
 }
 
+/// What a pushed branch is judged as, by the landing candidate binding
+/// (TSK-1351).
+enum Landing {
+    /// Neither a landing candidate nor a line push that lands one: judged
+    /// exactly as before.
+    Ordinary,
+    /// A landing candidate bound to its line: judged as the line's next tip.
+    Candidate(landing_candidate::BoundLine),
+    /// A line push that lands a bound candidate by a fast-forward: judged
+    /// as any line push is.
+    Lands,
+}
+
+/// Bind a pushed landing candidate, or a line push whose new tip is a
+/// landing candidate's tip, under the policy at the default branch's tip
+/// (TSK-1351 AC-1 to AC-3, AC-5). Any other push is [`Landing::Ordinary`].
+/// `None` when it is refused: a condition that does not hold, or cannot be
+/// read, is reported with its cause, so a candidate is never judged
+/// against the default branch. `pushed` is the whole push set: a line
+/// update is checked against every candidate destination in it before it
+/// is judged as an ordinary line push.
+fn landing(
+    root: &Path,
+    (r, pushed): (&PushRef, &[&PushRef]),
+    branch: &str,
+    judged: &Judged,
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> Result<Option<Landing>, String> {
+    let Judged::Target { tip, policy, .. } = judged else {
+        return Ok(Some(Landing::Ordinary));
+    };
+    if policy.is_candidate_branch(branch) {
+        let bound = pushed_candidate(root, r, branch, (tip, policy), destination, report);
+        return Ok(bound.map(Landing::Candidate));
+    }
+    if codeflow_core::workgraph::line_adoption::epic_id(branch).is_err() {
+        return Ok(Some(Landing::Ordinary));
+    }
+    line_landing(
+        root,
+        (r, pushed),
+        branch,
+        (tip, policy),
+        destination,
+        report,
+    )
+}
+
+/// The branches the destination advertises in this push, or why they
+/// cannot be read.
+fn advertised_branches<'a>(
+    root: &Path,
+    destination: &'a Destination<'_>,
+) -> Result<&'a BTreeMap<String, String>, String> {
+    match destination.advertised(root) {
+        Advertised::Tips(tips) => Ok(&tips.branches),
+        Advertised::Failed(why) => {
+            Err(format!("the destination's branches cannot be read ({why})"))
+        }
+    }
+}
+
+/// The member admission of a candidate pushed to `destination` under the
+/// default branch's tip `tip` (TSK-1351 AC-1): each member head must be the
+/// head of an admitted pull request read from the forge. A push with no
+/// destination URL has no forge to read, so it refuses.
+fn forge_admission<'a>(
+    root: &'a Path,
+    destination: &'a Destination<'_>,
+    tip: &'a str,
+) -> impl Fn(
+    &str,
+    &[candidate_admission::Member],
+) -> Result<Vec<candidate_admission::Admitted>, String>
+       + 'a {
+    move |line, members| {
+        let url = destination
+            .url
+            .ok_or("the push names no destination URL, so the forge cannot be read")?;
+        candidate_admission::admit_at_forge(root, url, line, tip, members)
+    }
+}
+
+/// Report a [`landing_candidate::RULE`] refusal: `what` was refused, and
+/// `cause` says why.
+fn refuse_landing(report: &mut StageReport, what: &str, cause: &str) {
+    report.violations.push(Violation::always_blocking(
+        landing_candidate::RULE,
+        format!("{what}: {cause}"),
+        landing_candidate::REMEDY,
+    ));
+}
+
+/// Bind the pushed landing candidate `branch` to its line; `None` when the
+/// binding is refused (reported).
+fn pushed_candidate(
+    root: &Path,
+    r: &PushRef,
+    branch: &str,
+    (tip, policy): (&str, &GitPolicy),
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> Option<landing_candidate::BoundLine> {
+    let shown = display_text(branch);
+    let what = format!("'{shown}' is not judged as a landing candidate of a line");
+    let admission = forge_admission(root, destination, tip);
+    let bound = advertised_branches(root, destination).and_then(|advertised| {
+        landing_candidate::bind(
+            root,
+            &landing_candidate::Inputs {
+                branch,
+                head: &r.local_sha,
+                policy,
+                default_tip: tip,
+                advertised,
+                line: None,
+                admission: &admission,
+            },
+        )
+    });
+    match bound {
+        Ok(bound) => {
+            report.status.push(format!(
+                "'{shown}' is a landing candidate of '{}': {} member merge(s) on its tip {}, so `codeflow ci` judges it as the line's next tip",
+                display_text(&bound.line),
+                bound.merges,
+                short(&bound.tip)
+            ));
+            Some(bound)
+        }
+        Err(cause) => {
+            refuse_landing(report, &what, &cause);
+            None
+        }
+    }
+}
+
+/// Judge a push of the line `branch`: one whose new tip is a landing
+/// candidate's tip must bind that candidate to the line and fast-forward
+/// the line to it; every other line push is [`Landing::Ordinary`], judged
+/// exactly as before. `None` when it is refused (reported).
+fn line_landing(
+    root: &Path,
+    (r, pushed): (&PushRef, &[&PushRef]),
+    branch: &str,
+    (tip, policy): (&str, &GitPolicy),
+    destination: &Destination<'_>,
+    report: &mut StageReport,
+) -> Result<Option<Landing>, String> {
+    let advertised = advertised_branches(root, destination);
+    let at = (r, pushed);
+    let Some(name) = candidate_at(root, at, policy, advertised.as_ref().ok().copied())? else {
+        return Ok(Some(Landing::Ordinary));
+    };
+    let what = format!(
+        "the push of '{}' lands the candidate '{}', which is not a bound landing candidate of the line",
+        display_text(branch),
+        display_text(&name)
+    );
+    let admission = forge_admission(root, destination, tip);
+    let bound = advertised.and_then(|advertised| {
+        landing_candidate::bind(
+            root,
+            &landing_candidate::Inputs {
+                branch: &name,
+                head: &r.local_sha,
+                policy,
+                default_tip: tip,
+                advertised,
+                line: Some(branch),
+                admission: &admission,
+            },
+        )
+    });
+    let bound = match bound {
+        Ok(bound) if r.remote_sha.eq_ignore_ascii_case(&bound.tip) => bound,
+        Ok(bound) => {
+            let old = if r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0') {
+                "the destination has no such line yet".to_string()
+            } else {
+                format!("the destination's line is at {}", short(&r.remote_sha))
+            };
+            let cause = format!(
+                "the push is not a fast-forward of the line to the candidate: the candidate is cut from {}, and {old}",
+                short(&bound.tip)
+            );
+            refuse_landing(report, &what, &cause);
+            return Ok(None);
+        }
+        Err(cause) => {
+            refuse_landing(report, &what, &cause);
+            return Ok(None);
+        }
+    };
+    report.status.push(format!(
+        "the push of '{}' lands the landing candidate '{}': a fast-forward from {} by {} member merge(s)",
+        display_text(branch),
+        display_text(&name),
+        short(&bound.tip),
+        bound.merges
+    ));
+    Ok(Some(Landing::Lands))
+}
+
+/// The landing candidate whose tip a line push's new tip is: the local ref
+/// pushed, a candidate destination another update of the same push sets to
+/// that commit (a new candidate ref the destination does not hold yet and
+/// that need not exist here), a local branch at that commit, or a branch
+/// the destination advertises there, named with `git.candidate_prefix`.
+/// `None` when no candidate is at it.
+fn candidate_at(
+    root: &Path,
+    (r, pushed): (&PushRef, &[&PushRef]),
+    policy: &GitPolicy,
+    advertised: Option<&BTreeMap<String, String>>,
+) -> Result<Option<String>, String> {
+    if let Some(name) = r.local_ref.strip_prefix("refs/heads/") {
+        if policy.is_candidate_branch(name) {
+            return Ok(Some(name.to_string()));
+        }
+    }
+    if let Some(name) = pushed
+        .iter()
+        .filter(|other| other.local_sha.eq_ignore_ascii_case(&r.local_sha))
+        .filter_map(|other| other.remote_branch())
+        .find(|name| policy.is_candidate_branch(name))
+    {
+        return Ok(Some(name.to_string()));
+    }
+    let local = git(
+        root,
+        &[
+            "for-each-ref",
+            "--format=%(refname:lstrip=2)",
+            "--points-at",
+            &r.local_sha,
+            "refs/heads/",
+        ],
+    )?
+    .unwrap_or_default();
+    // One ref name per line: only `\n` separates them, as a name may hold
+    // any other character.
+    if let Some(name) = local
+        .split_terminator('\n')
+        .find(|name| policy.is_candidate_branch(name))
+    {
+        return Ok(Some(name.to_string()));
+    }
+    Ok(advertised.and_then(|branches| {
+        branches
+            .iter()
+            .find(|(name, sha)| {
+                policy.is_candidate_branch(name) && sha.eq_ignore_ascii_case(&r.local_sha)
+            })
+            .map(|(name, _)| name.clone())
+    }))
+}
+
+#[allow(clippy::too_many_lines)] // one linear hand-off per pushed ref; each step is its own helper
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -358,6 +707,10 @@ fn run_ci_ranges(
                 refuse_authority(root, r, branch, destination, report, &error);
                 continue;
             }
+        };
+        let Some(landing) = landing(root, (r, pushed), branch, &judged, destination, report)?
+        else {
+            continue;
         };
         let (policy, judging) = match &judged {
             Judged::Target {
@@ -410,18 +763,20 @@ fn run_ci_ranges(
         // judging policy's work prefixes, as `codeflow ci` judges the range
         // with that policy (TSK-1257).
         let prefixes = &policy.branch_prefixes;
-        let base = ci_base(root, r, branch, destination, prefixes, report)?;
+        let base = ci_base(root, r, (branch, &landing), destination, prefixes, report)?;
         if let Some(base) = base {
             report.status.push(judging);
             let running = policy.test_gate_on_push.to_string();
             let mut args = vec!["ci", "--base", &base, "--head", &r.local_sha];
             args.extend(["--branch", branch, "--run-level", &running]);
-            // A push is never a landing candidate: the hook judges a push to
-            // a line itself (`work.epic_line`), so CI does not judge it again.
+            // The hook judges a push to a line itself (`work.epic_line`). A
+            // landing candidate's push is judged as its line's next tip, and
+            // `codeflow ci` binds the candidate again from its own reads.
             args.extend(["--pushed-ref", &r.remote_ref]);
             // Range boundaries can be unnamed merge bases. Pass destination
             // intent separately so CI does not infer it from coincident refs.
-            let into = ci_target(root, r, branch, &judged, (destination, prefixes), report)?;
+            let judged_as = (&judged, &landing);
+            let into = ci_target(root, r, branch, judged_as, (destination, prefixes), report)?;
             let into_arg = into.map(|target| format!("--into={target}"));
             // The push's target is the branch itself: its current tip's
             // baseline list governs the record check, not the boundary's,
@@ -465,16 +820,20 @@ fn run_ci_ranges(
 /// destination's default. The range and every check that reads the
 /// target, the Outcome marker among them, use the same one, so a
 /// declaration the range rejected never names the target the change is
-/// judged against.
+/// judged against. A bound landing candidate's target is its line
+/// (TSK-1351).
 fn ci_target(
     root: &Path,
     pushed: &PushRef,
     branch: &str,
-    judged: &Judged,
+    (judged, landing): (&Judged, &Landing),
     (destination, prefixes): (&Destination<'_>, &[String]),
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
     use super::ci::Declared;
+    if let Landing::Candidate(bound) = landing {
+        return Ok(Some(bound.line.clone()));
+    }
     let policy = destination.policy;
     let mut dropped = false;
     let declared = match super::ci::judged_declared_target(
@@ -612,13 +971,17 @@ fn commits_from(
     if base == tip {
         return Ok(keep);
     }
-    let related = codeflow_core::git::judging_command()
-        .args(["-c", "core.commitGraph=false"])
-        .arg("-C")
-        .arg(root)
-        .args(["merge-base", tip, &r.local_sha])
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .output();
+    // An owned group (TSK-327), as every other push set history read: the
+    // exit code is read here, since 1 means no shared history.
+    let related = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::judging_command()
+            .args(["-c", "core.commitGraph=false"])
+            .arg("-C")
+            .arg(root)
+            .args(["merge-base", tip, &r.local_sha])
+            .env("GIT_NO_LAZY_FETCH", "1"),
+        None,
+    );
     let unknown = |why: &str, report: &mut StageReport| {
         report.status.push(format!(
             "note: whether '{shown_branch}' shares history with {target} {} cannot be read ({why}), so push checks refuse",
@@ -673,15 +1036,19 @@ fn commits_from(
 /// The base of a pushed branch's `codeflow ci` range: a release branch's
 /// default tip, else the boundary of what the destination holds, which a
 /// declared target may select. `None` when the push is refused or the
-/// range is unresolved, both reported.
+/// range is unresolved, both reported. A bound landing candidate's base is
+/// its line's tip, never the narrowest boundary (TSK-1351).
 fn ci_base(
     root: &Path,
     r: &PushRef,
-    branch: &str,
+    (branch, landing): (&str, &Landing),
     destination: &Destination<'_>,
     prefixes: &[String],
     report: &mut StageReport,
 ) -> Result<Option<String>, String> {
+    if let Landing::Candidate(bound) = landing {
+        return Ok(Some(bound.tip.clone()));
+    }
     Ok(match release_base(root, r, branch, destination, report) {
         Scoped::Refused => None,
         Scoped::Release(tip) => Some(tip),
@@ -762,6 +1129,27 @@ fn release_preflight(
     }
 }
 
+/// The arguments of the command a person reruns: the check at its own
+/// levels, as CI runs it, without the push gate's level, and asking the
+/// destination itself instead of reading the hook's hand-off. A destination
+/// URL is shown without its credentials; the check itself receives the real
+/// one.
+fn rerun_args<'a>(args: &[&'a str]) -> Vec<std::borrow::Cow<'a, str>> {
+    let run_level = args.iter().position(|arg| *arg == "--run-level");
+    args.iter()
+        .enumerate()
+        .filter(|(at, arg)| {
+            **arg != "--advertisement-stdin"
+                && run_level.is_none_or(|level| *at != level && *at != level + 1)
+        })
+        .map(|(_, arg)| match arg.strip_prefix("--into=") {
+            // The destination's default branch, which it names itself.
+            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
+            None => remote_query::display_url(arg),
+        })
+        .collect()
+}
+
 /// Run one built-in check through this binary, with `input` on its stdin,
 /// and time it.
 fn run_check_with(
@@ -773,24 +1161,8 @@ fn run_check_with(
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
 ) {
-    // The command a person reruns: the check at its own levels, as CI runs
-    // it, without the push gate's level, and asking the destination itself
-    // instead of reading the hook's hand-off. A destination URL is shown
-    // without its credentials; the check itself receives the real one.
     let run_level = args.iter().position(|arg| *arg == "--run-level");
-    let displayed: Vec<std::borrow::Cow<'_, str>> = args
-        .iter()
-        .enumerate()
-        .filter(|(at, arg)| {
-            **arg != "--advertisement-stdin"
-                && run_level.is_none_or(|level| *at != level && *at != level + 1)
-        })
-        .map(|(_, arg)| match arg.strip_prefix("--into=") {
-            // The destination's default branch, which it names itself.
-            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
-            None => remote_query::display_url(arg),
-        })
-        .collect();
+    let displayed = rerun_args(args);
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
     let shown = format!("codeflow {}", rerun.join(" "));
     // `codeflow ci` names its blocking rules in a file of its own, for the
@@ -809,10 +1181,23 @@ fn run_check_with(
     if let Some(out) = &timings_out {
         command.arg("--timings-out").arg(&out.0);
     }
+    // The whole check runs within one deadline (TSK-327): its group ends
+    // with it, and a read it started in a group of its own is capped at that
+    // deadline and ended by the group's watcher when the check ends.
+    let deadline = ci_check_deadline(root);
+    if is_ci {
+        // `fill_registry` fetched what a partial clone left out.
+        command.arg("--registry-objects-local").arg(format!(
+            "--deadline-ms={}",
+            deadline.total.as_millis().min(u128::from(u64::MAX))
+        ));
+    }
+    command.current_dir(root).env_remove("CODEFLOW_PR_BODY");
     let started = Instant::now();
-    let output = codeflow_core::git::output_with_input(
-        command.current_dir(root).env_remove("CODEFLOW_PR_BODY"),
+    let output = remote_query::bounded_process_output(
+        command,
         input.unwrap_or_default().as_bytes(),
+        deadline.total,
     );
     steps.push(PushStep {
         name: shown.clone(),
@@ -877,12 +1262,94 @@ fn run_check_with(
             }
             report.violations.push(failed);
         }
-        Err(error) => report.violations.push(violation(
+        // A check with no verdict never passes: whatever the gate's level,
+        // the push stops.
+        Err(why) if why.timed_out => {
+            report
+                .violations
+                .push(deadline_refusal(root, args, &shown, &deadline));
+        }
+        Err(why) => report.violations.push(violation(
             policy,
-            format!("push set check could not run: `{shown}`: {error}"),
+            format!("push set check could not run: `{shown}`: {}", why.reason),
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
+}
+
+/// The refusal for a check ended at its deadline (TSK-327). In a clone that
+/// fetches missing objects on demand, the check's own reads may have been
+/// waiting on such a fetch, and one that needs a password or passphrase
+/// cannot ask for it inside the check: the remedy then leads with
+/// [`prefetch_commands`] for the operator's terminal, where a prompt can be
+/// answered. A plain `git fetch` keeps the clone's filter and fetches none
+/// of those objects.
+fn deadline_refusal(
+    root: &Path,
+    args: &[&str],
+    shown: &str,
+    deadline: &CheckDeadline,
+) -> Violation {
+    let wait = "find what the check waits on (a slow destination, or a partial clone fetching a missing object) and push again; a project that needs longer raises git.remote_query_timeout_seconds, git.remote_query_attempts, git.remote_fetch_timeout_seconds or git.push_budget_seconds on its default branch";
+    let remedy = match prefetch_commands(args) {
+        Some([log, diff]) if fetches_on_demand(root) => format!(
+            "this clone fetches missing objects on demand, and a fetch inside the check cannot ask \
+             for a password or passphrase. In your terminal, run `{log}` and `{diff}`, then push \
+             again: they read both sides of every change in each commit the check reads and in \
+             the range it diffs, so they fetch each file version the added-lines, \
+             conflict-marker and size-and-ignore checks read. They fetch no file the check reads \
+             whole at one commit when neither command shows it changed, such as the policy at \
+             the target's tip, a workflow at the base, or a file your sparse checkout leaves \
+             out. If the check still gives no verdict, {wait}"
+        ),
+        _ => wait.to_string(),
+    };
+    Violation::always_blocking(
+        "git.test_gate_on_push",
+        format!(
+            "push set check gave no verdict within its deadline and was ended: `{shown}`; the deadline is {deadline}"
+        ),
+        &remedy,
+    )
+}
+
+/// The terminal commands that read what the check's range reads, built from
+/// the operands the hook passed it, so they cannot drift from what CI
+/// reads. The commit checks run over `--commits-from`, or `--base` when it
+/// is absent, to `--head` (`ci.rs` `evaluate_commit_range`): size-and-ignore
+/// reads the new side of each commit's changes, which a per-commit log
+/// with each merge diffed against every parent reads; the added-lines and
+/// conflict-marker checks diff that range's merge base against the head,
+/// which `git diff from...head` reads with both sides.
+fn prefetch_commands(args: &[&str]) -> Option<[String; 2]> {
+    let value = |flag: &str| {
+        args.iter()
+            .position(|arg| *arg == flag)
+            .and_then(|at| args.get(at + 1))
+    };
+    let head = value("--head")?;
+    let from = value("--commits-from").or_else(|| value("--base"))?;
+    Some([
+        format!("git log --diff-merges=separate --stat --format= {from}..{head}"),
+        format!("git diff --stat {from}...{head}"),
+    ])
+}
+
+/// Whether this clone fetches a missing object on demand: it names a
+/// partial-clone remote or filter, or has a `remote.<name>.promisor` entry
+/// that git reads as true
+/// ([`codeflow_core::hooks::gitleaks::promisor_listed`]). A read that
+/// fails or stalls, or a value git would refuse, answers no: it only
+/// chooses a hint.
+fn fetches_on_demand(root: &Path) -> bool {
+    use codeflow_core::hooks::gitleaks;
+    let mut command = codeflow_core::git::judging_command();
+    command.arg("-C").arg(root).args(gitleaks::PROMISOR_CONFIG);
+    let limits = remote_query::QueryLimits::from_authority_or_default(root);
+    matches!(
+        remote_query::bounded_local(command, limits.timeout()),
+        Ok(remote_query::LocalAnswer::Answer(listed)) if gitleaks::promisor_listed(&listed) == Ok(true)
+    )
 }
 
 /// A check's printed output as the hook shows it: URL credentials hidden,
@@ -1001,9 +1468,13 @@ fn is_finding_header(line: &str) -> bool {
 /// `refs/remotes/origin/`), read from its fetch refspecs. `None` for a URL or
 /// path pushed to directly, or a remote with no glob fetch refspec: that
 /// destination has no local history of its own to compare with.
-fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, String> {
+fn tracking_namespace(
+    root: &Path,
+    remote: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
     let key = format!("remote.{remote}.fetch");
-    let Some(out) = git(root, &["config", "-z", "--get-all", &key])? else {
+    let Some(out) = git_bounded(root, &["config", "-z", "--get-all", &key], limits)? else {
         return Ok(None);
     };
     Ok(out.split('\0').find_map(|spec| {
@@ -1018,10 +1489,14 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
 /// exact or glob (a glob is read up to its last `/` before the `*`, a
 /// superset). A destination that is not a full ref name cannot be checked,
 /// so it refuses (TSK-1077 review round 01 F2).
-fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String> {
+fn held_tracking_ref(
+    root: &Path,
+    remote: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
     let key = format!("remote.{remote}.fetch");
     let mut patterns = vec![format!("refs/remotes/{remote}/")];
-    if let Some(out) = git(root, &["config", "-z", "--get-all", &key])? {
+    if let Some(out) = git_bounded(root, &["config", "-z", "--get-all", &key], limits)? {
         for spec in out.split('\0').filter(|spec| !spec.is_empty()) {
             if spec.starts_with('^') {
                 continue;
@@ -1051,7 +1526,8 @@ fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String
     }
     let mut args = vec!["for-each-ref", "--count=1", "--format=%(refname)"];
     args.extend(patterns.iter().map(String::as_str));
-    Ok(git(root, &args)?.and_then(|out| {
+    // Its empty answer is initialization, so it is bounded too (TSK-327).
+    Ok(git_bounded(root, &args, limits)?.and_then(|out| {
         out.split('\n')
             .find(|name| !name.is_empty())
             .map(str::to_string)
@@ -1136,8 +1612,13 @@ fn target_policy(root: &Path, tip: &str) -> TargetPolicy {
 /// A note for a push that does not go to the configured `upstream`: its
 /// pull request may target the upstream, whose policy can differ from the
 /// candidate authority read here.
-fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
-    let Some(upstream) = git(root, &["config", "--get", "remote.upstream.url"])? else {
+fn fork(
+    root: &Path,
+    url: Option<&str>,
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
+    let Some(upstream) = git_bounded(root, &["config", "--get", "remote.upstream.url"], limits)?
+    else {
         return Ok(None);
     };
     let upstream = upstream.strip_suffix('\n').unwrap_or(&upstream);
@@ -1160,7 +1641,9 @@ fn fork(root: &Path, url: Option<&str>) -> Result<Option<String>, String> {
 /// shipped defaults. A destination that advertises no branches is
 /// initialization only while this clone holds no tracking refs for it;
 /// otherwise the tracking refs and the destination disagree and the push
-/// is refused with the fetch route, never judged by the working copy.
+/// is refused with the fetch route, never judged by the working copy. It is
+/// refused too when the push connected with a command-line transport setting
+/// the query does not apply ([`remote_query::command_line_transport`]).
 fn judged_by(
     root: &Path,
     destination: &Destination<'_>,
@@ -1175,10 +1658,17 @@ fn judged_by(
         // Only a destination that answered with no branches is
         // initialization; one that was not asked, or could not be, refuses.
         destination.listing(root).map_err(str::to_string)?;
+        // An empty answer is trusted only when the query connected as the
+        // push did (TSK-327).
+        if let Some(setting) = remote_query::command_line_transport(root, destination.limits)? {
+            return Err(format!(
+                "the destination advertises no branches, but the push connected with {setting}, which the destination query does not apply, so the empty answer may not be the destination's; push without it, or set it in the repository configuration"
+            ));
+        }
         let Some(remote) = destination.tracking else {
             return Ok(Judged::Initialization);
         };
-        let Some(held) = held_tracking_ref(root, remote)? else {
+        let Some(held) = held_tracking_ref(root, remote, destination.limits)? else {
             return Ok(Judged::Initialization);
         };
         return Err(format!(
@@ -1344,8 +1834,13 @@ impl Destination<'_> {
 
 /// Whether remote `name` fetches from `url`, so that its tracking refs
 /// describe the location pushed to. A `pushurl` elsewhere does not.
-fn fetches_from(root: &Path, name: &str, url: &str) -> Result<bool, String> {
-    Ok(git(root, &["remote", "get-url", name])?
+fn fetches_from(
+    root: &Path,
+    name: &str,
+    url: &str,
+    limits: remote_query::QueryLimits,
+) -> Result<bool, String> {
+    Ok(git_bounded(root, &["remote", "get-url", name], limits)?
         .is_some_and(|fetch| fetch.strip_suffix('\n').unwrap_or(&fetch) == url))
 }
 
@@ -1998,14 +2493,17 @@ fn git(root: &Path, args: &[&str]) -> Result<Option<String>, String> {
     if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
         codeflow_core::workgraph::history::check_command(root)?;
     }
-    let out = codeflow_core::git::judging_command()
-        .args(["-c", "core.commitGraph=false"])
-        .arg("-C")
-        .arg(root)
-        .args(args)
-        .env("GIT_NO_LAZY_FETCH", "1")
-        .output()
-        .map_err(|error| format!("cannot read Git answer: {error}"))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::judging_command()
+            .args(["-c", "core.commitGraph=false"])
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .env("GIT_NO_LAZY_FETCH", "1"),
+        None,
+    )
+    .map_err(|error| format!("cannot read Git answer: {error}"))?;
     git_answer(args, out)
 }
 
@@ -2014,35 +2512,78 @@ fn git_input(root: &Path, args: &[&str], input: &str) -> Result<Option<String>, 
     if matches!(args.first(), Some(&"merge-base" | &"rev-list" | &"cherry")) {
         codeflow_core::workgraph::history::check_command(root)?;
     }
-    let out = codeflow_core::git::output_with_input(
+    let out = codeflow_core::git::owned::owned_output(
         codeflow_core::git::judging_command()
             .args(["-c", "core.commitGraph=false"])
             .arg("-C")
             .arg(root)
             .args(args)
             .env("GIT_NO_LAZY_FETCH", "1"),
-        input.as_bytes(),
+        Some(input.as_bytes()),
     )
     .map_err(|error| format!("cannot read Git answer: {error}"))?;
     git_answer(args, out)
 }
 
+/// [`git`] for a read of the destination's configuration on the hook path,
+/// run by [`remote_query::bounded_local`] within the lookup's `limits`
+/// (TSK-327): a read that stalls, overflows or cannot run refuses, and only
+/// git's own exit status can mean absence.
+fn git_bounded(
+    root: &Path,
+    args: &[&str],
+    limits: remote_query::QueryLimits,
+) -> Result<Option<String>, String> {
+    let mut command = codeflow_core::git::judging_command();
+    command
+        .args(["-c", "core.commitGraph=false"])
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_NO_LAZY_FETCH", "1");
+    match remote_query::bounded_local(command, limits.timeout()).map_err(|why| {
+        format!(
+            "cannot read Git {} answer: {why}",
+            args.first().copied().unwrap_or("command")
+        )
+    })? {
+        remote_query::LocalAnswer::Answer(bytes) => answered(args, bytes),
+        remote_query::LocalAnswer::Exit(code) => unanswered(
+            args,
+            code,
+            &code.map_or_else(
+                || "ended without an exit code".to_string(),
+                |code| format!("exit status: {code}"),
+            ),
+        ),
+    }
+}
+
 fn git_answer(args: &[&str], out: std::process::Output) -> Result<Option<String>, String> {
     if !out.status.success() {
-        if out.status.code() == Some(2) && args.starts_with(&["remote", "get-url"]) {
-            return Ok(None);
-        }
-        if out.status.code() == Some(1) && missing_git_answer(args) {
-            return Ok(None);
-        }
-        return Err(format!(
-            "cannot read Git {} answer: {}",
-            args.first().copied().unwrap_or("command"),
-            out.status
-        ));
+        return unanswered(args, out.status.code(), &out.status.to_string());
     }
-    let text = String::from_utf8(out.stdout)
-        .map_err(|error| format!("cannot decode Git answer: {error}"))?;
+    answered(args, out.stdout)
+}
+
+/// A failed git exit: absence for the forms that define it, else refused.
+fn unanswered(args: &[&str], code: Option<i32>, shown: &str) -> Result<Option<String>, String> {
+    if code == Some(2) && args.starts_with(&["remote", "get-url"]) {
+        return Ok(None);
+    }
+    if code == Some(1) && missing_git_answer(args) {
+        return Ok(None);
+    }
+    Err(format!(
+        "cannot read Git {} answer: {shown}",
+        args.first().copied().unwrap_or("command")
+    ))
+}
+
+/// A successful git answer, decoded and checked.
+fn answered(args: &[&str], stdout: Vec<u8>) -> Result<Option<String>, String> {
+    let text =
+        String::from_utf8(stdout).map_err(|error| format!("cannot decode Git answer: {error}"))?;
     if args.starts_with(&["rev-parse", "--verify", "--quiet"]) {
         let oid = text.strip_suffix('\n').unwrap_or(&text);
         if !matches!(oid.len(), 40 | 64) || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
