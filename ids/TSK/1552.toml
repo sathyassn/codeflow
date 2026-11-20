@@ -1,0 +1,11 @@
+id = "TSK-1552"
+uid = "a7c487c7-2aa9-47a8-b2ee-dcc3517ee70c"
+kind = "TSK"
+title = "The present-browser test times out in Firefox after launch under the software compositor"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:12:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
