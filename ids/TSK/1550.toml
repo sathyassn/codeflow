@@ -1,0 +1,11 @@
+id = "TSK-1550"
+uid = "fceec58a-7ff7-45a6-8a6c-c46a7c228108"
+kind = "TSK"
+title = "The reference-transaction hook judges local protected-ref moves at the landed policy"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:03:15Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
