@@ -1,0 +1,11 @@
+id = "TSK-1564"
+uid = "f3ce8cd0-ef45-4606-b24e-994f14d3406d"
+kind = "TSK"
+title = "The guard reads a loader setting given behind a launcher on a script run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T12:57:11Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
