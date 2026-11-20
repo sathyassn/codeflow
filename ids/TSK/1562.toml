@@ -1,0 +1,11 @@
+id = "TSK-1562"
+uid = "0147f3db-c836-42bd-ae87-df070447e086"
+kind = "TSK"
+title = "The git guard's hook integrity checks judge the command behind every launcher"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T08:32:38Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
