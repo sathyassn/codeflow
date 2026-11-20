@@ -96,6 +96,36 @@
         "$ref": "#/$defs/target"
       }
     },
+    "guards": {
+      "type": "array",
+      "description": "The tests that guard each class of path. `codeflow test guards` names them for a change's touched paths and reports a path no rule matches as unguarded.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "paths",
+          "tests"
+        ],
+        "properties": {
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Repository path globs, matched like a target's narrow."
+          },
+          "tests": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Commands that run the guarding tests."
+          }
+        }
+      }
+    },
     "_description": {
       "type": "string",
       "description": "Human-readable configuration purpose and structural-check labels."

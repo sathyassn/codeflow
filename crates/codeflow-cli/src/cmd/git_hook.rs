@@ -103,19 +103,14 @@ pub fn run(args: &GitHookArgs) -> i32 {
     // and blocking here never strands a fetch or push mid-flight.
     if matches!(args.stage, StageName::CommitMsg) {
         if let Err(errors) = policy_schema::validate_policy(&root) {
-            for e in &errors {
-                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
-            }
-            eprintln!(
-                "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
-            );
+            report_invalid_policy(&root, &errors);
             return 1;
         }
     }
 
     let (policy, _armed) = match Policy::load_effective(&root) {
         Ok(value) => value,
-        Err(error) => return policy_unreadable(&error),
+        Err(error) => return policy_unreadable(&root, &error),
     };
     let token = super::integrate_token_present();
 
@@ -273,7 +268,7 @@ fn run_reference_transaction_with_reader(
             // so Git must cancel it instead of silently moving a protected ref.
             let (policy, _armed) = match Policy::load_effective(root) {
                 Ok(value) => value,
-                Err(error) => return policy_unreadable(&error),
+                Err(error) => return policy_unreadable(root, &error),
             };
             if !policy.git.local_ref_protection.is_active()
                 && !policy.git.delete_protected.is_active()
@@ -304,7 +299,7 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = match Policy::load_effective(root) {
         Ok(value) => value,
-        Err(error) => return policy_unreadable(&error),
+        Err(error) => return policy_unreadable(root, &error),
     };
     let token = super::integrate_token_present();
     let human = super::human_override_present();
@@ -423,13 +418,16 @@ fn git_config_values(
             "cannot read commit cleanup configuration: {detail}"
         ))
     };
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["config", "-z"])
-        .args(args)
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["config", "-z"])
+            .args(args),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if out.status.code() == Some(1) {
         return Ok(Vec::new());
     }
@@ -448,12 +446,15 @@ fn merge_in_progress(root: &Path) -> Result<bool, codeflow_core::error::HookErro
     let unreadable = |why: String| {
         codeflow_core::error::HookError::Config(format!("cannot read merge state: {why}"))
     };
-    let out = codeflow_core::git::command()
-        .arg("-C")
-        .arg(root)
-        .args(["rev-parse", "--git-dir"])
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        codeflow_core::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(["rev-parse", "--git-dir"]),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
         return Err(unreadable(out.status.to_string()));
     }
@@ -476,12 +477,15 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
     codeflow_core::hooks::gitleaks::require_offline_objects(root).map_err(unreadable)?;
     let mut command = codeflow_core::git::command();
     codeflow_core::hooks::gitleaks::pin_object_reader(&mut command);
-    let out = command
-        .arg("-C")
-        .arg(root)
-        .args(["diff", "--cached", "--name-only", "-z", "--no-renames"])
-        .output()
-        .map_err(|error| unreadable(error.to_string()))?;
+    // An owned group (TSK-327): whatever git leaves running ends with it.
+    let out = codeflow_core::git::owned::owned_output(
+        command
+            .arg("-C")
+            .arg(root)
+            .args(["diff", "--cached", "--name-only", "-z", "--no-renames"]),
+        None,
+    )
+    .map_err(|error| unreadable(error.to_string()))?;
     if !out.status.success() {
         return Err(unreadable(out.status.to_string()));
     }
@@ -496,10 +500,30 @@ fn staged_files(root: &Path) -> Result<Vec<String>, codeflow_core::error::HookEr
         .collect())
 }
 
+/// Name each invalid key at the commit-msg stage, or say the binary is too
+/// old for the repository (TSK-1285).
+fn report_invalid_policy(root: &Path, errors: &[policy_schema::PolicyError]) {
+    super::unread_refusal(
+        "codeflow commit-msg",
+        &super::binary_age(root),
+        "its policy",
+        || {
+            for e in errors {
+                eprintln!("codeflow commit-msg: policy error: {}", super::shown(e));
+            }
+            eprintln!(
+                "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
+            );
+        },
+    );
+}
+
 /// A local policy that cannot be read stops the hook. The error can quote a
 /// policy value from the checkout, so it is shown escaped (TSK-388).
-fn policy_unreadable(error: &str) -> i32 {
-    eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+fn policy_unreadable(root: &Path, error: &str) -> i32 {
+    super::unread_refusal("codeflow", &super::binary_age(root), "its policy", || {
+        eprintln!("codeflow: cannot read policy: {}", super::shown(&error));
+    });
     2
 }
 

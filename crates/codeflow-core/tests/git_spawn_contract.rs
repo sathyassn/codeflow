@@ -132,6 +132,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         "tests re-running their own binary for empty answers, SSH config and URL rewrites",
     ),
     (
+        "codeflow-core/src/git/remote_identity.rs",
+        "program",
+        1,
+        "TSK-1184 ssh_endpoint runs the ssh found on PATH, an SSH client and never git",
+    ),
+    (
         "codeflow-present/src/responses.rs",
         "std::env::current_exe().unwrap()",
         1,
@@ -1241,4 +1247,162 @@ fn the_scan_refuses_each_git_spawn_its_subset_can_hide() {
             violations("probe.rs", source)
         );
     }
+}
+
+/// Whether a `cfg` predicate holds only in a test build: `test`, an
+/// `all(...)` with one such part, or an `any(...)` whose every part is one.
+/// `not(...)` and any other predicate can hold in a production build.
+fn requires_test(predicate: &[Token]) -> bool {
+    match predicate {
+        [word] => word.is("test"),
+        [head, open, ..] if open.punct('(') && (head.is("all") || head.is("any")) => {
+            let end = group_end(predicate, 1);
+            if end + 1 != predicate.len() {
+                return false;
+            }
+            let mut parts = Vec::new();
+            let mut start = 2;
+            let mut index = 2;
+            while index < end {
+                if predicate[index].punct('(') || predicate[index].punct('[') {
+                    index = group_end(predicate, index);
+                } else if predicate[index].punct(',') {
+                    parts.push(&predicate[start..index]);
+                    start = index + 1;
+                }
+                index += 1;
+            }
+            parts.push(&predicate[start..end]);
+            parts.retain(|part| !part.is_empty());
+            if head.is("all") {
+                parts.iter().any(|part| requires_test(part))
+            } else {
+                !parts.is_empty() && parts.iter().all(|part| requires_test(part))
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Each `.output()`, `.status()` or `.spawn()` call in production code, as
+/// `<enclosing fn> .<method>()`. Items under a `cfg` that holds only in a
+/// test build ([`requires_test`]) are skipped. A git2 `delta.status()` reads the same as a
+/// process call here, so the table lists those too, with that reason.
+fn bare_spawn_spans(source: &str) -> Vec<String> {
+    let toks = tokens(source);
+    let mut spans = Vec::new();
+    let mut function = String::from("<file>");
+    let mut index = 0;
+    while index < toks.len() {
+        if toks[index].punct('#') && toks.get(index + 1).is_some_and(|t| t.punct('[')) {
+            let end = group_end(&toks, index + 1);
+            let attribute = &toks[index + 2..end];
+            let testing = attribute.len() > 3
+                && attribute[0].is("cfg")
+                && attribute[1].punct('(')
+                && requires_test(&attribute[2..attribute.len() - 1]);
+            index = end + 1;
+            if testing {
+                // Skip the item: to its `;` or past its body.
+                while index < toks.len() && !toks[index].punct(';') && !toks[index].punct('{') {
+                    if toks[index].punct('(') || toks[index].punct('[') {
+                        index = group_end(&toks, index);
+                    }
+                    index += 1;
+                }
+                if index < toks.len() && toks[index].punct('{') {
+                    index = group_end(&toks, index);
+                }
+                index += 1;
+            }
+            continue;
+        }
+        if toks[index].is("fn") {
+            if let Some(Token::Ident(name)) = toks.get(index + 1) {
+                function.clone_from(name);
+            }
+        }
+        if toks[index].punct('.') {
+            if let Some(Token::Ident(method)) = toks.get(index + 1) {
+                if matches!(method.as_str(), "output" | "status" | "spawn")
+                    && toks.get(index + 2).is_some_and(|t| t.punct('('))
+                    && toks.get(index + 3).is_some_and(|t| t.punct(')'))
+                {
+                    spans.push(format!("{function} .{method}()"));
+                }
+            }
+        }
+        index += 1;
+    }
+    spans
+}
+
+const UNOWNED_SPAWNS: &str = include_str!("fixtures/unowned_spawn_allowlist.tsv");
+
+/// TSK-327: every process the production crates start outside the owned
+/// and bounded helpers is listed with who ends it. A process on a hook,
+/// guard, CI or doctor path either runs through an owned group
+/// (`git::owned`, `remote_query`, `git_config::bounded_output`) or names
+/// its row of the PR 699 spawn table; any other names why it is off those
+/// paths. A new bare `.output()`, `.status()` or `.spawn()` fails here
+/// until it is routed through a helper or listed with its reason.
+#[test]
+fn every_bare_spawn_is_listed_with_its_owner() {
+    let crates = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let root = crates.parent().unwrap();
+    let allowed = allowances(UNOWNED_SPAWNS);
+    let mut files = Vec::new();
+    for krate in ["codeflow-core", "codeflow-cli"] {
+        rust_files(&crates.join(krate).join("src"), &mut files);
+    }
+    let mut findings = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for file in files {
+        let name = file
+            .strip_prefix(root)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        let stem = file.file_stem().unwrap().to_string_lossy();
+        // Test-only sources, included under `#[cfg(test)]`.
+        if stem == "tests" || stem.ends_with("_tests") {
+            continue;
+        }
+        let spans = bare_spawn_spans(&std::fs::read_to_string(&file).unwrap());
+        findings.extend(unlisted_spans(&name, &spans, &allowed));
+        seen.insert(name);
+    }
+    for entry in &allowed {
+        assert!(
+            seen.contains(entry.file),
+            "the unowned spawn table names missing file {}",
+            entry.file
+        );
+    }
+    assert!(findings.is_empty(), "{}", findings.join("\n"));
+}
+
+#[test]
+fn the_bare_spawn_scan_reads_calls_and_skips_test_items() {
+    let source = "fn run(c: &mut Command) { c.output(); c.status().unwrap(); }\n\
+                  fn later() { x.spawn ( ); y.output_with(1); z.status; }\n\
+                  #[cfg(test)] mod tests { fn t() { c.output(); } }\n\
+                  #[cfg(all(test, unix))] fn helper() { c.spawn(); }\n\
+                  #[cfg(not(test))] fn real() { c.output(); }\n\
+                  #[cfg(any(test, unix))] fn either() { c.status(); }\n\
+                  #[cfg(all(unix, any(test, windows)))] fn mixed() { c.spawn(); }\n\
+                  #[cfg(any(test, all(test, unix)))] fn tested() { c.spawn(); }\n\
+                  #[cfg(all(not(test), unix))] fn built() { c.output(); }";
+    assert_eq!(
+        bare_spawn_spans(source),
+        [
+            "run .output()",
+            "run .status()",
+            "later .spawn()",
+            "real .output()",
+            "either .status()",
+            "mixed .spawn()",
+            "built .output()"
+        ]
+    );
 }

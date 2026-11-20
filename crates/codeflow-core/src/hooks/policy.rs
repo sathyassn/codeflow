@@ -254,6 +254,19 @@ where
     declared_limit(crate::git::remote_query::FETCH_TIMEOUT_KEY, deserializer)
 }
 
+/// The push set budget's policy key ([`super::limits::PUSH_BUDGET`]).
+pub const PUSH_BUDGET_KEY: &str = match super::limits::PUSH_BUDGET.key {
+    Some(key) => key,
+    None => panic!("the push budget is set by a policy key"),
+};
+
+fn push_budget_seconds<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    declared_limit(PUSH_BUDGET_KEY, deserializer)
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,6 +363,13 @@ pub struct GitPolicy {
     /// [`DEFAULT_FETCH_TIMEOUT_SECONDS`](crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS).
     #[serde(deserialize_with = "remote_fetch_timeout_seconds")]
     pub remote_fetch_timeout_seconds: u64,
+    /// Seconds the pre-push set may take before the hook reports the
+    /// overrun and its slowest checks (TSK-1306). It only reports; a push
+    /// over it still lands when its checks pass. An integer of at least 1
+    /// with no policy ceiling; default
+    /// [`PUSH_BUDGET`](super::limits::PUSH_BUDGET).
+    #[serde(deserialize_with = "push_budget_seconds")]
+    pub push_budget_seconds: u64,
     /// The status check names a protected branch requires before merging,
     /// on a branch that is up to date with its base (`codeflow remote
     /// protect`, `codeflow doctor --check remote-perimeter`). Default
@@ -407,7 +427,8 @@ pub struct GitPolicy {
     /// absent one is fine). `warn`/`block` require at least one matching trailer;
     /// a commit without one warns or blocks. Only meaningful when
     /// [`commit_ticket_keys`](GitPolicy::commit_ticket_keys) is non-empty.
-    /// Merge/revert/fixup/squash exempt.
+    /// Merge/revert/fixup/squash exempt; merges opt in through
+    /// [`commit_ticket_merges`](GitPolicy::commit_ticket_merges).
     pub commit_ticket_required: PolicyLevel,
     /// Regex a ticket trailer's value must match. String; default empty = no
     /// format check. When set, a present ticket trailer whose value does not match
@@ -417,6 +438,17 @@ pub struct GitPolicy {
     /// strict validator ([`policy_schema`](super::policy_schema)) rejects it
     /// loudly first.
     pub commit_ticket_pattern: String,
+    /// Whether a merge commit must carry a ticket-reference trailer too
+    /// (TSK-1350). Default `off`: merges stay exempt from the ticket rule, as
+    /// before. `warn`/`block` judge every real merge, git's default
+    /// `Merge ...` subject included, for a trailer with one of
+    /// [`commit_ticket_keys`](GitPolicy::commit_ticket_keys) (and matching
+    /// [`commit_ticket_pattern`](GitPolicy::commit_ticket_pattern) when set),
+    /// in the commit-msg hook and in `codeflow ci`, reported as
+    /// `git.commit_ticket_merges` at this level. Only meaningful when
+    /// `commit_ticket_keys` is non-empty; the other message rules still skip
+    /// a git-authored merge.
+    pub commit_ticket_merges: PolicyLevel,
     /// Path globs (the `glob` crate's syntax) naming the repo's declared
     /// contract surfaces (ADR-0020). When non-empty, a commit-msg WARN fires if a
     /// staged file matches one of these globs and the message carries no breaking
@@ -470,6 +502,23 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// Extra `##` sections every task record must carry, as heading names
+    /// without the leading `##` (TSK-1421). `CodeFlow`'s own sections stay
+    /// required whatever this lists. Empty by default; the shipped policy
+    /// file does not list it, so an older binary never meets the key. The
+    /// lists are read from the trusted policy joined with the working copy's
+    /// ([`crate::validate::record_sections`]), so a change cannot drop a
+    /// section it is judged by.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub task_required_sections: Vec<String>,
+    /// Extra `##` sections every epic record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub epic_required_sections: Vec<String>,
+    /// Extra `##` sections every spec record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spec_required_sections: Vec<String>,
     /// The words a PR body may hold before `codeflow ci` warns (TSK-228,
     /// TSK-267): counted as a reader sees them, HTML comments left out.
     /// Default 1000; `0` turns the warning off. Advisory at every level,
@@ -668,6 +717,7 @@ impl Default for GitPolicy {
             remote_query_timeout_seconds: crate::git::remote_query::DEFAULT_TIMEOUT_SECONDS,
             remote_query_attempts: crate::git::remote_query::DEFAULT_ATTEMPTS,
             remote_fetch_timeout_seconds: crate::git::remote_query::DEFAULT_FETCH_TIMEOUT_SECONDS,
+            push_budget_seconds: super::limits::PUSH_BUDGET.default,
             required_checks: DEFAULT_REQUIRED_CHECKS
                 .iter()
                 .map(ToString::to_string)
@@ -693,6 +743,7 @@ impl Default for GitPolicy {
             commit_ticket_keys: Vec::new(),
             commit_ticket_required: PolicyLevel::Off,
             commit_ticket_pattern: String::new(),
+            commit_ticket_merges: PolicyLevel::Off,
             // Empty by default: consumers declare their own contract surfaces.
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
@@ -704,6 +755,9 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
             pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
+            task_required_sections: Vec::new(),
+            epic_required_sections: Vec::new(),
+            spec_required_sections: Vec::new(),
             pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
@@ -830,14 +884,33 @@ impl GitPolicy {
     }
 
     /// `true` when `branch` starts with one of the sanctioned prefixes
-    /// (charter §6.4). Protected branches are exempt — they are governed by
-    /// the protection rules, not naming.
+    /// (charter §6.4) or is a landing candidate
+    /// ([`Self::is_candidate_branch`], TSK-1351). Protected branches are
+    /// exempt — they are governed by the protection rules, not naming.
     #[must_use]
     pub fn branch_name_ok(&self, branch: &str) -> bool {
         if self.branch_is_protected(branch) {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
+            || self.is_candidate_branch(branch)
+    }
+
+    /// `true` when `branch` is named as a landing candidate: it starts with
+    /// `git.candidate_prefix` and names something after it (TSK-1351). A
+    /// prefix that [`Self::candidate_prefix_problem`] refuses, that does not
+    /// end in `/` or that holds a glob character names no candidate, so a
+    /// policy the schema would refuse never turns other branches into
+    /// candidates. The name only opts a branch in to the candidate binding;
+    /// it grants nothing by itself.
+    #[must_use]
+    pub fn is_candidate_branch(&self, branch: &str) -> bool {
+        let prefix = self.candidate_prefix.as_str();
+        prefix.ends_with('/')
+            && !prefix.contains(['*', '?', '[', '{', '\\'])
+            && self.candidate_prefix_problem().is_none()
+            && branch.len() > prefix.len()
+            && branch.starts_with(prefix)
     }
 
     /// Why `git.candidate_prefix` does not keep landing candidates apart from
@@ -981,7 +1054,16 @@ pub struct SecuritySection {
     /// operator's choice, applies the line's rule and verifies nothing.
     #[serde(skip_serializing_if = "TextGuard::is_strict")]
     pub text_guard: TextGuard,
+    /// The HTTP clients whose config files the project trusts (TSK-1346):
+    /// `curl`, `wget`, `httpie`, `xh` and `gh_aliases`. A listed tool's
+    /// config-file refusal is lifted; its GitHub destination checks stay.
+    /// Empty by default, so every config-file refusal stays on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trusted_client_configs: Vec<String>,
 }
+
+/// The tools `security.trusted_client_configs` may list.
+pub const TRUSTED_CLIENT_CONFIG_TOOLS: &[&str] = &["curl", "wget", "httpie", "xh", "gh_aliases"];
 
 /// The `security.text_guard` values.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1018,6 +1100,7 @@ impl Default for SecuritySection {
             sandbox_retry: None,
             sandbox_retry_allow: None,
             text_guard: TextGuard::Strict,
+            trusted_client_configs: Vec::new(),
         }
     }
 }
@@ -1208,6 +1291,7 @@ impl GitPolicy {
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
         // walled by a required trailer during the pre-first-commit grace window.
         self.commit_ticket_required = PolicyLevel::Off;
+        self.commit_ticket_merges = PolicyLevel::Off;
         self.commit_ticket_keys = Vec::new();
         self.commit_required_footers = Vec::new();
         self.ai_attribution = PolicyLevel::Off;
@@ -1343,6 +1427,7 @@ mod tests {
         assert!(g.commit_ticket_keys.is_empty());
         assert_eq!(g.commit_ticket_required, PolicyLevel::Off);
         assert!(g.commit_ticket_pattern.is_empty());
+        assert_eq!(g.commit_ticket_merges, PolicyLevel::Off);
         assert!(g.allowed_footer_tokens().is_empty());
         // The contract-surface tripwire ships empty — consumers declare their own.
         assert!(g.breaking_watch_paths.is_empty());
@@ -1431,6 +1516,10 @@ mod tests {
         assert_eq!(
             from_asset.git.commit_ticket_pattern,
             defaults.commit_ticket_pattern
+        );
+        assert_eq!(
+            from_asset.git.commit_ticket_merges,
+            defaults.commit_ticket_merges
         );
         assert_eq!(
             from_asset.git.breaking_watch_paths,
@@ -1672,6 +1761,44 @@ mod tests {
         assert!(!g.branch_name_ok("my-cool-branch"));
         // Protected branches are exempt from naming.
         assert!(g.branch_name_ok("main"));
+    }
+
+    /// TSK-1351 AC-1: a landing candidate under `git.candidate_prefix` is an
+    /// allowed name. The PR 600 security review's run-time cases: a prefix
+    /// that differs from a sanctioned one only in case, holds a `*`, or has
+    /// no trailing slash names no candidate, so a policy the schema would
+    /// refuse never makes another branch a candidate.
+    #[test]
+    fn a_landing_candidate_is_an_allowed_branch_name() {
+        let g = GitPolicy::default();
+        assert!(g.is_candidate_branch("candidate/epc-022-c4a"));
+        assert!(g.branch_name_ok("candidate/epc-022-c4a"));
+        assert!(!g.is_candidate_branch("candidate/"), "the prefix alone");
+        assert!(!g.is_candidate_branch("candidates/x"));
+        let land = GitPolicy {
+            candidate_prefix: "land/".into(),
+            ..GitPolicy::default()
+        };
+        assert!(land.branch_name_ok("land/epc-022-c4a"));
+        assert!(!land.branch_name_ok("candidate/epc-022-c4a"));
+        for prefix in ["Task/", "TASK/", "cand*/", "*/", "cand", "candidate"] {
+            let g = GitPolicy {
+                candidate_prefix: prefix.into(),
+                ..GitPolicy::default()
+            };
+            for branch in [
+                format!("{prefix}x"),
+                "task/TSK-001-x".to_string(),
+                "Task/x".to_string(),
+                "candidate-x".to_string(),
+            ] {
+                assert!(
+                    !g.is_candidate_branch(&branch),
+                    "prefix {prefix:?} must name no candidate, named {branch:?}"
+                );
+            }
+        }
+        assert!(!GitPolicy::default().branch_name_ok("Task/x"));
     }
 
     #[test]

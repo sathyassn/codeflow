@@ -243,13 +243,13 @@ impl Graph {
                     match loaded {
                         Ok(()) => crate::git::Walk::Continue,
                         Err(error) => {
-                            failure = Some(format!("{path}: {error}"));
+                            failure = Some(format!("{path} at {revision}: {error}"));
                             crate::git::Walk::Stop
                         }
                     }
                 }
                 Err(error) => {
-                    failure = Some(format!("{path}: {}", error.message()));
+                    failure = Some(format!("{path} at {revision}: {}", error.message()));
                     crate::git::Walk::Stop
                 }
             }
@@ -1481,7 +1481,10 @@ fn serving_tasks<'g>(
     graph
         .tasks()
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
-        .filter(|(_, item)| item.serves() == Some((epic.id.clone(), criterion.id.clone())))
+        .filter(|(_, item)| {
+            item.serves()
+                .is_some_and(|(id, ac)| id == epic.id && ac == criterion.id)
+        })
         .collect()
 }
 

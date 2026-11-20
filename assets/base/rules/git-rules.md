@@ -42,6 +42,11 @@ version calculator, changelog and publication approval; installing CodeFlow
 does not install its repository release pipeline or make scaffold metadata
 the project's version. Discover that policy before release work; propose
 missing automation for adoption rather than silently enabling publication.
+Agents never publish, dispatch a release workflow, approve a release
+deployment or create or push a release tag. `exec-guard` refuses those
+routes; a remote setting, such as a tag `creation` rule or a required
+reviewer, is the floor for a route it cannot judge, such as a script that
+calls the API.
 
 ## The rules
 
@@ -112,15 +117,24 @@ is refused; a human at their own terminal is warned. See `worktrees.md`.
 
 ## Bodies of work
 
-**Bodies of work:** a multi-task epic lands on a non-protected
+**Bodies of work:** a task PR targets `main` when a human can merge it as
+it becomes ready. Otherwise the epic's tasks land on a non-protected
 `integration/<epic>` branch (agents merge there) in batches: every
 reviewed task head ready when the line lands goes on one candidate, gated
 once, one candidate per line at a time (see `worktrees.md`, "Parallel work
-and integration"). A red candidate is
-diagnosed first, and a member and its dependents leave it only when
-evidence attributes the failure to it. Only the finished body
-reaches `main`, via one human-reviewed PR that the operator merges. See
-cf-method, "Managing a body of work" (standard and full tiers).
+and integration"). A red candidate is diagnosed first, and a member and
+its dependents leave it only when evidence attributes the failure to it. At
+every green line tip a checkpoint PR from the line to `main` is opened or
+refreshed, and a human merges it when available. A standalone task that
+does not target `main` lands on the line it targets, as its own candidate.
+Each task or epic record changes only in its one home. A task's home is
+the branch its `integration_target` names: its epic's line, the line a
+standalone task targets, or `main`. An epic's home is the branch its tasks
+target. A line takes `main` only by
+merging it in through the sync route `codeflow ci` admits, which never
+changes a record homed on the line; until that route ships (TSK-1312), such
+a sync needs the carrying task the current checks require. See cf-method,
+"Managing a body of work" (standard and full tiers), and CodeFlow ADR-0098.
 
 The integration landing gate follows the candidate's diff from the current
 line tip. `codeflow ci --base <line-tip> --head <candidate> --into <line>`
@@ -184,6 +198,25 @@ A landed adoption also preserves the acceptance binding of tasks landed
 before it, provided the adopted commit leaves their acceptance blocks
 unchanged. An unlanded entry or unreadable adoption history does not
 authorize the binding.
+
+A landing candidate is a branch named with `git.candidate_prefix`
+(`candidate/` by default), cut from the line's fetched tip with each
+member's pull request head merged onto it by `git merge --no-ff` and no
+other commit. Push it to have it judged as the line's next tip: the hook
+and `codeflow ci` bind it to the line only when its first-parent chain
+reaches the fetched tip of exactly one epic line, the remote advertises
+that tip, the records bind the line, every commit after the tip is a clean
+merge, and each merged head is the current head of an open pull request
+into the line with every `trusted:` check of the default branch's policy
+workflow green at that exact commit, each written by that workflow's own
+`pull_request_target` run for that pull request, as the forge records
+it. A same-named check from another workflow or event does not count.
+This proves
+admission at the head, not that a person reviewed it. An unreadable forge,
+or a project with no such check, refuses. Anything else, an evil merge
+included, is refused as
+`work.landing_candidate` with its cause. Once its gate is green, land the
+batch with one push of the line to the candidate commit, a fast-forward.
 
 ## PR bodies
 

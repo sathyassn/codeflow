@@ -3,6 +3,10 @@
 use codeflow_core::integrate::{integrate_with_mode, IntegrateError, IntegrateMode};
 use std::path::{Path, PathBuf};
 
+#[path = "support/git_isolation.rs"]
+#[allow(dead_code)]
+mod git_isolation;
+
 fn git(root: &Path, args: &[&str]) -> String {
     let output = codeflow_core::git::command()
         .args(args)
@@ -33,6 +37,7 @@ impl Fixture {
 }
 
 fn fixture(conflict: bool) -> Fixture {
+    git_isolation::isolate_git();
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     git(root, &["init", "-b", "main"]);

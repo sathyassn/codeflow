@@ -12,6 +12,7 @@
 
 pub mod docs;
 pub mod portal;
+pub mod record_sections;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -93,8 +94,9 @@ pub struct ValidateOptions {
 }
 
 /// Blocking structural and referential findings for the complete durable
-/// workgraph. This is the shared gate used by `validate --docs`, `work start`,
-/// task-branch pre-commit, and task-branch CI.
+/// workgraph. This is the shared gate used by `validate --docs`, `work start`
+/// and `codeflow ci` (task-branch CI and the pre-push hook, which runs it);
+/// pre-commit does not re-validate the graph (TSK-133).
 #[derive(Debug, Default)]
 pub struct WorkgraphValidationReport {
     pub checked_records: usize,
@@ -112,16 +114,24 @@ impl WorkgraphValidationReport {
     }
 }
 
-/// Validate every durable record and every relationship in one pass.
+/// Validate every durable record and every relationship in one pass, with
+/// the extra sections the project requires (`required`, TSK-1421;
+/// [`record_sections::Required::none`] for none).
 #[must_use]
-pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
+pub fn validate_workgraph(
+    repo_root: &Path,
+    required: &record_sections::Required,
+) -> WorkgraphValidationReport {
     let pm_root = repo_root.join("project-management");
     let opts = ValidateOptions::default();
+    let _merges = MergeSourcesScope::open();
     let mut report = WorkgraphValidationReport::default();
     let mut identities = HashMap::<String, String>::new();
+    sections_doubt(required, &mut report);
 
     let record_sets = [
         (
+            crate::workgraph::RecordKind::Epic,
             crate::workgraph::layout::epic_record_files(&pm_root),
             validate_epic
                 as fn(
@@ -132,17 +142,19 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
             is_valid_epic_format_id as fn(&str) -> bool,
         ),
         (
+            crate::workgraph::RecordKind::Spec,
             crate::workgraph::layout::spec_record_files(&pm_root),
             validate_spec,
             is_valid_spec_format_id,
         ),
         (
+            crate::workgraph::RecordKind::Task,
             crate::workgraph::layout::task_record_files(&pm_root),
             validate_task,
             is_valid_task_format_id,
         ),
     ];
-    for (files, validator, valid_identity) in record_sets {
+    for (kind, files, validator, valid_identity) in record_sets {
         let files = match files {
             Ok(files) => files,
             Err(error) => {
@@ -157,7 +169,7 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
             let display = crate::git::display_key(&crate::portable_path::slashed(relative));
             if let Ok(content) = std::fs::read(&path) {
-                if let Ok((data, _)) = parse_frontmatter(&content) {
+                if let Ok((data, body)) = parse_frontmatter(&content) {
                     if let Some(identity) = supported_identity(&data, valid_identity) {
                         if let Some(first) = identities.get(&identity) {
                             report.issues.push(format!(
@@ -167,6 +179,18 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
                             identities.insert(identity, display.clone());
                         }
                     }
+                    project_sections(
+                        required,
+                        &ProjectRecord {
+                            kind,
+                            repo_root,
+                            relative,
+                            display: &display,
+                            content: &content,
+                            body: &body,
+                        },
+                        &mut report,
+                    );
                 }
             }
             match validator(&path, &opts) {
@@ -187,6 +211,31 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         }
     }
 
+    finish_workgraph(repo_root, &mut report);
+    report
+}
+
+/// The warning that the required record sections were read from `HEAD`
+/// because the landed policy could not be read, while any section is listed.
+fn sections_doubt(required: &record_sections::Required, report: &mut WorkgraphValidationReport) {
+    if let Some(doubt) = required
+        .doubt
+        .as_deref()
+        .filter(|_| !required.sections.is_empty())
+    {
+        report.warnings.push(crate::remedy::Finding::new(
+            format!(
+                "required record sections were read from HEAD and the working copy: the landed policy could not be read ({})",
+                crate::git::display_message(doubt)
+            ),
+            crate::remedy::RECORD_SECTIONS_UNTRUSTED.remedy(),
+        ));
+    }
+}
+
+/// Add the lifecycle and docs findings to `report`, then sort and dedup its
+/// issues and warnings.
+fn finish_workgraph(repo_root: &Path, report: &mut WorkgraphValidationReport) {
     let lifecycle = crate::workgraph::lifecycle::validate_lifecycle(repo_root);
     report.issues.extend(lifecycle.errors);
     report.warnings.extend(lifecycle.warnings);
@@ -201,7 +250,6 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
     report.issues.dedup();
     report.warnings.sort_by(crate::remedy::Finding::by_text);
     report.warnings.dedup();
-    report
 }
 
 fn supported_identity(
@@ -214,6 +262,63 @@ fn supported_identity(
     }
     let alias = get_string_field(data, "format_id");
     valid(&alias).then_some(alias)
+}
+
+/// One record, as [`project_sections`] judges it.
+struct ProjectRecord<'a> {
+    kind: crate::workgraph::RecordKind,
+    repo_root: &'a Path,
+    relative: &'a Path,
+    display: &'a str,
+    content: &'a [u8],
+    body: &'a [u8],
+}
+
+/// The sections the project requires that `record` lacks (TSK-1421): an
+/// issue for a record that is new or changed since the trusted commit, and
+/// a warning for one whose bytes are unchanged there, until it next changes.
+fn project_sections(
+    required: &record_sections::Required,
+    record: &ProjectRecord<'_>,
+    report: &mut WorkgraphValidationReport,
+) {
+    use crate::workgraph::RecordKind;
+    let opts = ValidateOptions::default();
+    let (own, noun) = match record.kind {
+        RecordKind::Task => (&opts.task_required_sections, "task"),
+        RecordKind::Epic => (&opts.epic_required_sections, "epic"),
+        RecordKind::Spec => (&opts.spec_required_sections, "spec"),
+    };
+    let body = String::from_utf8_lossy(record.body);
+    let missing = required.missing(record.kind, own, &body);
+    if missing.is_empty() {
+        return;
+    }
+    let key = record_sections::key(record.kind);
+    let unchanged = required.unchanged(record.repo_root, record.relative, record.content);
+    for name in missing {
+        let shown = crate::git::display_text(&name);
+        if unchanged {
+            let warning = ValidationWarning {
+                field: "body".into(),
+                message: format!(
+                    "missing section \"## {shown}\" that the project's policy requires for {noun} records ({key}); the record is unchanged since {}, so it is refused once it next changes",
+                    required.reference_short()
+                ),
+                clearing: &crate::remedy::RECORD_SECTION_MISSING,
+            };
+            report.warnings.push(
+                warning
+                    .finding(Path::new(record.display))
+                    .prefixed(record.display),
+            );
+        } else {
+            report.issues.push(format!(
+                "{}: body: missing section \"## {shown}\" that the project's policy requires for {noun} records ({key})",
+                record.display
+            ));
+        }
+    }
 }
 
 impl Default for ValidateOptions {
@@ -850,20 +955,91 @@ fn awaiting_selection_errors(
 /// `codeflow integrate` fast-forwards and writes no merge, so its landings
 /// are not counted. Zero when git is unavailable.
 fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
-    let Ok(out) = crate::git::command()
+    let needle = format!("/{task_id}-");
+    let count = |sources: &[String]| {
+        sources
+            .iter()
+            .filter(|source| source.contains(&needle))
+            .count()
+    };
+    // Inside one `validate_workgraph` run the history is read once and
+    // every complete standalone task counts from that one read; HEAD does
+    // not move during a validation (TSK-1306).
+    let memo = MERGE_SOURCES.with(|memo| {
+        memo.borrow_mut().as_mut().map(|memo| {
+            memo.entry(repo_root.to_path_buf())
+                .or_insert_with(|| merge_sources(repo_root).map(std::rc::Rc::new))
+                .clone()
+        })
+    });
+    match memo {
+        Some(sources) => sources.map_or(0, |sources| count(&sources)),
+        None => merge_sources(repo_root).map_or(0, |sources| count(&sources)),
+    }
+}
+
+/// The merged-in side of every merge subject in the history of `HEAD`,
+/// `None` when git is unavailable.
+fn merge_sources(repo_root: &Path) -> Option<Vec<String>> {
+    #[cfg(test)]
+    MERGE_READS.with(|reads| reads.set(reads.get() + 1));
+    let out = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(["log", "--merges", "--format=%s", "HEAD"])
         .output()
-    else {
-        return 0;
-    };
-    let needle = format!("/{task_id}-");
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(merged_in)
-        .filter(|source| source.contains(&needle))
-        .count()
+        .ok()?;
+    Some(
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(merged_in)
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times [`merge_sources`] has read the history on this thread.
+    static MERGE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+type MergeSourcesMemo = HashMap<std::path::PathBuf, Option<std::rc::Rc<Vec<String>>>>;
+
+thread_local! {
+    /// The merge sources each repository's `HEAD` gives, kept only while a
+    /// [`validate_workgraph`] run is open on this thread.
+    static MERGE_SOURCES: std::cell::RefCell<Option<MergeSourcesMemo>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens the merge-source memo for one validation run and clears it when
+/// dropped; a nested run shares its caller's memo.
+struct MergeSourcesScope {
+    owner: bool,
+}
+
+impl MergeSourcesScope {
+    fn open() -> Self {
+        let owner = MERGE_SOURCES.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.is_some() {
+                false
+            } else {
+                *memo = Some(HashMap::new());
+                true
+            }
+        });
+        Self { owner }
+    }
+}
+
+impl Drop for MergeSourcesScope {
+    fn drop(&mut self) {
+        if self.owner {
+            MERGE_SOURCES.with(|memo| *memo.borrow_mut() = None);
+        }
+    }
 }
 
 /// The merged-in side of a merge subject: the text after `Merge ` and before
@@ -1074,6 +1250,54 @@ mod tests {
     use crate::models::{EpicStatus, TaskStatus};
 
     use super::*;
+
+    /// One validation reads the merge history once, and every task counts
+    /// the same landings from it as from its own read (TSK-1306).
+    #[test]
+    fn one_validation_reads_the_merge_history_once_for_every_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let base = repo.commit(None, &sig, &sig, "base", &tree, &[]).unwrap();
+        let mut head = repo.find_commit(base).unwrap();
+        for (n, subject) in [
+            "Merge pull request #1 from o/task/TSK-001-a",
+            "Merge pull request #2 from o/task/TSK-001-b",
+            "Merge pull request #3 from o/task/TSK-002-a",
+            "Merge remote-tracking branch 'origin/main' into task/TSK-002-a",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let side = repo
+                .commit(None, &sig, &sig, &format!("side {n}"), &tree, &[&head])
+                .unwrap();
+            let side = repo.find_commit(side).unwrap();
+            let merge = repo
+                .commit(None, &sig, &sig, subject, &tree, &[&head, &side])
+                .unwrap();
+            head = repo.find_commit(merge).unwrap();
+        }
+        repo.reference("refs/heads/main", head.id(), true, "test")
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let counts =
+            || ["TSK-001", "TSK-002", "TSK-003"].map(|id| landed_pull_requests(dir.path(), id));
+        MERGE_READS.with(|reads| reads.set(0));
+        let alone = counts();
+        assert_eq!(alone, [2, 1, 0]);
+        assert_eq!(MERGE_READS.with(std::cell::Cell::get), 3);
+        MERGE_READS.with(|reads| reads.set(0));
+        {
+            let _scope = MergeSourcesScope::open();
+            assert_eq!(counts(), alone);
+            assert_eq!(MERGE_READS.with(std::cell::Cell::get), 1);
+        }
+        assert!(MERGE_SOURCES.with(|memo| memo.borrow().is_none()));
+    }
 
     #[test]
     fn merged_in_reads_the_source_side_of_merge_subjects() {
@@ -1928,7 +2152,7 @@ Criteria
         std::fs::write(pm.join("epics/EPC-022.md"), valid_epic_content()).unwrap();
         std::fs::write(pm.join("epics/EPC-022/EPC-022.md"), valid_epic_content()).unwrap();
 
-        let report = validate_workgraph(dir.path());
+        let report = validate_workgraph(dir.path(), &record_sections::Required::none());
         assert!(!report.is_clean());
         assert!(report.issues.iter().any(|issue| {
             issue.contains("duplicate work id EPC-022")

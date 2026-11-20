@@ -4,15 +4,20 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn run(root: &Path, program: &str, args: &[&str], home: &Path, agent: bool) -> Output {
-    Command::new(program)
+    let mut command = Command::new(program);
+    // Only `agent` decides who acts: every marker the run inherits is
+    // removed, and CLAUDECODE is set alone when the case plays an agent.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        command.env_remove(name);
+    }
+    if agent {
+        command.env("CLAUDECODE", "1");
+    }
+    command
         .args(args)
         .current_dir(root)
         .env("CODEFLOW_HOME", home)
         .env("CODEFLOW_HOOK_BINARY", env!("CARGO_BIN_EXE_codeflow"))
-        .env("CLAUDECODE", if agent { "1" } else { "" })
-        .env("CODEX_SESSION_ID", "")
-        .env("CODEX_THREAD_ID", "")
-        .env("GROK_SESSION_ID", "")
         .env("GIT_AUTHOR_NAME", "Test")
         .env("GIT_AUTHOR_EMAIL", "test@example.test")
         .env("GIT_COMMITTER_NAME", "Test")

@@ -1665,16 +1665,16 @@
     {
       "id": "CF-PM-007",
       "level": "hard",
-      "statement": "A supplied task set is first partitioned by coherent durable outcome and direct dependencies rather than treated as one automatic epic boundary. Once outcome, acceptance boundaries, and the dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every epic task declares that target and branches from it, a dependent task starts only once its predecessors' accepted change is in its execution base or on a named reviewed pin, work-start preflight follows branching, and each task completes producer verification, responsible-primary acceptance, and cross-lineage review before it joins a batch; reviewed heads land in dependency-ordered batch candidates, each gated once in full on the exact candidate with its integration seams inspected and unit reviews not repeated, and only one final human-reviewed PR reaches the protected target; a different landing shape requires a recorded rationale in the approved plan before allocation, never mere convenience.",
+      "statement": "A supplied task set is first partitioned by coherent durable outcome and direct dependencies rather than treated as one automatic epic boundary. Once outcome, acceptance boundaries, and the dependency graph establish one coherent multi-task epic, the orchestrating agent selects one shared non-protected integration branch from the intended protected target before allocation without asking the operator to choose a routine landing mechanism; an explicit operator request is respected only within the same clarity, safety, review, and protected-branch boundaries, never as a holding branch for unrelated work; every epic task declares that target and branches from it, a dependent task starts only once its predecessors' accepted change is in its execution base or on a named reviewed pin, work-start preflight follows branching, and each task completes producer verification, responsible-primary acceptance, and cross-lineage review before it joins a batch; reviewed heads land in dependency-ordered batch candidates, each gated once in full on the exact candidate with its integration seams inspected and unit reviews not repeated, and the line reaches the protected target through a human-merged checkpoint PR opened or refreshed at every green line tip; a task PR that a human can merge as it becomes ready targets the protected branch instead.",
       "sources": [
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
           "markers": [
             "Partition a task set by coherent durable outcomes",
             "a batch is not an epic boundary",
-            "For each multi-task epic,",
+            "for each multi-task epic,",
             "Select this shape without asking the operator to choose the routine landing mechanism",
-            "a different landing shape needs an explicit rationale in the approved plan before allocation"
+            "the line reaches the protected target through a checkpoint PR"
           ]
         },
         {
@@ -1682,9 +1682,9 @@
           "markers": [
             "first partition it by coherent",
             "not itself a reason to share a branch",
-            "default landing shape for a multi-task epic",
-            "an exception needs a recorded rationale in the approved plan before tasks are allocated",
-            "never unrelated standalone tasks",
+            "One landing rule holds in every project",
+            "A checkpoint PR is opened, or refreshed, at every green line tip",
+            "The branch holds one coherent epic outcome",
             "chooses this routine mechanism without an operator question",
             "cut and push `integration/<epic-id>-<slug>` off the current protected target",
             "Each task still completes its producer verification and cross-lineage review before it joins a batch",

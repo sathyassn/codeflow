@@ -10,6 +10,7 @@
 pub mod acceptance;
 pub mod allocate;
 pub mod amendment;
+pub mod candidate_admission;
 pub mod candidate_removal;
 pub mod change_class;
 pub mod claim_base;
@@ -19,6 +20,7 @@ mod format_id;
 pub mod history;
 mod history_graph;
 mod landing;
+pub mod landing_candidate;
 pub mod landing_class;
 pub(crate) mod layout;
 pub mod lifecycle;
@@ -50,10 +52,10 @@ pub use work_start::{
     check_work_start_anchored, check_work_start_for_branch, declared_work_target,
     declared_work_target_at_revision, default_work_target, default_work_target_ref,
     durable_work_tracking_enabled, durable_work_tracking_enabled_at, epic_line_binding,
-    epic_line_bound_at, is_stable_work_target, judged_task_id, resolve_work_target,
-    resolve_work_target_checked, task_id_from_branch, task_id_from_branch_at, task_line_binding,
-    task_target_at_revision, work_target_resolves, DurableTrackingError, EpicLineBinding,
-    RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
+    epic_line_bound_at, is_stable_work_target, judged_branch_claims_task_id, judged_task_id,
+    resolve_work_target, resolve_work_target_checked, task_id_from_branch, task_id_from_branch_at,
+    task_line_binding, task_target_at_revision, work_target_resolves, DurableTrackingError,
+    EpicLineBinding, RecordKind, ResolvedWorkTarget, WorkStartError, WorkStartReport,
 };
 
 /// Generate an RFC 3339 UTC timestamp string.

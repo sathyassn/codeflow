@@ -23,6 +23,7 @@
 pub mod assets;
 pub mod detect;
 pub mod diff_redact;
+pub mod hooks_path;
 pub mod init;
 pub mod json_edit;
 pub mod manifest;
@@ -37,6 +38,7 @@ pub mod settings_merge;
 pub mod shown;
 pub mod state;
 pub mod template;
+pub mod too_old;
 pub mod update;
 
 mod gitutil;

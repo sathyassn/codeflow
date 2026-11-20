@@ -184,6 +184,9 @@ const ROWS: &[(&str, Proof)] = &[
     ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
     ("SECRET_ENGINE_UNAVAILABLE", Excluded(Network)),
+    ("BINARY_TOO_OLD", Excluded(Network)),
+    ("BINARY_MAY_BE_OLDER", Confirms),
+    ("PUSH_SET_TOO_OLD", Excluded(Network)),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
@@ -201,6 +204,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TOOL_MISSING", Runs),
     ("DOCTOR_HOOK_MANAGER", Runs),
     ("DOCTOR_HOOK_WIRING_UNSEEN", Confirms),
+    ("DOCTOR_MANAGER_HOOKS_PATH_RELATIVE", Runs),
     ("DOCTOR_GIT_DIR_HOOKS", Runs),
     ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
     ("DOCTOR_GATE_DIRS", Excluded(HumanAuthority)),
@@ -228,6 +232,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
+    ("DOCTOR_REGISTRY_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
@@ -246,6 +251,8 @@ const ROWS: &[(&str, Proof)] = &[
     // Settings the guard cannot read are the operator's to confirm.
     ("DOCTOR_TEXT_RULE_UNSEEN", Excluded(HumanAuthority)),
     ("GUARD_UNCLASSIFIABLE", Runs),
+    // A human runs a command builder outside the session.
+    ("GUARD_COMMAND_BUILDER", Excluded(HumanAuthority)),
     ("GUARD_UNRESOLVED", Runs),
     ("GUARD_ALIAS", Runs),
     ("GUARD_GIT_CONFIGURATION", Excluded(HumanAuthority)),
@@ -352,7 +359,15 @@ fn command(program: &str, dir: &Path) -> Command {
         .env_remove("BITBUCKET_PR_ID")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("CODEX_HOME")
-        .env_remove("GROK_HOME");
+        .env_remove("GROK_HOME")
+        // A push gate keeps its evidence under the fixture's own `target`,
+        // never the test process's build folder (TSK-1369).
+        .env_remove("CARGO_TARGET_DIR");
+    // The fixtures play a human: a marker inherited from an agent session
+    // would apply the agent-only rules to their commits.
+    for name in codeflow_core::root_checkout::AGENT_MARKERS {
+        cmd.env_remove(name);
+    }
     cmd
 }
 
@@ -587,6 +602,17 @@ fn scaffolded(tier: &str) -> tempfile::TempDir {
         .status()
         .unwrap();
     assert!(status.success());
+    // init wrote the template's absolute hooks path (ADR-0099); the copy is
+    // a repository of its own, so it names its own managed hooks, as
+    // `codeflow update` would set them.
+    let root = copy.path().join("p");
+    let hooks = root.join(".codeflow").join("git-hooks");
+    if hooks.join("pre-commit").is_file() {
+        git(
+            &root,
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+    }
     copy
 }
 
@@ -2100,6 +2126,47 @@ fn clears_push_set_ci() {
     );
 }
 
+/// The note stays, since a repository with no comparable version cannot say
+/// what it needs; the printed step names the binary running, which is the
+/// half of the comparison a person cannot read from the repository.
+#[test]
+fn confirms_binary_may_be_older() {
+    let row = "BINARY_MAY_BE_OLDER";
+    let finding = "this binary (CodeFlow";
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    let state = read(&root, ".codeflow/project.toml");
+    let state: Vec<String> = state
+        .lines()
+        .map(|line| {
+            if line.starts_with("scaffold_version") {
+                "scaffold_version = \"newest\"".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect();
+    write(&root, ".codeflow/project.toml", &state.join("\n"));
+    write(
+        &root,
+        ".codeflow/test-config.json",
+        r#"{"schema_version":"99.0","targets":[]}"#,
+    );
+    let refused = || codeflow(&root, &["test", "--mode", "quick"]);
+    let before = refused();
+    let printed = block(&before, finding).to_string();
+    assert_prints_row(&printed, row);
+    let version = env!("CARGO_PKG_VERSION");
+    assert!(
+        printed.contains(&format!("CodeFlow {version}")),
+        "{printed}"
+    );
+    let step = printed_command(&printed, row, None);
+    let said = run_printed(&root, &step, &[], &[]);
+    assert!(said.starts_with(&format!("codeflow {version}")), "{said}");
+    assert!(refused().contains(finding));
+}
+
 #[test]
 fn clears_push_rewrite() {
     let dir = scaffolded("--standard");
@@ -2200,14 +2267,11 @@ fn doctor(root: &Path, check: &str) -> String {
 fn clears_doctor_hooks_path() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
-    let absolute = root.join(".codeflow/git-hooks");
-    git(
-        &root,
-        &["config", "core.hooksPath", absolute.to_str().unwrap()],
-    );
+    // The relative form earlier releases wrote (ADR-0099).
+    git(&root, &["config", "core.hooksPath", ".codeflow/git-hooks"]);
     prove(
         "DOCTOR_HOOKS_PATH",
-        "core.hooksPath is absolute",
+        "core.hooksPath is the relative",
         || doctor(&root, "hooks"),
         |printed| {
             let step = printed_command(printed, "DOCTOR_HOOKS_PATH", None);
@@ -3535,7 +3599,12 @@ fn confirms_doctor_hook_wiring_unseen() {
     std::fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
     write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
-    git(&root, &["config", "core.hooksPath", ".husky"]);
+    // The absolute form; the relative form is its own note (TSK-1395).
+    let husky = root.join(".husky");
+    git(
+        &root,
+        &["config", "core.hooksPath", husky.to_str().unwrap()],
+    );
     codeflow(&root, &["init", "--yes", "--standard"]);
     let shims: Vec<String> = std::fs::read_dir(root.join(".codeflow/git-hooks"))
         .unwrap()
@@ -3620,6 +3689,42 @@ fn confirms_doctor_hook_wiring_unseen() {
     }
 }
 
+/// TSK-1395: another manager's relative hooks path is a note; its printed
+/// `git config` step sets the absolute path and clears it.
+#[cfg(unix)]
+#[test]
+fn clears_doctor_manager_hooks_path_relative() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
+    git(&root, &["config", "core.hooksPath", ".husky"]);
+    codeflow(&root, &["init", "--yes", "--standard"]);
+    for entry in std::fs::read_dir(root.join(".codeflow/git-hooks")).unwrap() {
+        let name = entry.unwrap().file_name().to_string_lossy().into_owned();
+        let path = root.join(".husky").join(&name);
+        std::fs::write(
+            &path,
+            format!("#!/bin/sh\n.codeflow/git-hooks/{name} \"$@\"\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    prove(
+        "DOCTOR_MANAGER_HOOKS_PATH_RELATIVE",
+        "is relative, so git reads it",
+        || doctor(&root, "hooks"),
+        |printed| {
+            let step = printed_command(printed, "DOCTOR_MANAGER_HOOKS_PATH_RELATIVE", None);
+            run_printed(&root, &step, &[], &[]);
+        },
+    );
+    let after = doctor(&root, "hooks");
+    assert!(after.contains("wiring not verified"), "{after}");
+}
+
 #[test]
 fn clears_doctor_hook_manager() {
     // A project whose git hooks another manager owned before `codeflow init`,
@@ -3629,7 +3734,12 @@ fn clears_doctor_hook_manager() {
     std::fs::create_dir(&root).unwrap();
     git(&root, &["init", "-q", "-b", "main"]);
     write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
-    git(&root, &["config", "core.hooksPath", ".husky"]);
+    // The absolute form; the relative form is its own note (TSK-1395).
+    let husky = root.join(".husky");
+    git(
+        &root,
+        &["config", "core.hooksPath", husky.to_str().unwrap()],
+    );
     let out = codeflow(&root, &["init", "--yes", "--standard"]);
     assert!(
         read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""),
@@ -3664,7 +3774,14 @@ fn clears_doctor_hook_manager() {
         "another hook manager owns",
         || doctor(&root, "hooks"),
         |printed| {
-            assert!(printed.contains("in .husky executable"), "{printed}");
+            // The manager's folder is named under the project on every
+            // platform, also where the temporary folder is a symbolic link.
+            assert!(printed.contains("named in .husky executable"), "{printed}");
+            // TSK-1395: the shim call does not depend on the hook's directory.
+            assert!(
+                printed.contains("/.codeflow/git-hooks/pre-commit\" \"$@\""),
+                "{printed}"
+            );
             // Each manager hook calls its codeflow shim on a live line. The
             // call alone is not enough: TSK-147 round 3 F6 found a hook git
             // skips (not executable) passing on its text, so doctor must
