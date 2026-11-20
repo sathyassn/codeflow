@@ -1,0 +1,11 @@
+id = "TSK-1566"
+uid = "d257ff55-b3b2-412e-bb4c-a35888923a22"
+kind = "TSK"
+title = "The pre-push hook's printed check command gives the hook's verdict"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T13:00:28Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
