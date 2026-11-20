@@ -8,6 +8,8 @@
 //! `git.remote_query_timeout_seconds`, `git.remote_query_attempts` and
 //! `git.remote_fetch_timeout_seconds`, and the guard hook timeout, deadline,
 //! remote lookup wait, pull request lookup wait and refusal write wait.
+//! The push set's time budget, `git.push_budget_seconds` (TSK-1306), is
+//! declared here too.
 
 /// Whether a limit is tuned for speed or holds a safety property.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +79,20 @@ pub const REMOTE_FETCH_TIMEOUT: Limit = Limit {
         "the earlier fixed fetch wait; a fetch carries objects, so it gets longer than a lookup",
 };
 
+/// The pre-push set's time budget (TSK-1306): over it, the hook reports
+/// the slowest step and the slowest checks inside it. It only reports and
+/// never refuses a push, so it holds no safety property.
+pub const PUSH_BUDGET: Limit = Limit {
+    key: Some("git.push_budget_seconds"),
+    name: "push set budget",
+    unit: "seconds",
+    default: 60,
+    min: 1,
+    max: None,
+    class: LimitClass::Operational,
+    reason: "the earlier fixed budget (TSK-132): a push is a backup and should give its verdict inside a minute; a project with a larger history or a slower host sets its own",
+};
+
 /// Seconds a harness waits for a guard hook: the `timeout` every shipped
 /// guard hook entry carries in Claude, Codex and Grok files.
 pub const GUARD_HOOK_TIMEOUT: Limit = Limit {
@@ -143,10 +159,11 @@ pub const GUARD_REFUSAL_WRITE_WAIT: Limit = Limit {
 };
 
 /// Every limit this module declares.
-pub const LIMITS: [Limit; 8] = [
+pub const LIMITS: [Limit; 9] = [
     REMOTE_QUERY_TIMEOUT,
     REMOTE_QUERY_ATTEMPTS,
     REMOTE_FETCH_TIMEOUT,
+    PUSH_BUDGET,
     GUARD_HOOK_TIMEOUT,
     GUARD_DEADLINE,
     GUARD_REMOTE_QUERY_WAIT,
@@ -206,6 +223,7 @@ mod tests {
             for_key("git.remote_query_attempts"),
             Some(&REMOTE_QUERY_ATTEMPTS)
         );
+        assert_eq!(for_key("git.push_budget_seconds"), Some(&PUSH_BUDGET));
     }
 
     /// Everything that sets or spends a configured wait stays out of the
@@ -215,11 +233,12 @@ mod tests {
     /// `policy_authority_journey` proves the behaviour.
     #[test]
     fn guard_code_names_no_configured_wait() {
-        const CONFIGURED: [&str; 7] = [
+        const CONFIGURED: [&str; 8] = [
             "QueryLimits::from",
             "QueryLimits::default",
             "remote_query::ls_remote",
             "remote_query::fetch_objects",
+            "remote_query::fetch_tip",
             "release_line::advertisement",
             "release_line::ask_destination",
             "release_line::checkout_scope",

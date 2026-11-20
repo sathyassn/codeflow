@@ -142,8 +142,35 @@ pub fn digest(bytes: &[u8]) -> String {
     hex
 }
 
+/// The build-output folder the gate uses: `CARGO_TARGET_DIR` as the process
+/// holds it, else `target`. A relative value joins `root`; an absolute one
+/// replaces it.
 pub fn target_dir(root: &Path) -> PathBuf {
-    root.join(std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into()))
+    target_dir_for(root, &build_output_setting())
+}
+
+/// [`target_dir`] for a given `CARGO_TARGET_DIR` value (`target` when the
+/// variable is unset).
+pub fn target_dir_for(root: &Path, configured: &std::ffi::OsStr) -> PathBuf {
+    root.join(configured)
+}
+
+/// `CARGO_TARGET_DIR` as the process holds it, else `target`.
+#[cfg(not(test))]
+fn build_output_setting() -> std::ffi::OsString {
+    std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into())
+}
+
+/// This library's unit tests read the setting as unset, so the build output
+/// is `target` (TSK-1369). In a test process the variable names the folder
+/// cargo builds `CodeFlow` into, never the build output of the temporary
+/// project a test makes, so honouring it would send a test gate's evidence
+/// outside that project. Set values are covered by the tests of
+/// [`target_dir_for`] and [`target_anchor_for`] and, through the real binary,
+/// by the CLI journeys that set the variable (`test_gate_cli/containment.rs`).
+#[cfg(test)]
+fn build_output_setting() -> std::ffi::OsString {
+    "target".into()
 }
 
 /// The trusted folder the gate's evidence writes walk from, and the
@@ -159,7 +186,19 @@ pub fn target_dir(root: &Path) -> PathBuf {
 /// When the build-output path has no parent or a component that is not a
 /// UTF-8 name.
 pub fn target_anchor(root: &Path) -> Result<(PathBuf, String), TestingError> {
-    let configured = std::env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| "target".into());
+    target_anchor_for(root, &build_output_setting())
+}
+
+/// [`target_anchor`] for a given `CARGO_TARGET_DIR` value (`target` when the
+/// variable is unset).
+///
+/// # Errors
+///
+/// As [`target_anchor`].
+pub fn target_anchor_for(
+    root: &Path,
+    configured: &std::ffi::OsStr,
+) -> Result<(PathBuf, String), TestingError> {
     let path = Path::new(&configured);
     if path.is_relative() {
         if let Ok(relative) = crate::contained::relative_to(Path::new(""), path) {
@@ -424,9 +463,9 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
     let reason = if options.all {
         "--all: every target".to_string()
     } else if let Some(base) = &options.since {
-        format!("every target: --since {base} narrows nothing, since no local run record earns selection credit (ADR-0089)")
+        format!("every target: --since {base} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)")
     } else {
-        "every target: no local run record earns selection credit (ADR-0089)".to_string()
+        "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)".to_string()
     };
     Selection {
         selected: eligible,
@@ -438,7 +477,7 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
 }
 
 /// Add every target the selection requires, transitively.
-fn with_prerequisites(
+pub(super) fn with_prerequisites(
     targets: &[TargetConfig],
     mut selected: BTreeSet<String>,
 ) -> BTreeSet<String> {
@@ -497,12 +536,31 @@ pub fn check_only(
 /// UTF-8 is never matched by its lossy spelling. No run is narrowed by it:
 /// no record earns selection credit (ADR-0089).
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = crate::git::command()
+    git_output_with_index(root, args, None)
+}
+
+/// [`git_output`], reading `index` in place of the repository's index when
+/// given. Every read runs with `--no-optional-locks`. That flag does not
+/// stop a porcelain `git diff` from writing refreshed stat data back to the
+/// index it reads (Git 2.53, `diff.autoRefreshIndex`), so a working-tree
+/// diff passes a private copy of the index here (TSK-353).
+pub(super) fn git_output_with_index(
+    root: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+) -> Result<String, String> {
+    let mut command = crate::git::command();
+    command
+        .arg("--no-optional-locks")
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_INDEX_FILE");
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("cannot read Git comparison: {error}"))?;
     if !output.status.success() {
@@ -686,6 +744,44 @@ mod tests {
         );
         assert_eq!(only.selected, every, "--only keeps the prerequisite");
         assert!(only.skipped.is_empty());
+    }
+
+    /// TSK-353 under credit row B: this repository's declared inputs narrow
+    /// no run. Every eligible target of each mode runs with the ADR-0089
+    /// reason, including the `content` targets whose declarations would
+    /// leave out a records-only change and the targets that read docs.
+    #[test]
+    fn this_repositorys_declarations_narrow_no_run() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.codeflow/test-config.json");
+        let config = super::super::config::load_test_config(&path).unwrap();
+        let content: Vec<_> = config
+            .targets
+            .iter()
+            .filter(|t| t.input_class == Some(super::super::config::InputClass::Content))
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(content.contains(&"rust-clippy"), "{content:?}");
+        for mode in ["quick", "essential", "full"] {
+            let every: BTreeSet<String> = config
+                .targets
+                .iter()
+                .filter(|t| t.enabled && t.modes.contains_key(mode))
+                .map(|t| t.name.clone())
+                .collect();
+            for since in [None, Some("HEAD".to_string())] {
+                let selection = select(
+                    &config.targets,
+                    mode,
+                    &GateOptions {
+                        since: since.clone(),
+                        ..GateOptions::default()
+                    },
+                );
+                assert_eq!(selection.selected, every, "{mode} {since:?}");
+                assert!(selection.skipped.is_empty(), "{mode} {since:?}");
+                assert!(selection.reason.contains("ADR-0089"), "{mode}");
+            }
+        }
     }
 
     /// A repository whose index and first commit hold `caf\xe9.txt`, a name
@@ -971,5 +1067,56 @@ mod r22_regressions {
         std::os::unix::fs::symlink("sub", &sub).unwrap();
         let linked = tracked(dir.path()).unwrap();
         assert_ne!(linked, deleted);
+    }
+}
+
+/// TSK-1369: the build-output folder follows the `CARGO_TARGET_DIR` value it
+/// is given, so the adopter rule (TSK-1044) is tested without reading or
+/// changing the test process's environment.
+#[cfg(test)]
+mod build_output_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn the_default_is_the_project_target_folder() {
+        let root = Path::new("project");
+        let value = OsStr::new("target");
+        assert_eq!(target_dir_for(root, value), root.join("target"));
+        let (anchor, output) = target_anchor_for(root, value).unwrap();
+        assert_eq!((anchor.as_path(), output.as_str()), (root, "target"));
+    }
+
+    #[test]
+    fn a_relative_value_stays_under_the_project() {
+        let root = Path::new("project");
+        let value = OsStr::new("build/out");
+        assert_eq!(target_dir_for(root, value), root.join("build/out"));
+        let (anchor, output) = target_anchor_for(root, value).unwrap();
+        assert_eq!((anchor.as_path(), output.as_str()), (root, "build/out"));
+    }
+
+    #[test]
+    fn an_absolute_value_is_anchored_at_its_parent() {
+        let elsewhere = tempfile::tempdir().unwrap();
+        let folder = elsewhere.path().join("cargo-out");
+        let root = Path::new("project");
+        assert_eq!(target_dir_for(root, folder.as_os_str()), folder);
+        let (anchor, output) = target_anchor_for(root, folder.as_os_str()).unwrap();
+        assert_eq!(
+            (anchor.as_path(), output.as_str()),
+            (elsewhere.path(), "cargo-out")
+        );
+    }
+
+    #[test]
+    fn unit_tests_read_the_setting_as_unset() {
+        assert_eq!(build_output_setting(), OsStr::new("target"));
+        let root = Path::new("project");
+        assert_eq!(target_dir(root), root.join("target"));
+        assert_eq!(
+            target_anchor(root).unwrap(),
+            (root.to_path_buf(), "target".into())
+        );
     }
 }

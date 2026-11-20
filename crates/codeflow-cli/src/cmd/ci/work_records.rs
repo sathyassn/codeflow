@@ -8,7 +8,6 @@
 use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
-use codeflow_core::workgraph::durable_work_tracking_enabled;
 use codeflow_core::workgraph::lifecycle::{
     judge_line_under, judge_pull_request_under, judge_release_range, outcome_marker_errors, Brought,
 };
@@ -104,7 +103,8 @@ pub(super) fn check(
     on_line: bool,
     brought: Option<&Brought>,
 ) -> Outcome {
-    match durable_work_tracking_enabled(root) {
+    // Tracking as the checkout, the head and the base carry it (TSK-1257).
+    match super::tracking_judged(root, base, head) {
         Ok(true) => {}
         Ok(false) => {
             return Outcome {

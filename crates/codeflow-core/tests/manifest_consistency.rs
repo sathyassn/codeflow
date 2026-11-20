@@ -353,6 +353,7 @@ fn catalog_manifest_entry(src: &str, dest: &str, tiers: Vec<Tier>) -> ManifestEn
         template: false,
         preset: None,
         region: None,
+        refresh_unmodified: false,
     }
 }
 

@@ -17,6 +17,17 @@ much working method comes with it.
   started: two pull requests each green on an older base can merge and leave
   the branch red. `codeflow doctor --check remote-perimeter` reads the live
   rules back and warns when they do not require that.
+- If your repository already has rulesets, `remote protect` leaves them as
+  they are and adds its own beside them. It changes another ruleset only when
+  you name it with `--adopt`, and only when that ruleset targets exactly the
+  branches of the ruleset it stands for. `--dry-run` reads the host and prints
+  the exact requests a run would send, and `--branch <name>` limits a run to
+  one branch. A protected branch in the policy that the host does not have
+  is reported and gets no ruleset. `codeflow doctor` accepts any active
+  ruleset or branch protection on `codeflow/registry` that blocks force
+  pushes and deletion for everyone, whoever created it: a ruleset counts
+  only with an empty bypass list, and branch protection only when it binds
+  administrators. Rules it cannot read are a warning, never a pass.
 - A project can start at minimal and move up later. A lower-tier request
   never removes files.
 
@@ -178,7 +189,7 @@ the project accepts.
 |---|---|---|
 | Commit | `init` makes the `chore: scaffold codeflow standard tier` commit for you | Nothing is committed; the files wait for you to review and commit them on a branch |
 | Existing files | None to protect | Never overwritten; an existing `CLAUDE.md`, `.claude/settings.json` or `.gitignore` is merged by region |
-| Git hooks | Wired through `core.hooksPath`, and branch policy is armed | If `.husky/` or a custom `core.hooksPath` exists, codeflow leaves hooks alone, records `git_hooks = "unwired"`, and the report shows how to add the `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction` and `pre-push` shims to your manager |
+| Git hooks | Wired through `core.hooksPath`, set to the absolute path of the main working tree's `.codeflow/git-hooks`, which every worktree shares (ADR-0099); branch policy is armed. After the repository moves, `codeflow update` writes the new path | If `.husky/` or a custom `core.hooksPath` exists, codeflow leaves hooks alone, records `git_hooks = "unwired"`, and the report shows how to add the `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction` and `pre-push` shims to your manager, calling each by its absolute path. A manager's relative `core.hooksPath` is read from the directory each command runs in, so `codeflow doctor` notes the invocation classes it misses and the absolute path to set; the manager's install step may set the relative path again |
 
 | Fixed home | Installed at |
 |---|---|
@@ -189,7 +200,7 @@ the project accepts.
 | Case | What to know |
 |---|---|
 | The scaffold commit on a new repository | The one sanctioned commit before the gates guard the repository, so the first PR meets no policy wall. The secret scan is never relaxed, even for that commit |
-| Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing. You choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath`, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat the report while `core.hooksPath` names CodeFlow's hooks and the files stay |
+| Hooks in `.git/hooks`, such as those `pre-commit install` writes | Git stops running them once `init` sets `core.hooksPath`. The report names each one and moves nothing. You choose to move the check into CI or a supported hook manager, or to call it from a project-owned hooks folder, set as `core.hooksPath` by its absolute path, that also calls the CodeFlow shims. `update` and `codeflow doctor` repeat the report while `core.hooksPath` names CodeFlow's hooks and the files stay |
 | An existing default branch that has never carried a policy, such as a hosted repository's "Initial commit" | The adoption branch is pushed through the hooks and its task completes in its own PR, with no hook skip and no direct push to the default branch. Until the policy lands there, release branches are named by the built-in pattern `integration/release-*`, as for a remote with no default branch yet. This holds only when no commit in the default branch's history has carried `.codeflow/policy.json`. A policy that was there and was removed still refuses the push: restore it through a reviewed PR. A clone that cannot prove the absence, because it is shallow, grafted, replaced or missing objects, also refuses: fetch the full history (`git fetch --unshallow`) |
 | The starter ADR in an existing repository | `init` writes `docs/decisions/ADR-0001-stack-choice.md` with its `uid` and reserves ADR-0001 in the local id registry without contacting the remote. The first push publishes the reservation, so the adoption PR adds a record the registry already binds and needs no `codeflow ids admit` step. If the reservation cannot be made, the init report names that step |
 | Update-ignore settings and `/cf-customize` | Update-ignore settings do not choose paths for the first scaffold, and `/cf-customize` runs after init without resolving collisions for you |
@@ -288,11 +299,11 @@ the version of each release unit.
 
 Tell `codeflow test` which commands to run for each part of the project.
 
-1. Run `codeflow test setup`. With no options it checks only root-level
+1. Run `codeflow test setup`. With no options it reads only root-level
    `Cargo.toml`, `package.json`, `go.mod`, `pyproject.toml` or `setup.py`
-   markers and writes the detected targets into an absent or empty
-   `.codeflow/test-config.json`. It does not inspect workspaces recursively or
-   guess package boundaries.
+   markers, never nested packages, and writes each detected target with its
+   [coverage producer](test-gate.md#coverage-rules-and-their-defaults) into
+   an absent or empty `.codeflow/test-config.json`.
 2. Or start from a template, or add targets one at a time:
 
    ```sh
@@ -499,9 +510,9 @@ With no remote, `codeflow integrate` replaces the pull request.
    protected branch or with a breaking commit.
 5. **One review, then land.** A seat of the other model lineage reviews the
    whole change once, and a material finding is fixed in the same PR. The
-   reviewed head lands with the next batch on the integration line. When
-   the PR targets `main`, a human merges it once the required checks are
-   evidenced green. An infrastructure-killed duplicate CI job is not a failed
+   head goes to `main`, where a human merges it once the required checks are
+   evidenced green, or, when no human merges as work becomes ready, to its
+   epic line. An infrastructure-killed duplicate CI job is not a failed
    check. An agent's `gh pr merge` into a protected base is blocked.
 6. **With no remote**, land with `codeflow integrate <branch> --into <target>`.
    A human can override the git layer for a local merge or a protected
@@ -515,7 +526,7 @@ With no remote, `codeflow integrate` replaces the pull request.
 | `pre-push` | Branch naming, protected-branch rules, test gate |
 
 [How work moves to main](delivery.md) covers how a batch of reviewed tasks
-lands with one full gate, how an epic closes into `main`, and what happens
+lands with one full gate, how a line's checkpoints reach `main`, and what happens
 when something changes midway.
 
 ### Related guides

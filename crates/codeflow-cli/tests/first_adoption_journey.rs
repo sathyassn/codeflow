@@ -149,9 +149,13 @@ fn adopt(dir: &Path, origin: &Path) -> PathBuf {
     );
     let adr = std::fs::read_to_string(root.join(ADR)).unwrap();
     assert!(adr.starts_with("---\nid: ADR-0001\nuid: "), "{adr}");
+    // ADR-0099: one absolute path to the main working tree's managed hooks.
     assert_eq!(
         git(&root, &["config", "core.hooksPath"]),
-        ".codeflow/git-hooks"
+        format!(
+            "{}/.codeflow/git-hooks",
+            git(&root, &["rev-parse", "--show-toplevel"])
+        )
     );
     git(&root, &["switch", "-q", "-c", BRANCH]);
     let args = [

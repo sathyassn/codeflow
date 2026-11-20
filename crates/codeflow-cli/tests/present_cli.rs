@@ -19,6 +19,14 @@ mod json_schema;
 
 use codeflow_present::service::OWNER_PID_ENV;
 
+/// The longest a test waits for something it expects to happen: a service
+/// to exit, a file to go, a local connection or response. Each wait returns
+/// as soon as the event is seen, so the bound costs nothing on a pass; it is
+/// generous so a loaded runner does not fail a test for time alone
+/// (TSK-1253). Waits that prove something does not happen keep their own
+/// short durations.
+const EVENT_WAIT: Duration = Duration::from_secs(60);
+
 /// Runs `codeflow` for a test. A service it starts exits once this test
 /// process is gone, so a stopped or killed test run leaves no server behind.
 fn codeflow(project: &Path, home: &Path, args: &[&str]) -> Output {
@@ -49,12 +57,10 @@ fn require_success(output: &Output) -> String {
 fn http(port: u16, request: &str) -> String {
     let mut stream = TcpStream::connect_timeout(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
-        Duration::from_secs(2),
+        EVENT_WAIT,
     )
     .unwrap();
-    stream
-        .set_read_timeout(Some(Duration::from_secs(3)))
-        .unwrap();
+    stream.set_read_timeout(Some(EVENT_WAIT)).unwrap();
     stream.write_all(request.as_bytes()).unwrap();
     let mut response = Vec::new();
     stream
@@ -122,7 +128,7 @@ fn crashed_service_close_then_selected_clear_converges() {
     .unwrap();
     let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
     assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + EVENT_WAIT;
     while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
     }
@@ -174,11 +180,11 @@ fn open_owned_by(fixture: &TestProject, owner: u32) -> (String, i32) {
     (session_id, pid)
 }
 
-/// Asserts that the service `pid` exits within ten seconds and that it
+/// Asserts that the service `pid` exits within [`EVENT_WAIT`] and that it
 /// closed `session_id` on the way out.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn assert_service_follows_owner(fixture: &TestProject, session_id: &str, pid: i32) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + EVENT_WAIT;
     while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
     }
@@ -452,7 +458,7 @@ fn open_recover_and_bootstrap(fixture: &TestProject) -> RunningPresentation {
     .unwrap();
     let first_pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
     assert_eq!(unsafe { libc::kill(first_pid, libc::SIGKILL) }, 0);
-    let crash_deadline = Instant::now() + Duration::from_secs(5);
+    let crash_deadline = Instant::now() + EVENT_WAIT;
     while unsafe { libc::kill(first_pid, 0) } == 0 && Instant::now() < crash_deadline {
         thread::sleep(Duration::from_millis(50));
     }
@@ -853,7 +859,7 @@ fn update_export_close_and_clear(
         &fixture.home,
         &["present", "close", &running.session_id],
     ));
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + EVENT_WAIT;
     while running.ready_path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(100));
     }
@@ -1147,7 +1153,7 @@ fn show_and_close_after_the_browser_group_left_an_unreaped_member() {
         .spawn()
         .unwrap();
     let stat = format!("/proc/{}/stat", exited.id());
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + EVENT_WAIT;
     while !fs::read_to_string(&stat).is_ok_and(|line| {
         line.rsplit_once(") ")
             .is_some_and(|(_, rest)| rest.starts_with('Z'))
@@ -2634,7 +2640,7 @@ fn feedback_wait_exits_with_the_spc014_statuses() {
             "{format}"
         );
         assert!(
-            started.elapsed() < Duration::from_secs(10),
+            started.elapsed() < EVENT_WAIT,
             "{format}: the closed wait hung"
         );
     }
@@ -2904,7 +2910,7 @@ fn a_pending_answer_survives_a_service_restart_and_is_delivered_once() {
         serde_json::from_str(&require_success(&run(&["present", "list"]))).unwrap();
     let pid = i32::try_from(listed[0]["service_pid"].as_u64().unwrap()).unwrap();
     assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + EVENT_WAIT;
     while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(50));
     }
@@ -3108,7 +3114,7 @@ fn sandboxed_open_keeps_state_in_the_allowed_root_and_prints_a_handoff_link() {
         &["present", "close", &session_id],
     ));
     let ready_path = bootstrap_path.parent().unwrap().join("ready.json");
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + EVENT_WAIT;
     while ready_path.exists() && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(100));
     }

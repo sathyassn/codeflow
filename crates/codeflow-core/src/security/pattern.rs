@@ -195,9 +195,42 @@ pub fn match_extended_glob(path: &str, pattern: &str) -> GlobMatch {
     // Recursive search checks the same policy patterns for many names. Bound
     // the cache because this utility also accepts caller-provided patterns.
     static CACHE: OnceLock<GlobCache> = OnceLock::new();
+    #[cfg(test)]
+    if let Some(found) = PRIVATE_CACHE.with(|own| {
+        own.borrow()
+            .as_ref()
+            .map(|cache| cache.matching(path, pattern))
+    }) {
+        return found;
+    }
     CACHE
         .get_or_init(GlobCache::default)
         .matching(path, pattern)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A cache one test owns, set by [`with_private_glob_cache`].
+    static PRIVATE_CACHE: std::cell::RefCell<Option<GlobCache>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs `body` with a fresh glob cache owned by the calling thread, so a test
+/// that walks thousands of names shares no cache entries with other tests
+/// (the shared cache was the state behind the slow
+/// `interpreter_large_glob_requires_a_safe_prefix` run, TSK-1258). Every
+/// other test keeps the process-wide cache the product uses (TSK-1253).
+#[cfg(test)]
+pub(crate) fn with_private_glob_cache<T>(body: impl FnOnce() -> T) -> T {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PRIVATE_CACHE.with(|own| own.borrow_mut().take());
+        }
+    }
+    PRIVATE_CACHE.with(|own| *own.borrow_mut() = Some(GlobCache::default()));
+    let _restore = Restore;
+    body()
 }
 
 /// Whether two glob languages share a path. This is a product walk over
@@ -370,6 +403,31 @@ mod tests {
     /// What a guard does: refuse on a match or on a bound hit.
     fn glob_covers_or_refuses(path: &str, pattern: &str) -> bool {
         match_extended_glob(path, pattern).refuses()
+    }
+
+    /// TSK-1253 AC-5: inside `with_private_glob_cache` a match compiles in
+    /// the test's own cache, and afterwards the thread is back on the shared
+    /// cache the product uses.
+    #[test]
+    fn a_private_glob_cache_serves_its_test_and_is_dropped_after() {
+        use std::sync::atomic::Ordering::Relaxed;
+        let own = |read: fn(&GlobCache) -> usize| {
+            PRIVATE_CACHE.with(|cell| cell.borrow().as_ref().map(read))
+        };
+        with_private_glob_cache(|| {
+            assert_eq!(own(|cache| cache.compiles.load(Relaxed)), Some(0));
+            assert_eq!(
+                match_extended_glob("tsk1253/a.txt", "tsk1253/**/*.txt"),
+                GlobMatch::Match
+            );
+            assert_eq!(own(|cache| cache.compiles.load(Relaxed)), Some(1));
+            assert_eq!(own(|cache| cache.entries.lock().unwrap().len()), Some(1));
+        });
+        assert_eq!(own(|cache| cache.compiles.load(Relaxed)), None);
+        assert_eq!(
+            match_extended_glob("tsk1253/a.txt", "tsk1253/**/*.txt"),
+            GlobMatch::Match
+        );
     }
 
     /// TSK-1258 AC-1: once a cache holds 128 patterns, a pattern used again

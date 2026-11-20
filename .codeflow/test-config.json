@@ -35,7 +35,6 @@
       ".gitattributes",
       ".gitignore",
       ".gitleaks*",
-      "*.md",
       "LICENSE-*",
       "dist-workspace.toml",
       "osv-scanner.toml",
@@ -82,7 +81,12 @@
         "crates/codeflow-present/assets/manifest.json"
       ],
       "exclusive": true,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "narrow": [
+        "crates/codeflow-present/web/**",
+        "scripts/with-node.py"
+      ],
+      "input_class": "remote"
     },
     {
       "name": "rust-build",
@@ -103,7 +107,27 @@
       "exclusive": false,
       "timeout_seconds": 1200,
       "heavy": true,
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md"
+      ],
+      "input_class": "content"
     },
     {
       "name": "codeflow-bin",
@@ -126,7 +150,32 @@
       "exclusive": false,
       "timeout_seconds": 600,
       "heavy": true,
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        "docs/**",
+        "project-management/**",
+        ".agents/**",
+        ".claude/**",
+        "AGENTS.md"
+      ],
+      "input_class": "content"
     },
     {
       "name": "rust-format",
@@ -143,7 +192,13 @@
           "command": "cargo fmt --all -- --check"
         }
       },
-      "requires": []
+      "requires": [],
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "rust-toolchain.toml"
+      ],
+      "input_class": "content"
     },
     {
       "name": "rust-workspace",
@@ -177,7 +232,42 @@
       },
       "requires": [],
       "heavy": true,
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        ".codeflow/**",
+        ".agents/**",
+        ".claude/**",
+        ".codex/**",
+        ".grok/**",
+        ".github/**",
+        ".gitignore",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "docs/architecture.md",
+        "docs/capabilities.md",
+        "docs/product.md",
+        "docs/decisions/ADR-0001-stack-choice.md",
+        "docs/decisions/template.md",
+        "project-management/templates/**"
+      ],
+      "input_class": "content"
     },
     {
       "name": "contract-scans",
@@ -205,7 +295,27 @@
         "codeflow-bin"
       ],
       "heavy": true,
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md"
+      ],
+      "input_class": "content"
     },
     {
       "name": "rust-clippy",
@@ -227,7 +337,27 @@
       "env": {
         "CARGO_TARGET_DIR": "target/clippy"
       },
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md"
+      ],
+      "input_class": "content"
     },
     {
       "name": "rustdoc",
@@ -245,7 +375,27 @@
         "codeflow-bin"
       ],
       "heavy": true,
-      "workers": 9
+      "workers": 9,
+      "narrow": [
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md"
+      ],
+      "input_class": "content"
     },
     {
       "name": "rust-coverage",
@@ -290,7 +440,32 @@
         "scripts/fixtures/**",
         ".release/**",
         "CHANGELOG.md",
-        "changelog.d/**"
+        "changelog.d/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        ".codeflow/**",
+        ".github/**",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        "docs/**",
+        "project-management/**",
+        ".agents/**",
+        ".claude/**"
       ]
     },
     {
@@ -324,7 +499,39 @@
       "requires": [
         "docs-portal"
       ],
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "narrow": [
+        "scripts/test_gate_portal_windows.py",
+        ".codeflow/test-config.json",
+        "docs-portal/**",
+        "docs/**",
+        "project-management/**",
+        ".codeflow/docs-portal.json",
+        "scripts/with-node.py",
+        "scripts/test_portal_workflow.mjs",
+        "scripts/test_gate_schema.mjs",
+        ".codeflow/test-config.schema.json",
+        "assets/**",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        ".agents/**",
+        ".claude/**",
+        "AGENTS.md"
+      ]
     },
     {
       "name": "model-eval-kit",
@@ -345,7 +552,34 @@
         "evals/**",
         ".agents/skills/**",
         ".claude/skills/**",
-        ".claude/agents/**"
+        ".claude/agents/**",
+        "AGENTS.md",
+        "CLAUDE.md",
+        "README.md",
+        ".codeflow/**",
+        ".codex/**",
+        ".grok/**",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        "docs/**",
+        "project-management/**",
+        ".agents/**",
+        ".claude/**"
       ],
       "env": {
         "CODEFLOW_CHECK_KIND": "structural"
@@ -363,7 +597,14 @@
           "command": "python3 -B scripts/with-node.py docs-portal/.node-version \"npm run deps:install --prefix docs-portal\""
         }
       },
-      "timeout_seconds": 300
+      "timeout_seconds": 300,
+      "narrow": [
+        "docs-portal/package.json",
+        "docs-portal/package-lock.json",
+        "docs-portal/.node-version",
+        "scripts/with-node.py"
+      ],
+      "input_class": "remote"
     },
     {
       "name": "visual-eval-controls",
@@ -395,11 +636,10 @@
         }
       },
       "narrow": [
-        "evals/**",
-        ".agents/skills/**",
-        ".claude/skills/**",
-        ".claude/agents/**"
-      ]
+        "evals/skill-triggers/**",
+        "assets/**"
+      ],
+      "input_class": "content"
     },
     {
       "name": "herdr-delivery",
@@ -417,11 +657,12 @@
         }
       },
       "narrow": [
-        "evals/**",
-        ".agents/skills/**",
-        ".claude/skills/**",
-        ".claude/agents/**"
-      ]
+        "evals/herdr-delivery/**",
+        "evals/qualification/**",
+        "assets/**",
+        ".codeflow/**"
+      ],
+      "input_class": "external"
     },
     {
       "name": "docs-validation",
@@ -440,7 +681,28 @@
       ],
       "narrow": [
         "docs/**",
-        "project-management/**"
+        "project-management/**",
+        ".codeflow/**",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        "assets/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        ".agents/**",
+        ".claude/**",
+        "AGENTS.md"
       ]
     },
     {
@@ -506,7 +768,31 @@
         "docs-portal/**",
         "docs/**",
         "project-management/**",
-        ".codeflow/docs-portal.json"
+        ".codeflow/docs-portal.json",
+        "scripts/with-node.py",
+        "scripts/test_portal_workflow.mjs",
+        "scripts/test_gate_schema.mjs",
+        ".codeflow/test-config.schema.json",
+        "assets/**",
+        "crates/**",
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        ".codeflow/policy.json",
+        ".codeflow/.baseline/.github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-release.yml",
+        ".release/config.json",
+        "scripts/release.py",
+        "docs/coordination-ledger.md",
+        "docs-portal/scripts/figure-declaration-rules.json",
+        "changelog.d/TSK-322.md",
+        "changelog.d/TSK-1079.md",
+        ".agents/**",
+        ".claude/**",
+        "AGENTS.md"
       ]
     },
     {
@@ -559,7 +845,12 @@
       ],
       "outputs": [],
       "exclusive": false,
-      "timeout_seconds": 600
+      "timeout_seconds": 600,
+      "narrow": [
+        "crates/codeflow-present/web/**",
+        "scripts/with-node.py"
+      ],
+      "input_class": "remote"
     },
     {
       "name": "present-browser",
@@ -594,6 +885,231 @@
       "timeout_seconds": 2400,
       "heavy": true,
       "workers": 9
+    }
+  ],
+  "guards": [
+    {
+      "paths": [
+        "assets/**",
+        ".agents/**",
+        ".claude/skills/**",
+        ".claude/agents/**",
+        ".codeflow/.baseline/**",
+        ".codeflow/manifest.json",
+        "AGENTS.md",
+        "CLAUDE.md"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli --test init_e2e",
+        "cargo test -p codeflow-cli --test skill_mirrors",
+        "cargo test -p codeflow-cli --test orchestration_contract",
+        "cargo test -p codeflow-core --test manifest_consistency",
+        "cargo test -p codeflow-core --test repository_update_noop",
+        "cargo test -p codeflow-core --test scaffold_test",
+        "cargo test -p codeflow-core --test artifact_budget_contract"
+      ]
+    },
+    {
+      "paths": [
+        ".codeflow/**",
+        ".claude/settings.json",
+        ".claude/workflows/**",
+        ".codex/**",
+        ".grok/**",
+        ".github/pull_request_template.md",
+        ".github/workflows/codeflow-ci.yml",
+        ".github/workflows/codeflow-policy.yml",
+        ".github/workflows/codeflow-registry.yml",
+        ".gitignore",
+        "docs/architecture.md",
+        "docs/capabilities.md",
+        "docs/product.md",
+        "docs/decisions/ADR-0001-stack-choice.md",
+        "docs/decisions/template.md",
+        "project-management/templates/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-core --test repository_update_noop",
+        "cargo test -p codeflow-core --test manifest_consistency"
+      ]
+    },
+    {
+      "paths": [
+        "*.md",
+        "**/*.md"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli --test release_contract"
+      ]
+    },
+    {
+      "paths": [
+        "project-management/**"
+      ],
+      "tests": [
+        "codeflow validate --docs",
+        "cargo test -p codeflow-cli --test release_contract"
+      ]
+    },
+    {
+      "paths": [
+        "docs/**"
+      ],
+      "tests": [
+        "codeflow validate --docs",
+        "codeflow test --only docs-portal",
+        "cargo test -p codeflow-cli --test doc_fact_pins",
+        "cargo test -p codeflow-core --test guide_altitude_budget"
+      ]
+    },
+    {
+      "paths": [
+        "docs-portal/**",
+        "assets/docs-portal/**",
+        ".codeflow/docs-portal.json"
+      ],
+      "tests": [
+        "codeflow test --only docs-portal",
+        "cargo test -p codeflow-core --test guide_altitude_budget",
+        "cargo test -p codeflow-core --test manifest_consistency"
+      ]
+    },
+    {
+      "paths": [
+        "changelog.d/**",
+        "CHANGELOG.md",
+        "scripts/release.py",
+        ".release/**"
+      ],
+      "tests": [
+        "python3 -B scripts/test_release.py",
+        "cargo test -p codeflow-cli --test release_contract"
+      ]
+    },
+    {
+      "paths": [
+        ".codeflow/policy.json",
+        ".codeflow/git-hooks/**",
+        "assets/base/policy.json",
+        "assets/base/git-hooks/**",
+        "assets/base/settings/**",
+        "assets/base/codex/**",
+        "assets/base/grok/**",
+        ".claude/settings.json",
+        ".codex/**",
+        ".grok/**",
+        "crates/codeflow-core/src/hooks/**",
+        "crates/codeflow-core/src/security/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli --test hooks_cli",
+        "cargo test -p codeflow-cli --test refusal_journey",
+        "cargo test -p codeflow-cli --test remedy_clearing",
+        "cargo test -p codeflow-cli --test text_guard_invariant",
+        "cargo test -p codeflow-core --test policy_authority",
+        "cargo test -p codeflow-core --test path_policy",
+        "cargo test -p codeflow-core --test policy_key_placement",
+        "cargo test -p codeflow-core --test policy_key_readers"
+      ]
+    },
+    {
+      "paths": [
+        ".github/**",
+        "assets/base/ci/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli --test release_contract",
+        "cargo test -p codeflow-core --test workflow_timeouts",
+        "cargo test -p codeflow-core --test trusted_verdicts",
+        "python3 -B scripts/test_gate_contracts.py",
+        "python3 -B scripts/test_gate_parity.py"
+      ]
+    },
+    {
+      "paths": [
+        ".codeflow/test-config.json",
+        ".codeflow/test-config.schema.json",
+        "assets/base/testing/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli --test test_gate_cli",
+        "cargo test -p codeflow-core --test integration_testing_setup",
+        "cargo test -p codeflow-core --test gate_input_declarations",
+        "python3 -B scripts/test_gate_contracts.py"
+      ]
+    },
+    {
+      "paths": [
+        "scripts/**"
+      ],
+      "tests": [
+        "codeflow test --mode quick --only gate-parity"
+      ]
+    },
+    {
+      "paths": [
+        "evals/skill-triggers/**"
+      ],
+      "tests": [
+        "python3 -B evals/skill-triggers/test_triggers.py"
+      ]
+    },
+    {
+      "paths": [
+        "evals/herdr-delivery/**",
+        "evals/qualification/**"
+      ],
+      "tests": [
+        "python3 -B evals/herdr-delivery/test_delivery.py"
+      ]
+    },
+    {
+      "paths": [
+        "evals/model-artifacts/**",
+        "evals/grader-dev/**",
+        "evals/holdout.json"
+      ],
+      "tests": [
+        "codeflow test --mode essential --only model-eval-kit"
+      ]
+    },
+    {
+      "paths": [
+        "crates/codeflow-core/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-core",
+        "cargo test -p codeflow-cli"
+      ]
+    },
+    {
+      "paths": [
+        "crates/codeflow-present/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-present",
+        "cargo test -p codeflow-cli"
+      ]
+    },
+    {
+      "paths": [
+        "crates/codeflow-cli/**"
+      ],
+      "tests": [
+        "cargo test -p codeflow-cli"
+      ]
+    },
+    {
+      "paths": [
+        "Cargo.toml",
+        "Cargo.lock",
+        "rust-toolchain.toml",
+        ".cargo/**",
+        ".config/**"
+      ],
+      "tests": [
+        "cargo test --workspace"
+      ]
     }
   ],
   "_description": "Candidate gate: model-eval-kit is a structural and tooling check, not native behavioural qualification."

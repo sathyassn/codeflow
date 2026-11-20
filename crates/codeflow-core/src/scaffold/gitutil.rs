@@ -10,7 +10,15 @@ use crate::shown;
 /// The git subcommand `args` runs, named only when it is one the scaffold
 /// runs; never a path, key, value or message from the arguments.
 fn subcommand(args: &[&str]) -> Shown {
-    const KNOWN: [&str; 6] = ["add", "commit", "config", "diff", "init", "rev-parse"];
+    const KNOWN: [&str; 7] = [
+        "add",
+        "commit",
+        "config",
+        "diff",
+        "init",
+        "rev-parse",
+        "worktree",
+    ];
     let first = args
         .iter()
         .copied()
@@ -184,6 +192,89 @@ pub fn config_get_key(root: &Path, key: &str) -> Result<Option<String>, Scaffold
         }
         _ => Err(failed(&args, &out)),
     }
+}
+
+/// One working tree from `git worktree list --porcelain -z`.
+struct WorkingTree {
+    path: std::path::PathBuf,
+    bare: bool,
+}
+
+/// The repository's working trees as git lists them, the main entry first
+/// (the bare repository itself when there is no main working tree).
+fn worktree_list(root: &Path) -> Result<Vec<WorkingTree>, ScaffoldError> {
+    let args = ["worktree", "list", "--porcelain", "-z"];
+    let out = git(root, &args)?;
+    if !out.status.success() {
+        return Err(failed(&args, &out));
+    }
+    let mut trees: Vec<WorkingTree> = Vec::new();
+    for field in out.stdout.split(|byte| *byte == 0) {
+        if let Some(path) = field.strip_prefix(b"worktree ") {
+            let path = crate::git::GitName::from_bytes(path)
+                .os_path()
+                .map_err(|_| {
+                    ScaffoldError::Git(Shown::fixed(
+                        "git gave a working tree that is not a path here",
+                    ))
+                })?;
+            trees.push(WorkingTree { path, bare: false });
+        } else if field == b"bare" {
+            if let Some(last) = trees.last_mut() {
+                last.bare = true;
+            }
+        }
+    }
+    Ok(trees)
+}
+
+/// The paths of the repository's working trees as git lists them, the main
+/// one first when there is one. A listed tree may no longer exist on disk.
+///
+/// # Errors
+/// Git cannot list the working trees.
+pub fn working_trees(root: &Path) -> Result<Vec<std::path::PathBuf>, ScaffoldError> {
+    Ok(worktree_list(root)?
+        .into_iter()
+        .filter(|tree| !tree.bare)
+        .map(|tree| tree.path)
+        .collect())
+}
+
+/// The main working tree, or `None` for a bare repository with only
+/// linked worktrees.
+///
+/// # Errors
+/// Git cannot list the working trees.
+pub fn main_working_tree(root: &Path) -> Result<Option<std::path::PathBuf>, ScaffoldError> {
+    Ok(worktree_list(root)?
+        .into_iter()
+        .next()
+        .filter(|tree| !tree.bare)
+        .map(|tree| tree.path))
+}
+
+/// The top level of `root`'s working tree, spelled as git spells it.
+///
+/// # Errors
+/// Git cannot name the top level.
+pub fn top_level(root: &Path) -> Result<std::path::PathBuf, ScaffoldError> {
+    let args = ["rev-parse", "--show-toplevel"];
+    let out = git(root, &args)?;
+    if !out.status.success() {
+        return Err(failed(&args, &out));
+    }
+    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+    if bytes.is_empty() || bytes.contains(&0) {
+        return Err(ScaffoldError::Git(Shown::fixed(
+            "invalid top level from git",
+        )));
+    }
+    crate::git::GitName::from_bytes(bytes)
+        .os_path()
+        .map_err(|_| {
+            ScaffoldError::Git(Shown::fixed("git gave a top level that is not a path here"))
+        })
 }
 
 pub fn config_set(root: &Path, key: &str, value: &str) -> Result<(), ScaffoldError> {

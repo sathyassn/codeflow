@@ -358,6 +358,13 @@ catalog! {
     /// A workgraph that does not validate.
     WORKGRAPH_INVALID = Step::Codeflow("codeflow validate"),
         "repair the workgraph until `codeflow validate --docs` passes";
+    /// An unchanged record without a section the project requires
+    /// (TSK-1421).
+    RECORD_SECTION_MISSING = Step::Edit("{path}"),
+        "add the named `##` section to {path}; the next change to the record is refused without it";
+    /// Required record sections read without the landed policy (TSK-1421).
+    RECORD_SECTIONS_UNTRUSTED = Step::Git("git remote set-head"),
+        "run `git remote set-head origin -a` (or `git fetch origin` on git 2.48 or later) so the sections are read from the landed policy; `codeflow ci` judges them at the range's base either way";
     /// A record added by hand, outside the id registry.
     ID_REGISTRY = Step::Codeflow("codeflow ids admit"),
         "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`";
@@ -620,11 +627,23 @@ catalog! {
     SECRET_ENGINE_UNAVAILABLE = Step::Codeflow("codeflow doctor"),
         "download the pinned gitleaks release build ({archive}) over the network from https://github.com/gitleaks/gitleaks/releases, check it against that release's checksums file and put its gitleaks binary on PATH; `codeflow doctor --check secret-engine` then reports it pinned";
 
+    // A binary older than the repository (TSK-1285).
+
+    /// A reader failed and the repository declares a newer `CodeFlow`.
+    BINARY_TOO_OLD = Step::Codeflow("codeflow --version"),
+        "install the release build of CodeFlow {version} or newer (`{install}`) or build it from this repository's source, then run the command again; `codeflow --version` shows the binary on PATH, which is the one the hooks run";
+    /// A reader failed and the repository declares no version to compare.
+    BINARY_MAY_BE_OLDER = Step::Codeflow("codeflow --version"),
+        "this binary (CodeFlow {binary}) may be older than this repository, which declares no version it can compare; run `codeflow --version` and compare it with the release this repository was last updated to";
+
     // The push set.
 
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
         "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";
+    /// A `codeflow ci` run in the push set refused by a too-old binary.
+    PUSH_SET_TOO_OLD = Step::Codeflow("codeflow --version"),
+        "install the newer release build the output above names, then push again; `codeflow --version` shows the binary on PATH, which is the one the hooks run";
     /// A push set that could not start its checks.
     PUSH_SET_BY_HAND = Step::Codeflow("codeflow ci"),
         "run `codeflow ci` by hand";
@@ -633,7 +652,7 @@ catalog! {
         "fetch the destination's protected branches (`git fetch <remote>`) so the range has a base, then push again";
     /// A destination whose default-branch lookup could not be used.
     PUSH_DESTINATION_SILENT = Step::Git("git ls-remote"),
-        "make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push; when it answers but slowly, raise `git.remote_query_timeout_seconds` or `git.remote_query_attempts` on the default branch through a reviewed pull request";
+        "when the message names a setting that would send the lookup elsewhere, remove it or push to the URL it names; otherwise make `git ls-remote --symref <remote>` answer (network access, remote credentials), repair the remote's advertised default branch if needed, then rerun the command or push; when it answers but slowly, raise `git.remote_query_timeout_seconds` or `git.remote_query_attempts` on the default branch through a reviewed pull request";
     /// A push that rewrites the destination's branch.
     PUSH_REWRITE = Step::Git("git pull"),
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";
@@ -658,9 +677,11 @@ catalog! {
 
     // Doctor.
 
-    /// Git hooks that do not run the codeflow shims.
-    DOCTOR_HOOKS_PATH = Step::Git("git config"),
-        "run `git config core.hooksPath {hooks}` so git runs the codeflow shims in each worktree";
+    /// Git hooks that do not run the codeflow shims, or a `core.hooksPath`
+    /// `CodeFlow` wrote in its earlier relative form or that a move left
+    /// stale (ADR-0099).
+    DOCTOR_HOOKS_PATH = Step::Codeflow("codeflow update"),
+        "run `codeflow update` in the project: it sets core.hooksPath to the absolute path of the managed hooks folder, which every worktree of the repository shares";
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
@@ -673,14 +694,18 @@ catalog! {
     /// Git hooks another hook manager owns, whose stages do not call the
     /// codeflow shims.
     DOCTOR_HOOK_MANAGER = Step::Edit("{path}"),
-        "make each hook named in {path} executable, calling its codeflow shim on a live line (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}); `codeflow doctor --check hooks` then stops warning, and a commit with a bad subject being refused confirms the calls run";
+        "make each hook named in {path} executable, calling its codeflow shim by its absolute path on a live line (its pre-commit hook runs `\"{shims}/pre-commit\" \"$@\"`, and so on for {hooks}); `codeflow doctor --check hooks` then stops warning, and a commit with a bad subject being refused confirms the calls run";
+    /// Another manager's relative `core.hooksPath`, which git reads from the
+    /// directory each command runs in (TSK-1395).
+    DOCTOR_MANAGER_HOOKS_PATH_RELATIVE = Step::Git("git config core.hooksPath"),
+        "set core.hooksPath to the folder's absolute path: `git config core.hooksPath \"{absolute}\"`; the manager's install step may set the relative path again, so check after it runs; `codeflow doctor --check hooks` then reads the absolute path";
     /// Manager hooks that name every shim: reading cannot show they run it.
     DOCTOR_HOOK_WIRING_UNSEEN = Step::Git("git commit"),
         "confirm the hooks in {path} run the codeflow shims with a real git event: on a scratch branch, `git commit --allow-empty -m \"Bad subject.\"` must be refused under git.commit_format; `codeflow doctor` reads the hook files and cannot verify that they run";
     /// Hooks in the common git dir that git stops running once the codeflow
     /// shims are wired: the adopter's choice; codeflow moves nothing.
     DOCTOR_GIT_DIR_HOOKS = Step::Edit("{path}"),
-        "for each hook named in {path}, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; (2) keep it: set core.hooksPath to a project-relative hooks folder the project owns, whose hooks call both the check and the CodeFlow shim (the files in {path} may stay if those hooks call them). This warning then stops. After (2), `codeflow doctor --check hooks` reads that folder instead: it warns until its executable hooks name all five CodeFlow shims, then asks for one refused commit to confirm they run";
+        "for each hook named in {path}, choose one: (1) move its check into the project's CI or a supported hook manager (husky, lefthook), then delete the file from {path}; (2) keep it: set core.hooksPath to the absolute path of a hooks folder the project owns, whose hooks call both the check and the CodeFlow shim (the files in {path} may stay if those hooks call them). This warning then stops. After (2), `codeflow doctor --check hooks` reads that folder instead: it warns until its executable hooks name all five CodeFlow shims, then asks for one refused commit to confirm they run";
     /// Hooks that another harness runs only once approved there.
     DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
         "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
@@ -769,6 +794,9 @@ catalog! {
     /// An id registry without host rules.
     DOCTOR_REGISTRY_UNPROTECTED = Step::Codeflow("codeflow remote protect"),
         "run `codeflow remote protect` to apply the host rules for codeflow/registry";
+    /// Host rules on the id registry that doctor could not read (TSK-383).
+    DOCTOR_REGISTRY_UNREAD = Step::Codeflow("codeflow doctor --check id-registry"),
+        "restore the read of the host rules for codeflow/registry: `origin` names one github.com repository for fetch and push, `gh auth status` shows a login whose token can read that repository's rules, and the host is reachable; then `codeflow doctor --check id-registry` reads them, and `codeflow remote protect --branch codeflow/registry` applies any rule they lack";
     /// A default branch whose live rules let a pull request merge on checks
     /// that did not run on its current tip (TSK-261).
     DOCTOR_REMOTE_PERIMETER = Step::Codeflow("codeflow remote protect"),
@@ -826,8 +854,11 @@ catalog! {
     /// A git command whose target repository the guard cannot resolve.
     GUARD_UNRESOLVED = Step::Git("git -C"),
         "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
+    /// A program that builds the commands it runs at run time (TSK-326).
+    GUARD_COMMAND_BUILDER = Step::Git("git commit"),
+        "a human runs `parallel`, `sem` or `env_parallel` outside the session, since the guards cannot read the commands they build; in the session, run each command it would run as its own command (`git commit …`, a removal of a named path), or pass the inputs to a literal command with `xargs`, which the guards read";
     /// A git alias the guard cannot resolve.
-    GUARD_ALIAS = Step::Git("git config"),
+    GUARD_ALIAS =Step::Git("git config"),
         "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set with `git config`, not through `--config-env` or configuration environment variables";
     /// Effective configuration cannot be reproduced for an outward action.
     GUARD_GIT_CONFIGURATION = Step::Git("git config"),
@@ -866,7 +897,7 @@ catalog! {
 
     /// An action reserved for the operator, including a secret-store read.
     OUTWARD_ACTION = Step::Edit(".codeflow/policy.json"),
-        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs";
+        "the operator runs this action personally in a separate terminal; prepare and inspect its inputs here, without retrying another spelling; operator-owned relief is configured in `.codeflow/policy.json`; session policy relaxations take effect only after the operator lands them on the default branch and fetches it, or commits them to HEAD where the repository has no remote or its remote advertises no refs, except `security.trusted_client_configs`, which takes effect only from the remote's default branch as last fetched";
 
     /// A recursive read or glob whose complete selected paths cannot be inspected.
     SECRET_SELECTION = Step::Edit(".codeflow/policy.json"),
