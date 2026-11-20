@@ -63,12 +63,12 @@
         "value": true
       },
       {
-        "claim": "cargo-dist is the only tag publisher",
+        "claim": "the operator creates the tag and cargo-dist publishes the release",
         "source": "docs/releasing.md#architecture",
         "derive": "the publisher bullet",
         "check": {
           "kind": "contains",
-          "text": "- cargo-dist is the only tag, release and artifact publisher."
+          "text": "- cargo-dist is the only release and artifact publisher; the operator creates"
         },
         "value": true
       }
@@ -215,7 +215,7 @@
           "id": "o3"
         },
         {
-          "text": "tag, by cargo",
+          "text": "operator's tag",
           "x": 600,
           "y": 133,
           "for": [
@@ -405,7 +405,7 @@
           "id": "o3"
         },
         {
-          "text": "tag, by cargo",
+          "text": "operator's tag",
           "x": 228,
           "y": 217,
           "for": [
@@ -479,8 +479,8 @@
         ],
         [
           "the target version",
-          "explicit human dispatch",
-          "the tag, created by cargo-dist",
+          "the operator tags the exact main commit, then a human dispatches",
+          "the tag, created by the operator",
           "the authority job"
         ]
       ]

@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-six health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-seven health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,12 +19,13 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-six checks fall into six groups by the surface each one reads.
+The twenty-seven checks fall into six groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
   active hooks directory, the scaffolded CI workflow and, through `gh`, the
-  host rules of the default branch.
+  host rules of the default branch. `remote-ref-protection` checks the remote
+  force-update and deletion rules for every existing protected branch.
 - **Each harness's wiring.** `claude`, `codex` and `grok` look for each
   harness CLI on PATH and for its project hook files. `guard-timeouts`
   reads the CodeFlow guard entries in every hook file a harness reads for
@@ -69,9 +70,9 @@ Doctor exits 0 when no check failed, with or without warnings, and 1 when any
 check failed. Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
 `config`, `permissions`, `policy-source`, `secret-engine`, `model-bindings`,
 `delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
-other fourteen warn at most.
+other fifteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-six names and exits 0.
+- `codeflow doctor --list` prints the twenty-seven names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -97,6 +98,7 @@ Each row below is one check, in the order doctor prints it.
 | `repo-integrity` | `git rev-parse --is-bare-repository`, the `.git` entry, and `git worktree list` against the protected branches in `policy.json`; opens each loose ref, reflog and tracked file | Fail: `core.bare=true` on a repository that has a working tree, or a protected branch is checked out in a linked worktree. Warn: a loose ref this process is refused, which git reports as broken (`bad ref`, `bad object`, a `HEAD` of zeros, every file staged as new) though the repository is intact outside the sandbox. A refused reflog or tracked file is named without a warning | Run `git config core.bare false`. Switch the named worktree to its feature branch. For a refused local branch, outside the sandbox, rename it with `git branch -m <old> <new>`; a refused remote-tracking ref or tag is not renamed |
 | `ci-perimeter` | The CI workflow recorded at install, by default `.github/workflows/codeflow-ci.yml` | Warn: its Install codeflow step is still the shipped placeholder, so the CI test and validate gates fail red and enforce nothing. Ok when no workflow exists | Replace the placeholder step with the release installer or a from-source build |
 | `remote-perimeter` | Through `gh`, the GitHub `origin`'s default branch: the rules its rulesets apply (`gh api repos/<owner>/<repo>/rules/branches/<branch>`), its classic protection and the bypass lists of the rules that require checks, against `git.required_checks`; every repository ruleset, the `codeflow-authority` environment and the default branch's workflows | Fail: "codeflow authority checks" or "codeflow line checks" lists a bypass actor, a recovery window left open. Warn: the branch requires no checks, no rule that requires checks requires the branch to be up to date, a name in `git.required_checks` is not required, or every rule that requires a listed name, or the up-to-date setting, lets administrators or listed actors bypass it; classic protection does not bind administrators; with `--profile`, the owned rulesets differ from the profile; a line rule is not strict or no rule requires a pull request on the lines; an `authority:` check is accepted from GitHub Actions; the authority environment admits more than the default branch or a second job references it; a foreign ruleset requires a name no workflow on the default branch produces. Note: no GitHub `origin`, no `gh`, a policy file that does not parse, a `git.required_checks` list the schema refuses (empty, a blank name or the wrong type) or a misspelt key in its place, or the host rules, the classic protection or a bypass list that decides the answer cannot be read. Only a 404 counts as no classic protection; any other failure to read it is a note unless the rulesets alone meet the policy. A schema error on another key does not stop the check; doctor names it beside the answer | Run `codeflow remote protect`, or have the repository owner turn on "Require branches to be up to date before merging" with the named checks. Without it, two pull requests each green on an older base can merge and leave the branch red. A failure closes with `codeflow remote protect`; a foreign ruleset is retired on the host ([remote protection](policy-reference.md#remote-protection)) |
+| `remote-ref-protection` | Through `gh`, every existing GitHub branch matching `git.protected_branches`, its effective force-update and deletion rules, and the bypass actors; classic protection also needs administrator enforcement | Warn: either control is missing or cannot be verified, including an unreadable branch list, unsupported host or unavailable `gh`. Each affected branch is named, or the configured patterns when branches cannot be listed. Verified protection produces no warning | Run `codeflow remote protect`, or have the owner block force updates and deletions in the host settings with no bypass actors; run this check again |
 | `managed-drift` | Each managed-region file in `.codeflow/manifest.json`, hashing the block between its codeflow markers against the recorded hash | Warn: a listed region was edited inside its markers, and the next `codeflow update` will regenerate it and lose the edit | Move the edit outside the markers, where the content is project-owned |
 | `customization` | `docs/product.md` and `docs/architecture.md` for scaffold placeholders such as `{{PRODUCT_PURPOSE}}`, and `AGENTS.md` for its placeholder comment | Warn: a listed file still holds a placeholder, or one of the two docs is missing. Ok when neither doc exists, as on the minimal tier | Run `/cf-customize` |
 | `instructions` | The `AGENTS.md` chain Codex loads for each directory that holds one, from the root down to that directory, against Codex's instruction limit: `project_doc_max_bytes` from the project's `.codex/config.toml` when set, else 32 KiB | Warn: a chain is over the limit, so Codex cuts its end, where the project section lives. Ok when there is no `AGENTS.md` | Move project detail out of the project section of `AGENTS.md` into files it points at, or raise `project_doc_max_bytes` in `.codex/config.toml` |

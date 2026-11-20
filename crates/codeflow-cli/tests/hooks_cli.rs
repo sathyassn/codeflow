@@ -16,11 +16,23 @@ mod checkout_identity;
 mod host_isolation;
 use host_isolation::{git_command, isolate_clone, isolate_git};
 
+#[path = "hooks_cli/path_writers.rs"]
+mod path_writers;
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
 #[path = "hooks_cli/text_rule.rs"]
 mod text_rule;
+
+#[path = "hooks_cli/leading_words.rs"]
+mod leading_words;
+
+#[path = "hooks_cli/program_word.rs"]
+mod program_word;
+
+#[path = "hooks_cli/skipped_commit.rs"]
+mod skipped_commit;
 
 /// TSK-397: under the strict text rule, the default this suite runs in,
 /// once a line's directory is unknown, the exec guard refuses a word filled in at
@@ -7140,9 +7152,10 @@ fn a_blocked_guard_call_appends_one_refusal_event_without_the_command() {
         ]
     );
     assert!(events.iter().all(|e| e["level"] == "block"), "{events:?}");
+    // `main` is also a branch agents never push (TSK-1479 AC-15).
     assert_eq!(
         events[0]["rules"],
-        serde_json::json!(["git.push_to_protected"])
+        serde_json::json!(["git.push_to_protected", "git.agent_push_refused_branches"])
     );
     let text = refusal_ledger_text(dir.path());
     for content in [token.as_str(), "github.com", "git push", "rm -rf"] {

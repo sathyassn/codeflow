@@ -718,8 +718,10 @@ a prototype is for an interaction or logic question that paper cannot settle.
 - **Unclear operator-owned decision:** ask before materialization. A
   discoverable or reversible technical detail is researched and decided by the
   agents.
-- **Duo seat unavailable:** record preflight evidence and reduced assurance,
-  then use the documented solo flow; never imply approval by both seats.
+- **Duo seat unavailable:** move its challenge or review to another model
+  family's seat when one is available; only when none is, record preflight
+  evidence and reduced assurance, then use the documented solo flow; never
+  imply an approval that did not happen.
 - **Allocation collision:** stop, renumber on the planning branch, repair links,
   and revalidate.
 - **Dangling link, cycle, orphan, draft spec, or incomplete predecessor:** fix

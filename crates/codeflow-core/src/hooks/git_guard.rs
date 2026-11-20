@@ -16,6 +16,9 @@ use serde::Deserialize;
 
 use crate::security::git::{self, ConfigKind, GLOBAL_VALUE_OPTIONS};
 use crate::security::pattern::is_path_targeted;
+use crate::security::shell_lex::{
+    leading_word, leading_word_written, skip_leading, skip_leading_written, LeadingWord, Taker,
+};
 
 use super::git_target::{
     self, assignment, expand_word, flat_top_level, has_substitution, host_absolute, host_path,
@@ -27,6 +30,7 @@ use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
 use crate::root_checkout::RootCheckout;
 
 pub(crate) mod line_home;
+mod path_writers;
 mod runners;
 
 /// Resolves a `gh pr merge <target>` argument (a PR number, URL, or branch;
@@ -82,6 +86,11 @@ pub struct AliasQuery<'s> {
     /// The command's own `-c <name>=<value>` settings, in order. They can
     /// define the alias or an `include.path` that does.
     pub config: &'s [String],
+    /// The configuration variables the command's launchers and
+    /// assignments give Git or take from it, over the guard's own
+    /// environment; a NUL value removes one (TSK-1456). Empty for a
+    /// command Git runs in the guard's environment.
+    pub environment: &'s BTreeMap<String, String>,
     /// The subcommand as written.
     pub name: &'s str,
 }
@@ -177,7 +186,7 @@ pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer 
     for setting in query.config {
         globals.extend(["-c".into(), setting.clone()]);
     }
-    match crate::security::git_config::read(cwd, &globals, &BTreeMap::new()) {
+    match crate::security::git_config::read(cwd, &globals, query.environment) {
         Ok(config) => match config.get(&format!("alias.{}", query.name.to_ascii_lowercase())) {
             Ok(Some(value)) => AliasAnswer::Expansion(value.into()),
             Ok(None) => AliasAnswer::NotAlias,
@@ -1002,7 +1011,20 @@ fn evaluate_report_with_runners(
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
     let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
+    // The refusals of a reading of a program word the guard cannot fill in
+    // carry their way through (TSK-1456): from `.0` on, the hint `.1`.
+    let mut reading: (usize, String) = (violations.len(), String::new());
+    let hint = |violations: &mut Vec<Violation>, (from, hint): &(usize, String)| {
+        for violation in &mut violations[*from..] {
+            violation.message.push_str(hint);
+        }
+    };
     for (idx, segment) in segments.iter().enumerate() {
+        hint(violations, &reading);
+        reading = (
+            violations.len(),
+            unread_program_hint(&unread_words(&expanded.readings, idx)),
+        );
         branches.discard_state_changed = earlier_mutation;
         earlier_mutation |= may_change_discard_state(segment);
         let top_level = match roles.as_ref().map(|r| r[idx]) {
@@ -1029,6 +1051,17 @@ fn evaluate_report_with_runners(
                     ),
                 ));
             }
+            continue;
+        }
+        // A program word the guard cannot read (a file substitution, whose
+        // file the shell runs) could be git itself.
+        if segment == PROGRAM_UNREAD {
+            violations.extend(unclassifiable_violation(
+                ctx.policy,
+                None,
+                "a word in the program position that the guard cannot read decides which program runs",
+                &crate::remedy::GUARD_UNCLASSIFIABLE,
+            ));
             continue;
         }
 
@@ -1063,8 +1096,13 @@ fn evaluate_report_with_runners(
                 v.level_fixed = true;
             }
             if authority || ctx.policy.hook_integrity.is_active() {
+                // A path writer's finding stands beside the git rules that
+                // follow, so at warn it cannot hide their blocks (TSK-1390).
+                let beside = path_writers::is_finding(&v);
                 violations.push(v);
-                continue;
+                if !beside {
+                    continue;
+                }
             }
         }
 
@@ -1111,9 +1149,11 @@ fn evaluate_report_with_runners(
 
         // Dispatch on the argument vector the program receives: unquoted
         // redirections are the shell's, not arguments.
-        let mut words = command_argv(segment);
+        let (mut words, mut marks) = command_argv_marked(segment);
+        let written = words.len();
         strip_reserved_words(&mut words);
-        let launched = configuration_launch(&words);
+        marks.drain(..written - words.len());
+        let launched = configuration_launch(&words, Some(&marks));
         if top_level {
             // A redirection can fail, and the assignment with it.
             let redirected = words.len() != tokens.len();
@@ -1149,9 +1189,32 @@ fn evaluate_report_with_runners(
                     &crate::remedy::GUARD_UNCLASSIFIABLE,
                 ));
             }
+            // A program word the guard cannot fill in (TSK-1456 AC-9).
+            ProgramKind::Other
+                if marks
+                    .get(words.len() - args.len() - 1)
+                    .is_some_and(|marked| expands_marked(marked) || unread_pattern(marked)) =>
+            {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                let from = violations.len();
+                check_unread_git_alias(
+                    args,
+                    &mut branches,
+                    &moved,
+                    ctx,
+                    violations,
+                    &mut notes,
+                    cwd,
+                );
+                hint(
+                    violations,
+                    &(from, unread_program_hint(&[program.to_string()])),
+                );
+            }
             ProgramKind::Other => {}
         }
     }
+    hint(violations, &reading);
     // The closed rule (TSK-242): a line that names a user or system git
     // configuration write and carries a form the guard cannot read refuses,
     // unless a form it does read already refused that write.
@@ -1219,20 +1282,40 @@ fn evaluate_report_with_runners(
 /// bodies unwrapped; quotes and escapes removed; redirections, leading
 /// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
 /// `command`, `builtin` and `exec` launchers stripped. The first element is
-/// the program as written, which may still hold a substitution.
-pub(crate) fn simple_commands(command: &str) -> Vec<Vec<String>> {
-    expand_commands(command)
+/// the program as written, which may still hold a substitution. Each comes
+/// with the same words as written ([`ShellWord::marked`]) and the program
+/// words the guard could not fill in that it is a reading of
+/// ([`unread_words`], TSK-1456).
+pub(crate) fn simple_commands(command: &str) -> Vec<SimpleCommand> {
+    let expanded = expand_commands_read(command);
+    expanded
+        .segments
         .iter()
-        .filter_map(|segment| {
-            let mut words = command_argv(segment);
+        .enumerate()
+        .filter_map(|(index, segment)| {
+            let (mut words, mut marks) = command_argv_marked(segment);
+            let written = words.len();
             strip_reserved_words(&mut words);
-            let (program, args) = strip_launchers(&words)?;
-            let mut command = Vec::with_capacity(args.len() + 1);
-            command.push(program.to_string());
-            command.extend(args.iter().cloned());
-            Some(command)
+            marks.drain(..written - words.len());
+            let (at, _) = launched_at_written(&words, Some(&marks))?;
+            Some(SimpleCommand {
+                words: words.split_off(at),
+                marks: marks.split_off(at),
+                unread: unread_words(&expanded.readings, index),
+            })
         })
         .collect()
+}
+
+/// One simple command [`simple_commands`] reads.
+pub(crate) struct SimpleCommand {
+    /// The program and its arguments, quotes removed.
+    pub(crate) words: Vec<String>,
+    /// The same words as written ([`ShellWord::marked`]).
+    pub(crate) marks: Vec<String>,
+    /// The program words the guard could not fill in that this command is
+    /// a reading of.
+    pub(crate) unread: Vec<String>,
 }
 
 /// Shell reserved words that can open a segment of a control structure
@@ -1321,7 +1404,7 @@ fn laundered_override(tokens: &[String]) -> Option<&'static str> {
         if let Some(var) = assigns(t) {
             return Some(var); // VAR=... as an env-prefix
         }
-        if t.contains('=') && is_identifier(t.split_once('=').map_or("", |(n, _)| n)) {
+        if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
             idx += 1; // some other harmless assignment prefix — keep scanning
             continue;
         }
@@ -1412,7 +1495,7 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
     while idx < tokens.len() {
         let t = tokens[idx].as_str();
         if let Some((n, v)) = t.split_once('=') {
-            if is_identifier(n) {
+            if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
                 out.push((n, v));
                 idx += 1;
                 continue;
@@ -1425,7 +1508,7 @@ fn leading_env_assignments(tokens: &[String]) -> Vec<(&str, &str)> {
         if word == "env" || t == "export" || is_declare_builtin(t) || t == "command" {
             for a in &tokens[idx + 1..] {
                 if let Some((n, v)) = a.split_once('=') {
-                    if is_identifier(n) {
+                    if leading_word(a, Taker::Env) == LeadingWord::Assignment {
                         out.push((n, v));
                     }
                 }
@@ -1455,6 +1538,13 @@ pub(super) fn transport_config_environment(command: &str) -> bool {
 
 fn configuration_variable(name: &str) -> bool {
     name.starts_with("GIT_CONFIG") || matches!(name, "HOME" | "XDG_CONFIG_HOME")
+}
+
+/// Whether a variable a judged command assigns is one of Git's own
+/// (`GIT_*`): the alias precheck (TSK-1456) and the agent-push destination
+/// check (TSK-1479) both step aside when the line sets one.
+fn git_variable(name: &str) -> bool {
+    name.starts_with("GIT_")
 }
 
 fn configuration_environment_change(command: &str) -> Option<String> {
@@ -1624,13 +1714,21 @@ fn configuration_destination(program: &str, word: &str) -> Option<String> {
         .then(|| format!("unresolved variable destination in {program}: {name}"))
 }
 
-/// Look past assignment-shaped words to inspect a possible Git invocation.
+/// The words after every leading word some shell or launcher may take as an
+/// assignment ([`leading_word`] is not [`LeadingWord::Program`]), and after
+/// any other word holding `=` that cannot be a Git or launcher program: the
+/// second reading the outward reader inspects for a possible Git
+/// invocation, beside the first, which judges such a word as the program.
 /// The shape check separately refuses an unresolved destination at that
 /// decision; an uncertain prefix must not hide the command being judged.
 pub(crate) fn configuration_assignment_tail(words: &[String]) -> &[String] {
     let count = words
         .iter()
-        .take_while(|word| configuration_assignment_prefix(word))
+        .take_while(|word| {
+            word.contains('=')
+                && (leading_word(word, Taker::Shell) != LeadingWord::Program
+                    || !configuration_program(word))
+        })
         .count();
     &words[count..]
 }
@@ -1641,22 +1739,49 @@ fn configuration_program(word: &str) -> bool {
         || launcher_name(word) == "env"
 }
 
-fn configuration_assignment_prefix(word: &str) -> bool {
-    word.split_once('=').is_some_and(|(name, _)| {
-        // A literal assignment wins even when its value ends with `/git`.
-        // Otherwise retain a possible Git/launcher program for dispatch.
-        assignment_name(name.strip_suffix('+').unwrap_or(name)) || !configuration_program(word)
-    })
+/// Whether dispatch looks past `word`, with its writing `marked` when the
+/// caller has it ([`leading_word_written`]), to the command after it: an
+/// assignment the shell takes, even when its value ends with `/git`, or a
+/// word holding `=` that cannot be a Git or launcher program. A word some
+/// reader may take as an assignment and that may be Git or a launcher is
+/// judged as the program here, and so is one the shell runs because a
+/// quote stands in its name or `=` when the shell fills in part of it;
+/// [`expand_segments`] judges the command after either as a reading of its
+/// own (TSK-1456).
+fn looked_past(word: &str, marked: Option<&str>) -> bool {
+    let placed = match marked {
+        Some(marked) => leading_word_written(marked, Taker::Shell),
+        None => leading_word(word, Taker::Shell),
+    };
+    let quoted = placed != LeadingWord::Assignment
+        && leading_word(word, Taker::Shell) == LeadingWord::Assignment;
+    word.contains('=')
+        && (placed == LeadingWord::Assignment
+            || !(configuration_program(word) || (quoted && expands(word))))
 }
 
-fn configuration_launch(mut words: &[String]) -> Option<(&str, &[String])> {
+/// The program a segment's words run and its arguments, for dispatch, with
+/// the words as written ([`command_argv_marked`]) when the caller has them,
+/// parallel to `words`.
+fn configuration_launch<'w>(
+    words: &'w [String],
+    marks: Option<&[String]>,
+) -> Option<(&'w str, &'w [String])> {
+    let marks = marks.filter(|marks| marks.len() == words.len());
+    let past = |at: usize| looked_past(&words[at], marks.map(|marks| marks[at].as_str()));
+    let mut from = 0;
     loop {
-        let (program, args) = strip_launchers(configuration_assignment_tail(words))?;
-        if !configuration_assignment_prefix(program) {
-            return Some((program, args));
+        let mut tail = from;
+        while tail < words.len() && past(tail) {
+            tail += 1;
+        }
+        let (at, _) = launched_at_written(&words[tail..], marks.map(|marks| &marks[tail..]))?;
+        let at = tail + at;
+        if !past(at) {
+            return Some((words[at].as_str(), &words[at + 1..]));
         }
         // An env/launcher may expose another unresolved assignment prefix.
-        words = args;
+        from = at + 1;
     }
 }
 
@@ -1936,7 +2061,7 @@ fn hook_skip_env(tokens: &[String]) -> Option<&'static str> {
         if let Some(v) = matches_var(t) {
             return Some(v);
         }
-        if t.contains('=') && is_identifier(t.split_once('=').map_or("", |(n, _)| n)) {
+        if leading_word(t, Taker::Shell) == LeadingWord::Assignment {
             idx += 1;
             continue;
         }
@@ -6334,6 +6459,72 @@ fn integrity_write_violation(
             ))
         })
         .or_else(|| wrapper_write_violation(cmd, args, level, cwd, payload_cwd, line))
+        .or_else(|| git_path_writer_violation(cmd, args, level, cwd, payload_cwd, line))
+}
+
+/// `args` of a `git` command with the literal values the line assigned
+/// before it filled in.
+fn filled_git_args(cmd: &str, args: &[String], line: &str) -> Vec<String> {
+    filled_words(cmd, args, args, line)
+}
+
+/// `words` with the literal values the line assigned before the command
+/// `cmd args` filled in.
+fn filled_words(cmd: &str, args: &[String], words: &[String], line: &str) -> Vec<String> {
+    let mut literals = Literals::default();
+    for argv in &*line_argvs(line) {
+        if strip_launchers(argv)
+            .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
+        {
+            break;
+        }
+        literals.note(argv);
+    }
+    words.iter().map(|word| literals.fill(word)).collect()
+}
+
+/// A Git alias whose expansion `expanded` is a path writer, judged as that
+/// command from every directory the op can run in (issue 633, review PW-1).
+/// `args` is the op as written, which the line's assignments precede.
+fn alias_path_writer_violation(
+    args: &[String],
+    expanded: &[String],
+    moved: &Moves<'_>,
+    level: PolicyLevel,
+    line: &str,
+    cwd: &Path,
+) -> Option<Violation> {
+    if !level.is_active() {
+        return None;
+    }
+    let filled = filled_words("git", args, expanded, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    match &moved.cwd {
+        Cwd::Paths(dirs) => dirs.iter().find_map(|dir| {
+            path_writers::violation(verb, &filled, rest, level, (&cwd.join(dir), cwd), line)
+        }),
+        Cwd::Unknown(why) => path_writers::unknown_directory(verb, rest, level, why),
+    }
+}
+
+/// A Git command that writes work-tree files without moving HEAD, judged by
+/// the content it would put on an enforcement path, read from the object
+/// store (issue 633). It runs after the other writer checks, so a command
+/// they refuse keeps their reading.
+fn git_path_writer_violation(
+    cmd: &str,
+    args: &[String],
+    level: PolicyLevel,
+    cwd: &Path,
+    payload_cwd: &Path,
+    line: &str,
+) -> Option<Violation> {
+    if cmd != "git" || !level.is_active() {
+        return None;
+    }
+    let filled = filled_git_args(cmd, args, line);
+    let (verb, rest) = git_subcommand(&filled)?;
+    path_writers::violation(verb, &filled, rest, level, (cwd, payload_cwd), line)
 }
 
 pub(crate) fn git_command_write_violation(
@@ -6351,16 +6542,7 @@ pub(crate) fn git_command_write_violation(
         return None;
     }
     if cmd == "git" {
-        let mut literals = Literals::default();
-        for words in &*line_argvs(line) {
-            if strip_launchers(words)
-                .is_some_and(|(program, rest)| basename(program) == cmd && rest == args)
-            {
-                break;
-            }
-            literals.note(words);
-        }
-        let filled: Vec<_> = args.iter().map(|word| literals.fill(word)).collect();
+        let filled = filled_git_args(cmd, args, line);
         if let Some((verb, rest)) = git_subcommand(&filled) {
             if verb == "config" {
                 if let Some(finding) = checkout_config_write(rest, level) {
@@ -7262,6 +7444,54 @@ pub(crate) struct Expanded {
     /// the order the line runs them. The closed rule of TSK-242 refuses one
     /// on a line that names a protected target.
     pub(crate) unread_commands: Vec<String>,
+    /// Which segments are other readings of a command (TSK-1456).
+    pub(crate) readings: Vec<Reading>,
+}
+
+/// The segments in `within` are other readings of the command at index
+/// `of` ([`Expanded::segments`]): each runs in its place, not beside it.
+#[derive(Debug)]
+pub(crate) struct Reading {
+    pub(crate) within: std::ops::Range<usize>,
+    pub(crate) of: usize,
+    /// The program word the guard could not fill in, when these are its
+    /// readings ([`unread_program_readings`]).
+    pub(crate) unread: Option<String>,
+}
+
+/// The program words the guard could not fill in that the segment at
+/// `index` is a reading of, outermost first (TSK-1456).
+pub(crate) fn unread_words(readings: &[Reading], index: usize) -> Vec<String> {
+    let mut words: Vec<(usize, &str)> = readings
+        .iter()
+        .filter(|reading| reading.within.contains(&index))
+        .filter_map(|reading| Some((reading.within.start, reading.unread.as_deref()?)))
+        .collect();
+    words.sort_unstable();
+    words.dedup_by(|a, b| a.1 == b.1);
+    words
+        .into_iter()
+        .map(|(_, word)| word.to_string())
+        .collect()
+}
+
+/// The way through for a refusal of a reading of program words the guard
+/// cannot fill in ([`unread_words`]), appended to the refusal's message.
+/// Empty when there are none.
+pub(crate) fn unread_program_hint(words: &[String]) -> String {
+    if words.is_empty() {
+        return String::new();
+    }
+    let shown = words
+        .iter()
+        .map(|word| format!("`{}`", shown_word(word)))
+        .collect::<Vec<_>>()
+        .join(" and ");
+    format!(
+        ". The shell fills in {shown} in the program position only when the command runs, \
+         so the guard judged the command under the programs it guards and refused this \
+         one. Write the program name literally in place of {shown}"
+    )
 }
 
 /// [`expand_commands`], with the command words it could not fill in. A
@@ -7306,8 +7536,11 @@ fn expand_segments(
     git_bodies: bool,
 ) {
     for seg in segments {
-        let mut toks = command_argv(&seg);
+        // Each word as written too, for the readings below (TSK-1456).
+        let (mut toks, mut marks) = command_argv_marked(&seg);
+        let written = toks.len();
         strip_reserved_words(&mut toks);
+        marks.drain(..written - toks.len());
         let carries_git = strip_launchers(&toks)
             .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
         let carried = if !git_bodies && carries_git {
@@ -7317,38 +7550,442 @@ fn expand_segments(
         };
         let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
-        let mut words = toks;
-        strip_reserved_words(&mut words);
-        if let Some((program, _)) = strip_launchers(&words) {
+        let words = toks;
+        let mut unreadable = false;
+        // Other readings of this command (TSK-1456): each runs in its place,
+        // not after it.
+        let mut alternatives: Vec<String> = Vec::new();
+        let mut unread = None;
+        if let Some((at, taker)) = launched_at_written(&words, Some(&marks)) {
+            let program = words[at].as_str();
+            let marked = marks[at].as_str();
+            let placed = leading_word_written(marked, taker);
+            // A program word the guard cannot fill in is judged under the
+            // programs the guards protect (TSK-1456 AC-9).
+            let mut read_unread = |alternatives: &mut Vec<String>| {
+                match unread_program_readings(&marks, at) {
+                    Some(readings) => alternatives.extend(readings),
+                    None => unreadable = true,
+                }
+                unread = Some(program.to_string());
+            };
             if expands(program) {
                 if literals.resolves(program) {
                     bodies.push(literals.fill_words(&words));
                 } else {
                     out.unread_commands.push(program.to_string());
+                    // A substitution keeps git-guard's own refusal, and a
+                    // `$` a quote made literal fills in nothing.
+                    if !program.contains(['`', '\u{1}', '\u{2}']) && expands_marked(marked) {
+                        read_unread(&mut alternatives);
+                    }
+                }
+            } else {
+                // A word `env` reads as an assignment may still be one zsh
+                // rewrites first (`env =name`), so its readings stand too.
+                let unplaced = placed == LeadingWord::Unplaced;
+                match program_readings(&marks, at) {
+                    Some(readings) if !readings.is_empty() => alternatives.extend(readings),
+                    Some(_) if !unplaced && unread_pattern(marked) => {
+                        read_unread(&mut alternatives);
+                    }
+                    Some(_) => {}
+                    None => unreadable = true,
+                }
+            }
+            if placed == LeadingWord::Unplaced {
+                let (readings, incomplete) = other_readings(&marks, at);
+                for reading in readings {
+                    if !alternatives.contains(&reading) {
+                        alternatives.push(reading);
+                    }
+                }
+                if incomplete {
+                    unreadable = true;
+                    out.unread_commands.push(program.to_string());
+                }
+                // A word whose text reads as an assignment, but which the
+                // shell runs because a quote stands in its name or `=`, is
+                // skipped by a reader that has only the text; the same
+                // program spelled as the relative path it is reads as the
+                // program everywhere. Only a word holding `/` can name a
+                // guarded program, and its name, before the `=`, never
+                // starts with `/`.
+                if leading_word(program, taker) == LeadingWord::Assignment && program.contains('/')
+                {
+                    let mut spelled = marks.clone();
+                    spelled[at] = format!("{}{}{marked}", literal_mark('.'), literal_mark('/'));
+                    alternatives.push(requote_words(&spelled));
                 }
             }
         }
+        // A reading goes before the command it reads, so a reader that
+        // walks the line in order (the directories it runs in, TSK-216)
+        // gives it the directory the command starts in, never one the
+        // command itself may have moved to. The command as the shell joins
+        // its expansions is a reading of its own, with no unread word.
+        let joined_first = out.segments.len();
+        if let Some(joined) = joined_expansion_reading(&seg) {
+            expand_bodies(vec![joined], out, depth, literals, git_bodies);
+        }
+        let joined_within = joined_first..out.segments.len();
+        let first = out.segments.len();
+        expand_bodies(alternatives, out, depth, literals, git_bodies);
+        let within = first..out.segments.len();
         // Only the line's own top level: an assignment inside a body or a
         // subshell may not outlive it.
         if depth == 1 {
             literals.note(&words);
         }
         out.segments.push(seg);
-        if bodies.is_empty() {
-            continue;
+        if !joined_within.is_empty() {
+            out.readings.push(Reading {
+                within: joined_within,
+                of: out.segments.len() - 1,
+                unread: None,
+            });
         }
-        if depth > NESTING_LIMIT {
-            if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
-                out.segments.push(NESTING_UNREAD.to_string());
+        if !within.is_empty() {
+            out.readings.push(Reading {
+                within,
+                of: out.segments.len() - 1,
+                unread,
+            });
+        }
+        if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
+            out.segments.push(PROGRAM_UNREAD.to_string());
+        }
+        expand_bodies(bodies, out, depth, literals, git_bodies);
+    }
+}
+
+/// The command `segment` as the shell reads an unquoted `${…}` or `$[…]`
+/// expansion that holds a blank, when that changes the program it runs or
+/// the words in front of it (TSK-1456). The shell keeps such an expansion in
+/// one word, blanks included, while [`shell_words`] splits the word at them,
+/// so a value holding one in front of the program would hide the program.
+/// The reading holds one unknown value in place of each such expansion. A
+/// command whose words up to its program are the same either way has no
+/// reading: its arguments keep the split reading alone.
+fn joined_expansion_reading(segment: &str) -> Option<String> {
+    let joined = join_spaced_expansions(segment)?;
+    let up_to_program = |text: &str| {
+        let (mut words, mut marks) = command_argv_marked(text);
+        let written = words.len();
+        strip_reserved_words(&mut words);
+        marks.drain(..written - words.len());
+        let end = launched_at_written(&words, Some(&marks)).map_or(words.len(), |(at, _)| at + 1);
+        words.truncate(end);
+        words
+    };
+    (up_to_program(&joined) != up_to_program(segment)).then_some(joined)
+}
+
+/// `segment` with each unquoted `${…}` or `$[…]` expansion that holds a
+/// blank replaced by one unknown value ([`substitution_placeholder`]), or
+/// `None` when it has none. Quotes and escapes are read as
+/// [`split_into_segments`] reads them; an expansion with no close stays as
+/// written.
+fn join_spaced_expansions(segment: &str) -> Option<String> {
+    let chars: Vec<char> = segment.chars().collect();
+    let mut out = String::with_capacity(segment.len());
+    let mut joined = false;
+    let (mut single, mut ansi_c, mut double) = (false, false, false);
+    let mut i = 0;
+    while let Some(&c) = chars.get(i) {
+        if single {
+            out.push(c);
+            if ansi_c && c == '\\' {
+                if let Some(&next) = chars.get(i + 1) {
+                    out.push(next);
+                    i += 1;
+                }
+            } else if c == '\'' {
+                single = false;
             }
+            i += 1;
             continue;
         }
-        for body in bodies {
-            let mut inner = Vec::new();
-            split_into_segments(&body, &mut inner, depth, false);
-            expand_segments(inner, out, depth + 1, literals, git_bodies);
+        match c {
+            '\\' => {
+                out.push(c);
+                if let Some(&next) = chars.get(i + 1) {
+                    out.push(next);
+                    i += 1;
+                }
+            }
+            '\'' if !double => {
+                single = true;
+                ansi_c = out.ends_with('$') && !out.ends_with("\\$");
+                out.push(c);
+            }
+            '"' => {
+                double = !double;
+                out.push(c);
+            }
+            '$' if !double => match expansion_end(&chars, i + 1) {
+                Some(end) if chars[i..end].iter().any(|c| matches!(c, ' ' | '\t' | '\n')) => {
+                    out.push(substitution_placeholder(false));
+                    joined = true;
+                    i = end;
+                    continue;
+                }
+                _ => out.push(c),
+            },
+            _ => out.push(c),
+        }
+        i += 1;
+    }
+    joined.then_some(out)
+}
+
+/// The index just past the close of the `${…}` or `$[…]` expansion whose
+/// opening bracket is at `open`, counting nested brackets of its kind
+/// outside quotes and escapes; `None` when `open` holds no such bracket or
+/// the expansion does not close.
+fn expansion_end(chars: &[char], open: usize) -> Option<usize> {
+    let opener = *chars.get(open)?;
+    let close = match opener {
+        '{' => '}',
+        '[' => ']',
+        _ => return None,
+    };
+    let mut depth = 0usize;
+    let (mut single, mut double) = (false, false);
+    let mut i = open;
+    while let Some(&c) = chars.get(i) {
+        match c {
+            '\\' if !single => i += 1,
+            '\'' if !double => single = !single,
+            '"' if !single => double = !double,
+            _ if single || double => {}
+            _ if c == opener => depth += 1,
+            _ if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Expand each body one level deeper than the segment that carries it; past
+/// [`NESTING_LIMIT`], the [`NESTING_UNREAD`] marker.
+fn expand_bodies(
+    bodies: Vec<String>,
+    out: &mut Expanded,
+    depth: usize,
+    literals: &mut Literals,
+    git_bodies: bool,
+) {
+    if bodies.is_empty() {
+        return;
+    }
+    if depth > NESTING_LIMIT {
+        if !out.segments.iter().any(|s| s == NESTING_UNREAD) {
+            out.segments.push(NESTING_UNREAD.to_string());
+        }
+        return;
+    }
+    for body in bodies {
+        let mut inner = Vec::new();
+        split_into_segments(&body, &mut inner, depth, false);
+        expand_segments(inner, out, depth + 1, literals, git_bodies);
+    }
+}
+
+/// The other readings of a command whose word at `at` is
+/// [`LeadingWord::Unplaced`], as shell text (TSK-1456): the command with
+/// that word read as an assignment, so left out, and, when the word holds
+/// braces, with the word read as the words brace expansion makes of it
+/// ([`brace_expand`]). The reading with the word as the program is the
+/// segment itself, so every reading is judged. `marks` are the command's
+/// words as written ([`ShellWord::marked`]), so only braces the shell reads
+/// unquoted expand. The flag is true when brace expansion is past what the
+/// guard reads: the caller refuses, while keeping the completed readings.
+pub(crate) fn other_readings(marks: &[String], at: usize) -> (Vec<String>, bool) {
+    let mut without = marks.to_vec();
+    let word = without.remove(at);
+    let mut readings = vec![requote_words(&without)];
+    if word.contains('{') {
+        let Some(list) = brace_expand(&word) else {
+            return (readings, true);
+        };
+        if list.len() > 1 {
+            readings.push(replaced_word(marks, at, list));
         }
     }
+    (readings, false)
+}
+
+/// Words as written ([`ShellWord::marked`]) with the word at `at` replaced
+/// by `list`, as shell text ([`requote`]).
+fn replaced_word(marks: &[String], at: usize, list: Vec<String>) -> String {
+    let mut listed = marks[..at].to_vec();
+    listed.extend(list);
+    listed.extend_from_slice(&marks[at + 1..]);
+    requote_words(&listed)
+}
+
+/// How zsh reads a word as written ([`ShellWord::marked`]) that may start
+/// with an unquoted `=`.
+enum ZshPath {
+    /// `=name`: the path of `name`.
+    Name(String),
+    /// `=(…)`, which runs a file the guard cannot read.
+    Unreadable,
+    /// Any other word.
+    Plain,
+}
+
+/// The name zsh's `=name` gives the path of, for a word as written whose
+/// `=` is unquoted.
+fn zsh_path_name(marked: &str) -> ZshPath {
+    match marked.strip_prefix('=') {
+        Some(name) if name.starts_with('(') => ZshPath::Unreadable,
+        Some(name) if !name.is_empty() => ZshPath::Name(name.to_string()),
+        _ => ZshPath::Plain,
+    }
+}
+
+/// The other commands a segment runs when the shell rewrites its program
+/// word at `at` before it looks the program up (TSK-1456 AC-9), as shell
+/// text: a brace list (Bash, zsh) is the words it expands to
+/// ([`brace_expand`]), and zsh's `=name`, the `=` unquoted, is the path of
+/// `name`, so it is judged as `name`; zsh reads a `=` that brace expansion
+/// leaves at the front the same way. `marks` are the words as written
+/// ([`ShellWord::marked`]), so a quoted brace or `=` is text. The segment
+/// as written stays judged too, for a shell that reads the word literally.
+/// `None` for zsh's `=(…)`, so the caller refuses the line.
+pub(crate) fn program_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+    let word = marks[at].as_str();
+    let mut readings = Vec::new();
+    match zsh_path_name(word) {
+        ZshPath::Unreadable => return None,
+        ZshPath::Name(name) => readings.push(replaced_word(marks, at, vec![name])),
+        ZshPath::Plain => {}
+    }
+    if word.contains('{') {
+        if let Some(list) = brace_expand(word).filter(|list| list != &[word.to_string()]) {
+            match zsh_path_name(&list[0]) {
+                ZshPath::Unreadable => return None,
+                ZshPath::Name(name) => {
+                    let mut named = list.clone();
+                    named[0] = name;
+                    readings.push(replaced_word(marks, at, named));
+                }
+                ZshPath::Plain => {}
+            }
+            readings.push(replaced_word(marks, at, list));
+        }
+    }
+    Some(readings)
+}
+
+/// Whether a program word as written ([`ShellWord::marked`]) is a pattern
+/// the guard cannot fill in: an unquoted glob (other than the `[` and `[[`
+/// test commands) or unquoted braces past what [`brace_expand`] reads
+/// (TSK-1456 AC-9).
+fn unread_pattern(word: &str) -> bool {
+    (has_glob(word) && !matches!(word, "[" | "[["))
+        || (word.contains('{') && brace_expand(word).is_none())
+}
+
+/// The program names an unread program word is always judged under
+/// ([`unread_program_readings`]).
+const GUARDED_NAMES: &[&str] = &["gh", "claude", "codex", "grok"];
+
+/// The commands a segment may run when the guard cannot fill in its program
+/// word at `at`, an environment value or a pattern (TSK-1456 AC-9), as
+/// shell text, so the line is refused when any of them is refused: the
+/// command under each name in [`GUARDED_NAMES`]; under `git` when an
+/// argument is a git builtin (a first word that is an alias of the
+/// repository is judged by git-guard on the command itself,
+/// [`check_unread_git_alias`]); under `sh` when
+/// the first argument is a short option cluster holding `c`; and, as a
+/// launcher, the command from each later word that is not an option, up to
+/// the first word that is itself unread, whose own readings go on from
+/// there, each also under `eval` when its words hold a blank or shell
+/// syntax that `eval` parses again (`eval` takes no options, so its words
+/// start where the launcher's do). `marks` are the words as written
+/// ([`ShellWord::marked`]), so each reading keeps their quoting. `None`
+/// past [`UNREAD_ARGS_LIMIT`] arguments.
+pub(crate) fn unread_program_readings(marks: &[String], at: usize) -> Option<Vec<String>> {
+    let marked_args = &marks[at + 1..];
+    if marked_args.len() > UNREAD_ARGS_LIMIT {
+        return None;
+    }
+    let args: Vec<String> = marked_args.iter().map(|arg| unmarked(arg)).collect();
+    let with = |name: &str| {
+        let mut named = marks[..at].to_vec();
+        named.push(name.to_string());
+        named.extend_from_slice(marked_args);
+        requote_words(&named)
+    };
+    let mut readings: Vec<String> = GUARDED_NAMES.iter().map(|name| with(name)).collect();
+    if args.iter().any(|arg| GIT_BUILTINS.contains(&arg.as_str())) {
+        readings.push(with("git"));
+    }
+    if args.first().is_some_and(|arg| {
+        arg.len() > 1
+            && arg.starts_with('-')
+            && arg[1..].chars().all(|c| c.is_ascii_alphabetic())
+            && arg.contains('c')
+    }) {
+        readings.push(with("sh"));
+    }
+    let parsed_again = |words: &[String]| {
+        words.iter().any(|word| {
+            word.contains(|c: char| {
+                shell_blank(c)
+                    || matches!(
+                        c,
+                        ';' | '&' | '|' | '<' | '>' | '(' | ')' | '\'' | '"' | '\\' | '`'
+                    )
+            })
+        })
+    };
+    for (k, arg) in args.iter().enumerate() {
+        if arg.starts_with('-') {
+            continue;
+        }
+        let mut launched = marks[..at].to_vec();
+        launched.extend_from_slice(&marked_args[k..]);
+        readings.push(requote_words(&launched));
+        if parsed_again(&args[k..]) {
+            let mut evaluated = marks[..at].to_vec();
+            evaluated.push("eval".to_string());
+            evaluated.extend_from_slice(&marked_args[k..]);
+            readings.push(requote_words(&evaluated));
+        }
+        if expands_marked(&marked_args[k]) || unread_pattern(&marked_args[k]) {
+            break;
+        }
+    }
+    Some(readings)
+}
+
+/// Whether the text of a command before a `(` is a file substitution's `<`
+/// or `>` with nothing before it but keywords and assignments, so the file
+/// the substitution makes is the program (`<(…) args`).
+fn substitution_program(cur: &str) -> bool {
+    let Some(before) = cur.strip_suffix(['<', '>']) else {
+        return false;
+    };
+    if !(before.is_empty() || before.ends_with(shell_blank)) {
+        return false;
+    }
+    before
+        .split(shell_blank)
+        .filter(|word| !word.is_empty())
+        .all(|word| {
+            COMMAND_POSITION_WORDS.contains(&word)
+                || leading_word(word, Taker::Shell) == LeadingWord::Assignment
+        })
 }
 
 /// Whether the shell fills in part of `word` at run time: a `$`, a
@@ -7575,14 +8212,39 @@ pub(crate) fn launched_script(words: &[String], script: &str) -> String {
 /// # Errors
 ///
 /// Why a runner, its command or its directory cannot be read.
-pub(crate) fn git_runner_bodies(
-    command: &str,
-    cwd: &Path,
-) -> Result<Vec<(String, PathBuf)>, String> {
+pub(crate) fn git_runner_bodies(command: &str, cwd: &Path) -> Result<Vec<GitRunnerBody>, String> {
     Ok(runners::read(command, cwd)?
         .into_iter()
-        .map(|body| (body.command, body.directory))
+        .map(|body| GitRunnerBody {
+            command: body.command,
+            directory: body.directory,
+            helper: body.helper,
+        })
         .collect())
+}
+
+/// Whether a runner body is a credential-helper value, and how Git runs it
+/// (TSK-1479).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HelperKind {
+    /// Not a `credential.helper` or `credential.<url>.helper` value.
+    NotHelper,
+    /// A helper value Git runs as written: a leading `!` or an absolute
+    /// path.
+    AsWritten,
+    /// A helper name Git runs as `git credential-<name>`.
+    Named,
+}
+
+/// A command a Git call runs itself, as [`git_runner_bodies`] reads it.
+pub(crate) struct GitRunnerBody {
+    /// The command as Git runs it, without a helper's leading `!`.
+    pub command: String,
+    /// The directory Git runs it in.
+    pub directory: PathBuf,
+    /// Whether the command is a credential-helper value, and how Git runs
+    /// it.
+    pub helper: HelperKind,
 }
 
 /// The environment variables whose value is a program Git runs, as the
@@ -7600,14 +8262,17 @@ pub(crate) fn git_runner_unread(why: &str) -> Violation {
 /// [`git_runner_bodies`] read: exec-guard judges the same runner bodies and
 /// directories as git-guard.
 pub(crate) fn git_runner_write_violation_in(
-    bodies: &[(String, PathBuf)],
+    bodies: &[GitRunnerBody],
     cwd: &Path,
     level: PolicyLevel,
 ) -> Option<Violation> {
     if !level.is_active() {
         return None;
     }
-    for (command, directory) in bodies {
+    for GitRunnerBody {
+        command, directory, ..
+    } in bodies
+    {
         let expanded = expand_shell_commands(command);
         let run = run_dirs(&expanded.segments, directory);
         for segment in &expanded.segments {
@@ -8028,15 +8693,11 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// `-c`, so the text is expanded like any other command. `None` when no
 /// launcher in front uses `-S`.
 pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             idx = skip_launcher_options(t, tokens, idx + 1)?;
@@ -8076,15 +8737,11 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
 /// launcher uses `-S`; an error when the string uses a form the guard does
 /// not read exactly.
 pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             idx = skip_launcher_options(t, tokens, idx + 1)?;
@@ -8434,6 +9091,9 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     // inside it was judged by that call, so each character is read once per
     // nesting level, never once per enclosing group (TSK-216 round 19).
     let mut judged_until = 0usize;
+    // The pipeline a `)` last closed in: text after it with no separator
+    // between continues that command, so a `<(` there is an argument.
+    let mut closed_in: Option<usize> = None;
     // Heredocs opened on the current line; their bodies follow its newline.
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut line = Line::default();
@@ -8606,12 +9266,21 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 if in_pipeline {
                     line.grouped.push(line.pipeline);
                 }
+                // A file substitution in the program position runs a file
+                // the guard cannot read (TSK-1456 AC-9).
+                if closed_in != Some(line.pipeline)
+                    && substitution_program(&cur)
+                    && !out.iter().any(|s| s == PROGRAM_UNREAD)
+                {
+                    out.push(PROGRAM_UNREAD.to_string());
+                }
                 line.end_segment(out, &mut cur, in_pipeline);
                 groups += 1;
                 i += 1;
             }
             ')' => {
                 line.end_segment(out, &mut cur, false);
+                closed_in = Some(line.pipeline);
                 groups = groups.saturating_sub(1);
                 i += 1;
             }
@@ -8836,13 +9505,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
     match strip_launchers(&argv) {
         Some(_) => !reads_as_data(prefix),
         // No program: command position unless the words are all assignments.
-        None => {
-            argv.is_empty()
-                || !argv.iter().all(|w| {
-                    w.split_once('=')
-                        .is_some_and(|(name, _)| is_identifier(name))
-                })
-        }
+        None => argv.is_empty() || skip_leading(&argv, Taker::Shell) < argv.len(),
     }
 }
 
@@ -8853,6 +9516,17 @@ const NESTING_LIMIT: usize = 8;
 /// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
+
+/// The segment that stands for a program word the guard cannot read
+/// (TSK-1456 AC-9): a file substitution in the program position (`<(…)`,
+/// `>(…)`, zsh's `=(…)`), whose file the shell runs, or an unread word
+/// with more arguments than [`UNREAD_ARGS_LIMIT`]. Git-guard refuses it as
+/// unclassifiable.
+pub(crate) const PROGRAM_UNREAD: &str = "\u{1}codeflow: a program word the guard cannot read";
+
+/// The most arguments an unread program word is judged with under each
+/// reading ([`unread_program_readings`]); past it the line is refused.
+const UNREAD_ARGS_LIMIT: usize = 64;
 
 /// Words that leave the shell in command position, so a `(` after them
 /// opens a subshell or a `case` pattern.
@@ -9456,6 +10130,23 @@ impl LineFacts {
         } else {
             (shell.cwd.clone(), top_level)
         };
+        // A configuration change the line makes outside the op's own words.
+        let line_env = tracked
+            .then(|| {
+                shell
+                    .vars
+                    .keys()
+                    .filter(|name| configuration_variable(name))
+                    .min()
+                    .map(|name| format!("environment variable {name}"))
+            })
+            .flatten()
+            .or_else(|| self.mentions.shell_env.clone())
+            .or_else(|| {
+                (!tracked)
+                    .then(|| self.mentions.transport_env.clone())
+                    .flatten()
+            });
         Moves {
             cwd,
             vars: tracked.then_some(&shell.vars),
@@ -9463,25 +10154,8 @@ impl LineFacts {
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
             config_write: self.mentions.config_write.clone(),
-            transport_env: configuration_environment_trigger(tokens)
-                .or_else(|| {
-                    tracked
-                        .then(|| {
-                            shell
-                                .vars
-                                .keys()
-                                .filter(|name| configuration_variable(name))
-                                .min()
-                                .map(|name| format!("environment variable {name}"))
-                        })
-                        .flatten()
-                })
-                .or_else(|| self.mentions.shell_env.clone())
-                .or_else(|| {
-                    (!tracked)
-                        .then(|| self.mentions.transport_env.clone())
-                        .flatten()
-                }),
+            line_env: line_env.is_some(),
+            transport_env: configuration_environment_trigger(tokens).or(line_env),
             git_config_var: self.mentions.git_config_var,
             narrows: tracked,
             tokens,
@@ -9500,6 +10174,9 @@ struct Moves<'r> {
     location_unknown: bool,
     /// A parsed configuration write the alias reader cannot reproduce.
     config_write: Option<String>,
+    /// The line changes Git's configuration environment outside the op's
+    /// own assignments and launchers.
+    line_env: bool,
     transport_env: Option<String>,
     /// The line mentions `GIT_CONFIG`, the file `git config` writes when
     /// no scope option names one.
@@ -9587,6 +10264,80 @@ fn check_authority(
     }
 }
 
+/// A program word the guard cannot fill in may be Git running an alias of
+/// the repository (TSK-1456): when the command's first word that is not an
+/// option is no Git builtin, each alias it names is judged as literal `git`
+/// judges it, and one the guard cannot read refuses as it does for literal
+/// `git`. A builtin is judged through the command's `git` reading
+/// ([`unread_program_readings`]); a word that is no alias names a `git-`
+/// program, which the line could run by its own name as well.
+fn check_unread_git_alias(
+    args: &[String],
+    branches: &mut BranchTracker,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+    notes: &mut Vec<crate::remedy::Finding>,
+    cwd: &Path,
+) {
+    let Some((sub, _)) = git_subcommand(args) else {
+        return;
+    };
+    if GIT_BUILTINS.contains(&sub) || expands(sub) {
+        return;
+    }
+    // Where the line leaves Git's configuration and location to the
+    // command's own words, the Git runner reader follows its launchers
+    // (`env -i`, `env -u`, `exec -c`, `arch -e`) as they act; a word it
+    // finds no alias for there names none.
+    if let Some(starts) = alias_starts(moved, branches.config_changed, cwd) {
+        if matches!(runners::runs_alias(args, moved.tokens, &starts), Ok(false)) {
+            return;
+        }
+    }
+    match expand_alias(args, sub, moved, ctx, 0, branches.config_changed) {
+        Ok(expansions) => {
+            for expanded in expansions {
+                check_git(&expanded, branches, moved, ctx, out, notes, 1, cwd);
+            }
+        }
+        Err(why) => out.extend(
+            Unclassified::Alias(format!(
+                "`git {sub}` may be an alias the guard cannot resolve ({why})"
+            ))
+            .violation(ctx.policy, None),
+        ),
+    }
+}
+
+/// The directories an unread program word's command starts in, before its
+/// launchers, when nothing else on the line changes Git's configuration or
+/// location: no earlier configuration write, no location or configuration
+/// variable set on the line and a known directory. `None` otherwise.
+fn alias_starts(moved: &Moves<'_>, config_changed: bool, cwd: &Path) -> Option<Vec<PathBuf>> {
+    if config_changed
+        || moved.location_unknown
+        || moved.config_write.is_some()
+        || moved.line_env
+        || moved.git_config_var
+        || moved.vars.is_some_and(|vars| {
+            vars.keys()
+                .any(|name| git_variable(name) || configuration_variable(name))
+        })
+    {
+        return None;
+    }
+    let Cwd::Paths(paths) = &moved.cwd else {
+        return None;
+    };
+    Some(
+        paths
+            .iter()
+            .map(|path| integrity_shell_path(path, cwd))
+            .collect(),
+    )
+}
+
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Ordered checks share the parsed command and its exact cwd.
 fn check_git(
     args: &[String],
@@ -9666,6 +10417,16 @@ fn check_git(
         match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
             Ok(expansions) => {
                 for expanded in expansions {
+                    // The alias body may be a path writer; judge it as the
+                    // literal command (issue 633).
+                    out.extend(alias_path_writer_violation(
+                        args,
+                        &expanded,
+                        moved,
+                        ctx.policy.hook_integrity,
+                        &branches.line,
+                        cwd,
+                    ));
                     check_git(&expanded, branches, moved, ctx, out, notes, depth + 1, cwd);
                     branches.discard_state_changed |= git_subcommand(&expanded)
                         .is_none_or(|(sub, rest)| !discard_readonly_git(sub, rest));
@@ -9845,6 +10606,20 @@ fn check_git(
             {
                 found.push(v);
             }
+        }
+    }
+    let invocation = GitInvocation {
+        args,
+        sub,
+        rest,
+        moved,
+    };
+    for v in judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed) {
+        if !found
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            found.push(v);
         }
     }
     if let Some(why) = judged.unresolved {
@@ -10341,6 +11116,9 @@ fn expand_alias(
         }
     }
     let specs = compose_targets(args, moved)?;
+    // The environment the command's launchers leave Git, in which the
+    // admission reading found the alias (TSK-1456).
+    let environment = runners::alias_environment(moved.tokens)?;
     let mut expansions: Vec<Vec<String>> = Vec::new();
     for spec in &specs {
         let query = AliasQuery {
@@ -10349,6 +11127,7 @@ fn expand_alias(
                 git_dir: s.git_dir,
             }),
             config: &config,
+            environment: &environment,
             name: sub,
         };
         let value = match lookup(&query) {
@@ -10578,6 +11357,25 @@ fn inherited_locations(
     Ok(found)
 }
 
+/// The directories the command's launchers move to before Git starts, such
+/// as `env -C DIR` behind `nice`, in order; they come before Git's own `-C`
+/// options. A launcher whose directory the guard cannot be sure of is an
+/// error; an `env` in first place is refused by [`launcher_env`] before
+/// this is read (TSK-1456).
+fn launched_directories(
+    tokens: &[String],
+    vars: &HashMap<String, Val>,
+) -> Result<Vec<String>, String> {
+    let (launched_to, uncertain) = launcher_effects(tokens);
+    if let Some(why) = uncertain {
+        return Err(why);
+    }
+    launched_to
+        .iter()
+        .map(|dir| expand_word(dir, vars))
+        .collect()
+}
+
 /// [`compose_targets`] for git that also inherits `inherited`: an inherited
 /// `GIT_DIR` is the git dir unless the op names one, and an inherited
 /// `GIT_COMMON_DIR` or `GIT_WORK_TREE` leaves the location unresolved, as
@@ -10614,7 +11412,7 @@ fn compose_targets_with(
             _ => {}
         }
     }
-    let mut dash_c: Vec<String> = Vec::new();
+    let mut dash_c = launched_directories(moved.tokens, vars)?;
     let mut idx = 0;
     while idx < args.len() {
         let t = args[idx].as_str();
@@ -12042,10 +12840,435 @@ fn check_registry_push(push: &PushIntent, rest: &[String], out: &mut Vec<Violati
     }
 }
 
+/// The rule that refuses an agent push of a line or the default branch
+/// (TSK-1479 AC-15).
+pub(crate) const AGENT_PUSH_RULE: &str = "git.agent_push_refused_branches";
+
+/// What an agent does instead of pushing a refused branch.
+const AGENT_PUSH_REMEDY: &str = "push a work branch and open a pull request; the operator pushes the default branch and the lines `git.agent_push_refused_branches` names, and a project changes that list on its default branch";
+
+/// Refuse an agent push that updates or deletes a branch agents never push
+/// ([`GitPolicy::agent_push_refusal`]), whatever credential Git uses. A
+/// push that reaches every branch (`--all`, `--branches`, `--mirror`, a
+/// wildcard) can reach the default branch, so it is refused too. Always
+/// blocking: the list is the setting, and the floor has none.
+fn check_agent_push(push: &PushIntent, policy: &GitPolicy, out: &mut Vec<Violation>) {
+    if push.touches_all_branches {
+        out.push(Violation::always_blocking(
+            AGENT_PUSH_RULE,
+            "a push of every branch (`--all`, `--branches`, `--mirror` or a wildcard) can reach branches agents never push".to_string(),
+            AGENT_PUSH_REMEDY,
+        ));
+        return;
+    }
+    for (verb, list) in [("update", &push.updates), ("delete", &push.deletions)] {
+        for target in list {
+            // An empty destination is the matching refspec `:` or an
+            // unnamed current branch; either can reach any branch.
+            if target.is_empty() {
+                out.push(agent_push_unread("a `git push` with no named destination"));
+                continue;
+            }
+            // Git resolves a destination outside `refs/` against the
+            // remote's refs, so `heads/<name>` can update `refs/heads/<name>`.
+            let mut names = std::iter::once(target.as_str()).chain(target.strip_prefix("heads/"));
+            if let Some(entry) = names.find_map(|name| policy.agent_push_refusal(name)) {
+                out.push(Violation::always_blocking(
+                    AGENT_PUSH_RULE,
+                    format!(
+                        "`git push` would {verb} '{target}', which matches `{entry}`; agents never push it"
+                    ),
+                    AGENT_PUSH_REMEDY,
+                ));
+            }
+        }
+    }
+}
+
+/// One git invocation as git-guard's walker parsed it: the words after the
+/// program, the subcommand and its arguments, and what the line around it
+/// moved (directories, assignments).
+struct GitInvocation<'a, 'm> {
+    args: &'a [String],
+    sub: &'a str,
+    rest: &'a [String],
+    moved: &'a Moves<'m>,
+}
+
+/// TSK-1479 AC-15: the refusals of an agent push of a branch agents never
+/// push, for one git invocation already parsed, judged on each case (branch
+/// and policy) of the repositories it may run in. This is the one judgement
+/// both guards apply: git-guard's `check_git` among its other rules, and
+/// exec-guard alone through [`agent_push_refusals`].
+fn judge_agent_push(
+    invocation: &GitInvocation<'_, '_>,
+    cases: &[Case<'_>],
+    cwd: &Path,
+    config_changed: bool,
+) -> Vec<Violation> {
+    let (args, sub, rest) = (invocation.args, invocation.sub, invocation.rest);
+    let mut found = Vec::new();
+    match sub {
+        "push" => {
+            found.extend(agent_push_destination(
+                args,
+                rest,
+                invocation.moved,
+                cwd,
+                config_changed,
+            ));
+            for (branch, rules, _, folds) in cases {
+                with_folds(*folds, || {
+                    check_agent_push(&parse_push(rest, branch), rules, &mut found);
+                });
+            }
+        }
+        // Push forms whose destinations the guard does not read: plumbing,
+        // the WebDAV push, a remote helper run by hand, and `git subtree
+        // push`, which runs its own `git push`.
+        "send-pack" | "http-push" => found.push(agent_push_unread(&format!("`git {sub}`"))),
+        "subtree" if rest.iter().any(|word| word == "push") => {
+            found.push(agent_push_unread("`git subtree push`"));
+        }
+        _ if sub.starts_with("remote-") => {
+            found.push(agent_push_unread(&format!("`git {sub}`")));
+        }
+        _ => {}
+    }
+    let mut unique: Vec<Violation> = Vec::new();
+    for v in found {
+        if !unique
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            unique.push(v);
+        }
+    }
+    unique
+}
+
+/// Whether a segment runs git, so exec-guard's AC-15 pass must read the
+/// line, as git-guard's walker dispatches it.
+fn agent_push_segment(segment: &str) -> bool {
+    let (mut words, mut marks) = command_argv_marked(segment);
+    let written = words.len();
+    strip_reserved_words(&mut words);
+    marks.drain(..written - words.len());
+    configuration_launch(&words, Some(&marks))
+        .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
+}
+
+/// [`check_git`] limited to what [`judge_agent_push`] needs: aliases
+/// expanded, the target repositories and their cases read, and the branch
+/// and configuration changes that later git calls on the line see. None of
+/// git-guard's other rules run.
+fn agent_push_git(
+    args: &[String],
+    branches: &mut BranchTracker,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+    depth: usize,
+    cwd: &Path,
+) {
+    add_unique(&mut branches.planned, planned_worktrees(moved.tokens, cwd));
+    let unclassified = unclassifiable_git(args).is_some();
+    let Some((sub, rest)) = git_subcommand(args) else {
+        branches.head_may_move = true;
+        return;
+    };
+    branches.head_may_move |= !discard_readonly_git(sub, rest);
+    if !unclassified && !GIT_BUILTINS.contains(&sub) {
+        if let Ok(expansions) = expand_alias(args, sub, moved, ctx, depth, branches.config_changed)
+        {
+            for expanded in expansions {
+                agent_push_git(&expanded, branches, moved, ctx, out, depth + 1, cwd);
+            }
+        }
+    }
+    let judged = judge_target(args, branches, moved, ctx);
+    track_branch_move(
+        sub,
+        rest,
+        &judged.track,
+        branches,
+        ctx.policy,
+        moved.narrows,
+    );
+    if sub == "config" && !config_only_reads(rest) {
+        branches.config_changed = true;
+    }
+    let invocation = GitInvocation {
+        args,
+        sub,
+        rest,
+        moved,
+    };
+    let mut found = judge_agent_push(&invocation, &judged.cases, cwd, branches.config_changed);
+    // An unresolved target is judged above by the session's policy, which
+    // does not hold that repository's default branch or list. Fail closed:
+    // a push there is refused, whatever its refspecs name.
+    if let (Some(why), "push") = (&judged.unresolved, sub) {
+        found.push(Violation::always_blocking(
+            AGENT_PUSH_RULE,
+            format!(
+                "`git push` runs in a repository whose policy the guard cannot read ({why}), so it may reach branches agents never push"
+            ),
+            "push from a readable repository whose landed policy the guard reads",
+        ));
+    }
+    for v in found {
+        if !out
+            .iter()
+            .any(|f| f.rule == v.rule && f.message == v.message)
+        {
+            out.push(v);
+        }
+    }
+}
+
+/// Walk the line's segments as git-guard's walker does, keeping the shell,
+/// directory, branch and configuration state later git calls see, and
+/// apply [`judge_agent_push`] to each git invocation.
+fn agent_push_walk(
+    command: &str,
+    expanded: &Expanded,
+    ctx: &GuardContext<'_>,
+    cwd: &Path,
+    out: &mut Vec<Violation>,
+) {
+    let mut branches = BranchTracker::new(ctx.current_branch);
+    branches.line = command.to_string();
+    let segments = &expanded.segments;
+    let roles = flat_top_level(command).and_then(|top| map_top_level(segments, &top));
+    let mut shell = ShellState::new(roles.is_some());
+    let line = LineFacts::read(segments, roles.as_deref(), command);
+    for (idx, segment) in segments.iter().enumerate() {
+        let top_level = match roles.as_ref().map(|r| r[idx]) {
+            Some(Some(join)) => {
+                shell.begin(join);
+                branches.begin(join);
+                true
+            }
+            _ => false,
+        };
+        let mut tokens = shell_tokens(segment);
+        strip_reserved_words(&mut tokens);
+        if tokens.is_empty() || segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
+            continue;
+        }
+        if let Some(dir) = cd_target(&tokens) {
+            if top_level {
+                if tokens[0] == "cd" || plain_pushd(segment) {
+                    shell.cd(&dir);
+                } else {
+                    shell.observe(&tokens[0], &tokens[1..]);
+                }
+            }
+            continue;
+        }
+        let (mut words, mut marks) = command_argv_marked(segment);
+        let written = words.len();
+        strip_reserved_words(&mut words);
+        marks.drain(..written - words.len());
+        let launched = configuration_launch(&words, Some(&marks));
+        if top_level {
+            let redirected = words.len() != tokens.len();
+            shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
+        }
+        let Some((program, args)) = launched else {
+            continue;
+        };
+        if top_level {
+            shell.observe(program, args);
+        }
+        if matches!(program_kind(program), ProgramKind::Git) {
+            let moved = line.moves_for(&shell, top_level, &tokens);
+            agent_push_git(args, &mut branches, &moved, ctx, out, 0, cwd);
+        }
+    }
+}
+
+/// The [`AGENT_PUSH_RULE`] refusals on `command` run in `cwd`, for
+/// exec-guard (TSK-1479 AC-15). The line is parsed by git-guard's walker
+/// and each git invocation judged by [`judge_agent_push`], the judgement
+/// git-guard applies, without git-guard's other rules, so it reads the
+/// same git calls git-guard's AC-15 findings come from. The policy is the
+/// landed policy of the repository at `cwd`, read without asking the
+/// remote, and only for a line that runs git; one that cannot be read is
+/// the built-in policy, whose list is the default. A push into another
+/// repository whose branch or landed policy cannot be read is refused,
+/// since the session's policy does not hold its default branch or list.
+/// Programs Git runs and
+/// the line's runners reach this pass through exec-guard's own judgement
+/// of them as commands.
+pub(crate) fn agent_push_refusals(command: &str, cwd: &Path) -> Vec<Violation> {
+    let expanded = expand_shell_commands(command);
+    if !expanded.segments.iter().any(|s| agent_push_segment(s)) {
+        return Vec::new();
+    }
+    let _facts = super::edit_guard::RepoFactsScope::enter();
+    let policy = super::landed_policy::load_local(cwd)
+        .map(|landed| landed.policy.git)
+        .unwrap_or_default();
+    let repo = super::repo::open(cwd);
+    let branch = match &repo {
+        Ok(Some(repo)) => super::repo::current_branch(repo)
+            .unwrap_or_else(|_| super::policy::NON_UTF8_BRANCH.to_string()),
+        Ok(None) => String::new(),
+        Err(_) => super::policy::NON_UTF8_BRANCH.to_string(),
+    };
+    let common = match &repo {
+        Ok(Some(repo)) => Some(repo.commondir().to_path_buf()),
+        _ => None,
+    };
+    let _folds = super::policy::NonAsciiAliasingScope::decide(|| {
+        common
+            .as_deref()
+            .is_none_or(super::repo::case_insensitive_git_dir)
+    });
+    let target = |spec: &Retarget<'_>| read_target(cwd, common.as_deref(), spec);
+    let alias = |query: &AliasQuery<'_>| read_alias(cwd, query);
+    let branch_name =
+        |target: Option<&Retarget<'_>>, name: &str| read_branch_name(cwd, target, name);
+    let ctx = GuardContext {
+        policy: &policy,
+        current_branch: &branch,
+        integrate_token: false,
+        pr_base_lookup: None,
+        dir_target_lookup: Some(&target),
+        alias_lookup: Some(&alias),
+        branch_lookup: Some(&branch_name),
+        discard_lookup: None,
+        root_checkout: None,
+    };
+    let mut out = Vec::new();
+    agent_push_walk(command, &expanded, &ctx, cwd, &mut out);
+    out
+}
+
+/// The refusal for a push whose destination the guard does not read.
+fn agent_push_unread(what: &str) -> Violation {
+    Violation::always_blocking(
+        AGENT_PUSH_RULE,
+        format!("{what} can reach branches agents never push, and the guard does not read where it pushes"),
+        "push with `git push <remote> <source>:refs/heads/<work branch>`, which names its destination",
+    )
+}
+
+/// Whether a `git push` leaves a destination to configuration: no refspec,
+/// or a refspec without `:`. A delete names its destinations, and a push of
+/// every branch is judged as one.
+fn push_destination_implicit(rest: &[String]) -> bool {
+    let parsed = parse_options(rest, &GIT_PUSH_OPTIONS);
+    let bulk_or_delete = parsed
+        .long
+        .iter()
+        .any(|(name, _)| matches!(*name, "--delete" | "--all" | "--branches" | "--mirror"))
+        || parsed.has_short(&['d']);
+    if bulk_or_delete {
+        return false;
+    }
+    let refspecs = parsed.operands.get(1..).unwrap_or_default();
+    refspecs.is_empty()
+        || refspecs
+            .iter()
+            .any(|spec| !spec.contains(':') && !spec.contains('*'))
+}
+
+/// TSK-1479 AC-15: a `git push` whose destination comes from configuration
+/// (`push.default`, `remote.<name>.push`) is refused unless the guard reads
+/// that configuration in every repository the push may run in and finds the
+/// destination is the source's own name: `push.default` unset, `simple` or
+/// `current`, and no `remote.<name>.push` mapping. Any doubt refuses: an
+/// earlier command that changes configuration, a global option other than
+/// `-C`, `--no-pager` or `-P`, a Git variable assigned on the line, a git
+/// directory, or a read that fails.
+fn agent_push_destination(
+    args: &[String],
+    rest: &[String],
+    moved: &Moves<'_>,
+    cwd: &Path,
+    config_changed: bool,
+) -> Option<Violation> {
+    if !push_destination_implicit(rest) {
+        return None;
+    }
+    let refuse = |why: &str| {
+        Some(agent_push_unread(&format!(
+            "a `git push` whose destination comes from configuration ({why})"
+        )))
+    };
+    if config_changed {
+        return refuse("an earlier command changes Git configuration");
+    }
+    let globals = &args[..args.len().saturating_sub(rest.len() + 1)];
+    let mut index = 0;
+    while let Some(word) = globals.get(index) {
+        match word.as_str() {
+            "-C" => index += 2,
+            "--no-pager" | "-P" => index += 1,
+            _ => return refuse(&format!("the global option `{word}`")),
+        }
+    }
+    if moved.tokens.iter().any(|token| {
+        token
+            .split_once('=')
+            .is_some_and(|(name, _)| git_variable(name))
+    }) {
+        return refuse("a Git variable assigned on the line");
+    }
+    let Ok(specs) = compose_targets(args, moved) else {
+        return refuse("the repository it runs in is not resolved");
+    };
+    for spec in specs {
+        let directory = match spec {
+            None => cwd.to_path_buf(),
+            Some(spec) if !spec.git_dir => cwd.join(&spec.path),
+            Some(_) => return refuse("a git directory named on the line"),
+        };
+        let Ok(config) = crate::security::git_config::read(
+            &directory,
+            &[],
+            &crate::security::git_config::Environment::new(),
+        ) else {
+            return refuse("its configuration cannot be read");
+        };
+        let Ok(keys) = config.keys() else {
+            return refuse("its configuration cannot be read");
+        };
+        if keys.iter().any(|key| {
+            key.starts_with("remote.")
+                && key.rsplit_once('.').is_some_and(|(_, name)| name == "push")
+        }) {
+            return refuse("a `remote.<name>.push` mapping");
+        }
+        match config.get("push.default") {
+            Ok(None) => {}
+            Ok(Some(mode))
+                if mode.eq_ignore_ascii_case("simple") || mode.eq_ignore_ascii_case("current") => {}
+            Ok(Some(mode)) => return refuse(&format!("`push.default` is `{mode}`")),
+            Err(_) => return refuse("`push.default` cannot be read"),
+        }
+    }
+    None
+}
+
 fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
-    let policy = ctx.policy;
     let push = parse_push(rest, branch);
     check_registry_push(&push, rest, out);
+    check_protected_push(&push, rest, ctx, out);
+}
+
+/// The protected-branch rules on a push: `--no-verify`, force, delete and
+/// direct pushes to a protected branch, bulk pushes included.
+fn check_protected_push(
+    push: &PushIntent,
+    rest: &[String],
+    ctx: &GuardContext<'_>,
+    out: &mut Vec<Violation>,
+) {
+    let policy = ctx.policy;
 
     // `--no-verify` skips the pre-push hook; on a protected target that is a
     // gate bypass (an anti-bypass structural block, ADR-0007).
@@ -13187,6 +14410,11 @@ struct ParsedOptions<'a> {
     /// Known options whose required value is absent.
     missing: Vec<&'a str>,
     ended: bool,
+    /// How many operands came before the `--` that ended the options, when
+    /// one did. `--end-of-options` ends them too but leaves a later `--` as
+    /// an operand, which Git commands such as `checkout` still read as the
+    /// pathspec separator.
+    separated: Option<usize>,
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
     sequence: Vec<Seen<'a>>,
@@ -13238,6 +14466,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         unread: Vec::new(),
         missing: Vec::new(),
         ended: false,
+        separated: None,
         short: Vec::new(),
         long: Vec::new(),
         sequence: Vec::new(),
@@ -13251,6 +14480,7 @@ fn parse_options_mode<'a, S: AsRef<str>>(
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
                 parsed.ended = true;
+                parsed.separated = Some(parsed.operands.len());
                 parsed
                     .operands
                     .extend(args[index..].iter().map(AsRef::as_ref));
@@ -13427,6 +14657,156 @@ struct ShellWord {
     /// Whether such an expansion stands outside double quotes too, where
     /// the shell may split its value into several words or glob it.
     splits: bool,
+    /// The word with its expansion provenance (TSK-1456): `text` with each
+    /// ASCII character a quote or escape made literal replaced by its
+    /// [`literal_mark`], and each `$` or backquote inside double quotes,
+    /// which stays an expansion, by its [`quoted_live_mark`]. Every other
+    /// character is as the shell reads it unquoted, so a brace, pattern or
+    /// `=` reading of this form applies only to unquoted text.
+    marked: String,
+}
+
+/// The first stand-in for an ASCII character a quote or escape makes
+/// literal ([`ShellWord::marked`]): this code plus the character's own.
+const LITERAL_MARK: u32 = 0xF_0000;
+
+/// The first stand-in for a `$` or backquote inside double quotes, which
+/// stays an expansion ([`ShellWord::marked`]).
+const QUOTED_LIVE_MARK: u32 = 0xF_0080;
+
+/// The stand-in for `c` made literal by a quote or escape; a character
+/// past ASCII is never shell syntax, so it stays as written ([`unmarked_as`]).
+fn literal_mark(c: char) -> char {
+    if c.is_ascii() {
+        char::from_u32(LITERAL_MARK + u32::from(c)).unwrap_or(c)
+    } else {
+        unmarked_as(c)
+    }
+}
+
+/// `c`, read unquoted, in a marked word ([`ShellWord::marked`]). A written
+/// character that falls among the stand-ins becomes U+FFFD, so no text a
+/// command carries reads back as a quote mark or as the ASCII character a
+/// stand-in names; like the character it replaces, U+FFFD is never shell
+/// syntax.
+fn unmarked_as(c: char) -> char {
+    if (LITERAL_MARK..QUOTED_LIVE_MARK + 0x80).contains(&u32::from(c)) {
+        char::REPLACEMENT_CHARACTER
+    } else {
+        c
+    }
+}
+
+/// The stand-in for a `$` or backquote inside double quotes.
+fn quoted_live_mark(c: char) -> char {
+    char::from_u32(QUOTED_LIVE_MARK + u32::from(c)).unwrap_or(c)
+}
+
+/// The character a stand-in stands for, and whether it is a live `$` or
+/// backquote inside double quotes; `None` for a character the shell reads
+/// unquoted.
+fn marked_char(c: char) -> Option<(char, bool)> {
+    let n = u32::from(c);
+    let ascii = |code: u32| char::from_u32(code).filter(char::is_ascii);
+    if (QUOTED_LIVE_MARK..QUOTED_LIVE_MARK + 0x80).contains(&n) {
+        ascii(n - QUOTED_LIVE_MARK).map(|c| (c, true))
+    } else if (LITERAL_MARK..QUOTED_LIVE_MARK).contains(&n) {
+        ascii(n - LITERAL_MARK).map(|c| (c, false))
+    } else {
+        None
+    }
+}
+
+/// The text of a marked word ([`ShellWord::marked`]): every stand-in back
+/// to its character.
+pub(crate) fn unmarked(word: &str) -> String {
+    word.chars()
+        .map(|c| marked_char(c).map_or(c, |(c, _)| c))
+        .collect()
+}
+
+/// Whether a marked word holds an expansion the shell fills in when the
+/// command runs: an unquoted `$` or backquote, one inside double quotes,
+/// or a substitution the segmenter lifted out. A `$` a quote or escape
+/// made literal is text.
+pub(crate) fn expands_marked(word: &str) -> bool {
+    word.chars().any(|c| {
+        matches!(c, '$' | '`' | '\u{1}' | '\u{2}') || marked_char(c).is_some_and(|(_, live)| live)
+    })
+}
+
+/// A marked word as shell text that reads back as the same marked word
+/// (TSK-1456): unquoted characters stay unquoted, so a brace, pattern or
+/// `=` reading still applies to them, and each stand-in goes back inside
+/// double quotes, escaped when it was literal. A reading built from words
+/// as written keeps their provenance this way.
+pub(crate) fn requote(word: &str) -> String {
+    let mut out = String::new();
+    let mut open = false;
+    for c in word.chars() {
+        match marked_char(c) {
+            // A quote straight after an unquoted `$` would make `$"…"`,
+            // which drops the `$`; a backslash keeps the character literal.
+            Some((c, false)) if !open && out.ends_with('$') && c != '\n' => {
+                out.push('\\');
+                out.push(c);
+            }
+            Some((c, live)) => {
+                if !open {
+                    out.push('"');
+                    open = true;
+                }
+                if !live && matches!(c, '$' | '`' | '"' | '\\') {
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            None => {
+                if open {
+                    out.push('"');
+                    open = false;
+                }
+                out.push(c);
+            }
+        }
+    }
+    if open || out.is_empty() {
+        if out.is_empty() {
+            out.push('"');
+        }
+        out.push('"');
+    }
+    out
+}
+
+/// Words whose writing is not known, as marked words
+/// ([`ShellWord::marked`]): every brace and comma read unquoted, as the
+/// guard read them before it kept the writing (so a reading can only be
+/// added), and every other character literal.
+pub(crate) fn assumed_marks(words: &[String]) -> Vec<String> {
+    words
+        .iter()
+        .map(|word| {
+            word.chars()
+                .map(|c| {
+                    if matches!(c, '{' | '}' | ',') {
+                        c
+                    } else {
+                        literal_mark(c)
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Marked words ([`ShellWord::marked`]) as shell text ([`requote`]).
+fn requote_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| requote(word))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 impl ShellWord {
@@ -13541,6 +14921,8 @@ fn pattern_character(c: char) -> bool {
 fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut words = Vec::new();
     let mut cur = String::new();
+    // `cur` with its provenance ([`ShellWord::marked`]).
+    let mut marked = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut started = false;
@@ -13550,6 +14932,11 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
     let mut expands = false;
     let mut unquoted_expansions: usize = 0;
     let mut pattern = false;
+    // Whether a quote or escape stands in the word before its first `=`:
+    // the shell then takes no assignment, even from an empty quote, so that
+    // `=` is marked literal ([`ShellWord::marked`], TSK-1456).
+    let mut quoted = false;
+    let mut equals = false;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -13559,16 +14946,21 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
         match c {
             '\'' if dollar && !in_single && !in_double => {
                 cur.pop();
+                marked.pop();
                 unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
                 }
-                cur.push_str(&ansi_c_text(&mut chars));
+                let text = ansi_c_text(&mut chars);
+                marked.extend(text.chars().map(literal_mark));
+                cur.push_str(&text);
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '"' if dollar && !in_single && !in_double => {
                 cur.pop();
+                marked.pop();
                 unquoted_expansions = unquoted_expansions.saturating_sub(1);
                 if prefix_open {
                     unquoted_prefix = unquoted_prefix.saturating_sub(1);
@@ -13576,16 +14968,19 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 in_double = true;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '\'' if !in_double => {
                 in_single = !in_single;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '"' if !in_single => {
                 in_double = !in_double;
                 started = true;
                 prefix_open = false;
+                quoted = true;
             }
             '\\' if !in_single => {
                 // A backslash-newline is a line continuation: both vanish.
@@ -13598,10 +14993,14 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                     Some(next) => {
                         if in_double && !matches!(next, '$' | '`' | '"' | '\\') {
                             cur.push('\\');
+                            marked.push(literal_mark('\\'));
                         }
                         cur.push(next);
+                        marked.push(literal_mark(next));
                         started = true;
                         prefix_open = false;
+                        quoted = true;
+                        equals |= next == '=';
                     }
                 }
             }
@@ -13610,6 +15009,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                 // per element. Preserve it for the configuration diagnostic.
                 let array = capture_array_initializer(&mut chars);
                 cur.push_str(&array);
+                marked.extend(array.chars().map(unmarked_as));
                 expands |= array.contains(['$', '`']);
                 unquoted_expansions += usize::from(array.contains(['$', '`']));
                 if prefix_open {
@@ -13630,14 +15030,28 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
                         pattern: std::mem::take(&mut pattern),
                         expands: std::mem::take(&mut expands),
                         splits: std::mem::take(&mut unquoted_expansions) > 0,
+                        marked: std::mem::take(&mut marked),
                     });
                     started = false;
                 }
                 prefix_open = true;
                 unquoted_prefix = 0;
+                quoted = false;
+                equals = false;
             }
             c => {
                 cur.push(c);
+                let quoted_name = c == '=' && quoted && !equals;
+                equals |= c == '=';
+                marked.push(
+                    if in_single || (in_double && !matches!(c, '$' | '`')) || quoted_name {
+                        literal_mark(c)
+                    } else if in_double {
+                        quoted_live_mark(c)
+                    } else {
+                        unmarked_as(c)
+                    },
+                );
                 started = true;
                 pattern |= !in_single && !in_double && pattern_character(c);
                 if prefix_open && !in_single && !in_double {
@@ -13657,6 +15071,7 @@ fn shell_words(segment: &str) -> Vec<ShellWord> {
             pattern,
             expands,
             splits: unquoted_expansions > 0,
+            marked,
         });
     }
     words
@@ -13741,6 +15156,15 @@ pub(crate) fn command_argv_literal(segment: &str) -> (Vec<String>, Vec<bool>) {
         .unzip()
 }
 
+/// The same argument vector with each word's expansion provenance
+/// ([`ShellWord::marked`], TSK-1456), parallel to the words.
+pub(crate) fn command_argv_marked(segment: &str) -> (Vec<String>, Vec<String>) {
+    argv_words(segment)
+        .into_iter()
+        .map(|word| (word.text, word.marked))
+        .unzip()
+}
+
 /// The words of [`command_argv`] with their parse.
 fn argv_words(segment: &str) -> Vec<ShellWord> {
     let words = shell_words(segment);
@@ -13787,28 +15211,48 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
 pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
+    let (at, _) = launched_at(tokens)?;
+    Some((tokens[at].as_str(), &tokens[at + 1..]))
+}
+
+/// [`strip_launchers`] as the index of the program word, with who read the
+/// words just before it: [`Taker::Env`] after `env`'s words, else
+/// [`Taker::Shell`]. Only assignments ([`leading_word`]) are skipped
+/// (TSK-1456).
+pub(crate) fn launched_at(tokens: &[String]) -> Option<(usize, Taker)> {
+    launched_at_written(tokens, None)
+}
+
+/// [`launched_at`] with the words as written ([`ShellWord::marked`]),
+/// parallel to `tokens`, so a word whose name or `=` a quote made literal
+/// is not skipped as an assignment ([`leading_word_written`]).
+pub(crate) fn launched_at_written(
+    tokens: &[String],
+    marks: Option<&[String]>,
+) -> Option<(usize, Taker)> {
+    let marks = marks.filter(|marks| marks.len() == tokens.len());
     let mut idx = 0;
+    let mut taker = Taker::Shell;
     loop {
         // Skip leading VAR=val assignments.
-        while idx < tokens.len() {
-            let t = tokens[idx].as_str();
-            if t.split_once('=')
-                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-            {
-                idx += 1;
-            } else {
-                break;
-            }
-        }
+        idx += match marks {
+            Some(marks) => marks
+                .get(idx..)
+                .map_or(0, |rest| skip_leading_written(rest, taker)),
+            None => tokens
+                .get(idx..)
+                .map_or(0, |rest| skip_leading(rest, taker)),
+        };
         let t = tokens.get(idx)?.as_str();
         if is_prefix_launcher(t) {
             match skip_launcher_options(t, tokens, idx + 1) {
                 Some(next) => {
                     idx = next;
+                    taker = Taker::Shell;
                     continue;
                 }
                 // `command -v git` only looks the name up; nothing runs.
-                None => return Some((t, &tokens[idx + 1..])),
+                None => return Some((idx, taker)),
             }
         }
         if basename(t) == "busybox"
@@ -13817,6 +15261,7 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 .is_some_and(|a| is_shell(a) || matches!(a.as_str(), "ln" | "link" | "cp" | "dd"))
         {
             idx += 1;
+            taker = Taker::Shell;
             continue;
         }
         if launcher_name(t) == "env" {
@@ -13833,17 +15278,16 @@ pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
                 Err(_) => {
                     idx += 1;
                     while tokens.get(idx).is_some_and(|a| {
-                        a.starts_with('-')
-                            || a.split_once('=')
-                                .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
+                        a.starts_with('-') || leading_word(a, Taker::Env) == LeadingWord::Assignment
                     }) {
                         idx += 1;
                     }
                 }
             }
+            taker = Taker::Env;
             continue;
         }
-        return Some((t, &tokens[idx + 1..]));
+        return Some((idx, taker));
     }
 }
 
@@ -13867,16 +15311,12 @@ fn is_duration(word: &str) -> bool {
 /// -S`, which packs the command into one word, ends this walk;
 /// [`expand_commands`] reads the packed command as its own segments.
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
     let mut dirs = Vec::new();
     let mut idx = 0;
     loop {
-        while tokens.get(idx).is_some_and(|t| assignment(t)) {
-            idx += 1;
-        }
+        idx += tokens
+            .get(idx..)
+            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
         let Some(t) = tokens.get(idx).map(String::as_str) else {
             return (dirs, None);
         };
@@ -13969,10 +15409,7 @@ fn env_long_option(name: &str) -> Result<(&'static str, Option<bool>), &'static 
 /// guessing where the command starts or which directory it runs in.
 pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_>, String> {
     let mut words = EnvWords::default();
-    let assignment = |t: &str| {
-        t.split_once('=')
-            .is_some_and(|(name, _)| !name.is_empty() && is_identifier(name))
-    };
+    let assignment = |t: &str| leading_word(t, Taker::Env) == LeadingWord::Assignment;
     let mut options = true;
     while let Some(a) = tokens.get(idx).map(String::as_str) {
         if options && a == "--" {
@@ -15410,6 +16847,7 @@ mod tests {
                 &AliasQuery {
                     target: None,
                     config: &config,
+                    environment: &BTreeMap::new(),
                     name: "x"
                 }
             ),
@@ -16076,8 +17514,10 @@ mod tests {
             "git push origin +feat/x:main",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
-            assert_eq!(v.len(), 1, "{cmd}");
+            // `main` is also a branch agents never push (TSK-1479 AC-15).
+            assert_eq!(v.len(), 2, "{cmd}");
             assert_eq!(v[0].rule, "git.force_push_protected", "{cmd}");
+            assert_eq!(v[1].rule, AGENT_PUSH_RULE, "{cmd}");
         }
     }
 
@@ -16115,8 +17555,10 @@ mod tests {
             "git push -d origin main",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
-            assert_eq!(v.len(), 1, "{cmd}");
+            // `main` is also a branch agents never push (TSK-1479 AC-15).
+            assert_eq!(v.len(), 2, "{cmd}");
             assert_eq!(v[0].rule, "git.delete_protected", "{cmd}");
+            assert_eq!(v[1].rule, AGENT_PUSH_RULE, "{cmd}");
         }
     }
 
@@ -16230,17 +17672,21 @@ mod tests {
 
     // -- hard reset / rebase --
 
+    // These judge in an owned repository with an unborn branch, where only
+    // HEAD resolves. A reset to a revision is also judged by the enforcement
+    // content it writes (TSK-1390), and one the guard cannot read refuses.
     #[test]
     fn test_hard_reset_on_protected_blocked() {
         let p = default_policy();
-        let v = evaluate("git reset --hard HEAD~3", &ctx(&p, "main"));
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "main"));
         assert_eq!(v[0].rule, "git.hard_reset_protected");
     }
 
     #[test]
     fn test_hard_reset_on_feature_allowed() {
         let p = default_policy();
-        assert!(evaluate("git reset --hard HEAD~3", &ctx(&p, "feat/x")).is_empty());
+        let v = evaluate("git reset --hard HEAD", &ctx(&p, "feat/x"));
+        assert!(v.is_empty(), "{v:?}");
     }
 
     #[test]
@@ -16891,6 +18337,339 @@ mod tests {
         assert_eq!(launcher_effects(&tokens), (vec![".git"], None));
     }
 
+    /// TSK-1456: a word in front of the program that may be read either way
+    /// stays the program of its own segment, and each other reading is a
+    /// segment of its own; an assignment adds none.
+    #[test]
+    fn leading_words_add_every_reading_as_a_command() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, readings) in [
+            (
+                "X+=1 git push --force origin main",
+                vec!["git push --force origin main"],
+            ),
+            ("A=1 a[0]=1 claude -p x", vec!["A=1 claude -p x"]),
+            ("env X[0]=1 git push", vec!["env git push"]),
+            (
+                "nohup X+=1 Y+=2 claude -p x",
+                vec!["nohup Y+=2 claude -p x", "nohup claude -p x"],
+            ),
+            (
+                "env {X=1,git} push --force origin main",
+                vec![
+                    "env push --force origin main",
+                    "env X=1 git push --force origin main",
+                ],
+            ),
+        ] {
+            // Each reading comes before the command it reads.
+            let segments = read(line);
+            let at = segments.iter().position(|s| s == &words(line));
+            for reading in readings {
+                let found = segments.iter().position(|s| s == &words(reading));
+                assert!(found < at && found.is_some(), "{line}: {segments:?}");
+            }
+        }
+        for line in [
+            "FOO=1 git status",
+            "A=b=c git status",
+            "/tmp/a=b/git push origin task/x",
+            "'=git' x",
+            "git commit -m a=b",
+            "make CC=gcc",
+        ] {
+            assert_eq!(read(line), vec![words(line)], "{line}");
+        }
+    }
+
+    /// Expansion limits never erase the command behind an unplaced word.
+    #[test]
+    fn leading_words_past_expansion_limits_keep_the_command_and_refuse() {
+        let values = [
+            format!("{{{}}}", "x".repeat(BRACE_WORD_BYTES + 1)),
+            format!("{{{}}}", vec!["x"; BRACE_WORD_LIMIT + 1].join(",")),
+            "{1..1}".repeat(BRACE_DEPTH_LIMIT + 1),
+        ];
+        for name in ["X+=", "a[0]="] {
+            for value in &values {
+                for program in ["git", "gh"] {
+                    for command in [
+                        "git push --force origin main",
+                        "git commit -m x",
+                        "git -c core.hooksPath=/tmp/x commit -m x",
+                    ] {
+                        let line = format!("{name}{value}/{program} {command}");
+                        let segments = expand_commands(&line);
+                        assert!(
+                            segments
+                                .iter()
+                                .any(|s| command_argv(s) == command_argv(command)),
+                            "the command behind the leading word was lost"
+                        );
+                        assert!(segments.iter().any(|s| s == PROGRAM_UNREAD));
+                    }
+                }
+            }
+        }
+    }
+
+    /// TSK-1456 AC-9: a program word the shell rewrites before it looks the
+    /// program up adds each rewritten command; a file substitution in the
+    /// program position adds the marker that refuses the line.
+    #[test]
+    fn program_word_rewrites_add_their_commands() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, reading) in [
+            (
+                "{git,push} --force origin main",
+                "git push --force origin main",
+            ),
+            ("env {claude,-p} x", "env claude -p x"),
+            ("=git push origin main", "git push origin main"),
+            ("A=1 =git push origin main", "A=1 git push origin main"),
+            ("python{3..3} x.py", "python3 x.py"),
+            (
+                "{=git,push} --force origin main",
+                "git push --force origin main",
+            ),
+            ("{'gi't,push} --force", "git push --force"),
+        ] {
+            let segments = read(line);
+            let at = segments.iter().position(|s| s == &words(line));
+            let found = segments.iter().position(|s| s == &words(reading));
+            assert!(found < at && found.is_some(), "{line}: {segments:?}");
+        }
+        for line in [
+            "<(echo git) push origin main",
+            ">(echo git) push origin main",
+            "X=1 <(echo git) x",
+            "=(echo git) push origin main",
+        ] {
+            assert!(
+                expand_commands(line).iter().any(|s| s == PROGRAM_UNREAD),
+                "{line}: {:?}",
+                expand_commands(line)
+            );
+        }
+        for line in [
+            "cat <(echo a) <(echo b)",
+            "diff < <(echo a) b",
+            "tee >(cat) < x",
+            "echo {a",
+            "git status",
+            "= x",
+        ] {
+            let segments = expand_commands(line);
+            assert!(
+                !segments.iter().any(|s| s == PROGRAM_UNREAD),
+                "{line}: {segments:?}"
+            );
+        }
+        assert_eq!(read("echo {a"), vec![words("echo {a")]);
+        assert_eq!(read("git status"), vec![words("git status")]);
+        // A brace, pattern, `=` or `$` a quote or escape made literal is
+        // text, so the word is read as written and adds no command.
+        for line in [
+            "'{git,push}' --force origin main",
+            "\"{git,push}\" --force origin main",
+            "\\{git,push\\} --force origin main",
+            "{git\\,push} --force origin main",
+            "'gi*' status",
+            "gi\\* status",
+            "\"/usr/bin/gi?\" status",
+            "'$G' push origin main",
+            "'=git' push origin main",
+            "\\=git push origin main",
+        ] {
+            assert_eq!(read(line), vec![words(line)], "{line}");
+        }
+    }
+
+    /// TSK-1456: shell text built from words as written reads back as the
+    /// same words, with the same quoting.
+    #[test]
+    fn words_as_written_read_back_unchanged() {
+        for line in [
+            "git push --force origin main",
+            "'{git,push}' x {a,b} 'it''s' \"a b\"",
+            "\"$G\" '$G' $G \\$G $\\G a\\ b",
+            "$'a\\'b' $\"x\" \"\\\\\" \"\\\"\" '\\'",
+            "=git '=git' gi* 'gi*' \"\" ''",
+            "~/x '~'/x \"${G:-git}\" ${G:-git}",
+        ] {
+            let (_, marks) = command_argv_marked(line);
+            let text = requote_words(&marks);
+            assert_eq!(command_argv_marked(&text).1, marks, "{line}: {text}");
+            assert_eq!(command_argv(&text), command_argv(line), "{line}: {text}");
+        }
+        // A written character among the stand-ins is never read as one.
+        let stand_in = char::from_u32(LITERAL_MARK + u32::from('=')).unwrap();
+        for line in [
+            format!("X{stand_in}1 git status"),
+            format!("'X{stand_in}1' git status"),
+            "$'X\\U000F003D1' git status".to_string(),
+        ] {
+            let (_, marks) = command_argv_marked(&line);
+            assert_eq!(unmarked(&marks[0]), "X\u{FFFD}1", "{line}");
+            assert!(!expands_marked(&marks[0]), "{line}");
+        }
+    }
+
+    /// TSK-1456 AC-9: a program word the guard cannot fill in adds the
+    /// command under each guarded name and as a launcher of later words.
+    #[test]
+    fn unread_program_words_add_each_reading() {
+        let read = |line: &str| -> Vec<Vec<String>> {
+            expand_commands(line)
+                .iter()
+                .map(|segment| command_argv(segment))
+                .collect()
+        };
+        let words = |line: &str| command_argv(line);
+        for (line, present, absent) in [
+            (
+                "$G push origin main",
+                vec![
+                    "git push origin main",
+                    "gh push origin main",
+                    "claude push origin main",
+                    "codex push origin main",
+                    "grok push origin main",
+                    "push origin main",
+                    "origin main",
+                    "main",
+                ],
+                vec!["sh push origin main", "eval push origin main"],
+            ),
+            (
+                "gi* -C repo status",
+                vec!["git -C repo status", "repo status", "status"],
+                vec![],
+            ),
+            (
+                "$N -n 5 git push",
+                vec!["5 git push", "git push"],
+                vec!["sh -n 5 git push"],
+            ),
+            (
+                "$S -c 'git push'",
+                vec!["sh -c 'git push'", "git push"],
+                vec![],
+            ),
+            ("$E 'git push'", vec!["eval 'git push'", "git push"], vec![]),
+            (
+                "$A $B x",
+                vec!["claude $B x", "$B x", "claude x", "x"],
+                vec![],
+            ),
+            (
+                "\"$EDITOR\" notes.md",
+                vec!["claude notes.md", "notes.md"],
+                vec!["git notes.md"],
+            ),
+        ] {
+            let segments = read(line);
+            for reading in present {
+                assert!(
+                    segments.contains(&words(reading)),
+                    "{line}: {reading}: {segments:?}"
+                );
+            }
+            for reading in absent {
+                assert!(
+                    !segments.contains(&words(reading)),
+                    "{line}: {reading}: {segments:?}"
+                );
+            }
+        }
+        // The test command and an assignment keep their single reading.
+        for line in ["[ -f x ]", "[[ -f x ]]", "a[0]=1", "$(echo git) status"] {
+            assert!(
+                !read(line).contains(&words("claude -f x ]")),
+                "{line}: {:?}",
+                read(line)
+            );
+        }
+        assert_eq!(read("[ -f x ]"), vec![words("[ -f x ]")]);
+        let long = format!("$X {}", vec!["a"; UNREAD_ARGS_LIMIT + 1].join(" "));
+        assert!(expand_commands(&long).iter().any(|s| s == PROGRAM_UNREAD));
+        // Each reading names the words it reads, outermost first.
+        let expanded = expand_commands_read("$A $B x; git status");
+        let at = |line: &str| {
+            expanded
+                .segments
+                .iter()
+                .position(|s| command_argv(s) == words(line))
+                .unwrap()
+        };
+        assert_eq!(unread_words(&expanded.readings, at("claude $B x")), ["$A"]);
+        assert_eq!(
+            unread_words(&expanded.readings, at("claude x")),
+            ["$A", "$B"]
+        );
+        assert!(unread_words(&expanded.readings, at("$A $B x")).is_empty());
+        assert!(unread_words(&expanded.readings, at("git status")).is_empty());
+    }
+
+    /// TSK-1456: an unquoted `${…}` or `$[…]` expansion holding a blank is
+    /// one word to the shell. When the split words would misplace the
+    /// program, the command is also read with one unknown value in its
+    /// place; arguments keep the split reading alone.
+    #[test]
+    fn expansions_the_shell_keeps_in_one_word_are_read_joined() {
+        let unknown = substitution_placeholder(false);
+        for (segment, joined) in [
+            ("X=${v: 1} git status", "X=\u{0} git status"),
+            ("X=$[ 1 + 1 ] git status", "X=\u{0} git status"),
+            ("X=${a[ 1 ]} git status", "X=\u{0} git status"),
+            ("X=${v:-{ a }} git status", "X=\u{0} git status"),
+            ("env X=${v:- a} git status", "env X=\u{0} git status"),
+            ("${v:- git} status", "\u{0} status"),
+        ] {
+            assert_eq!(
+                joined_expansion_reading(segment),
+                Some(joined.replace('\u{0}', &unknown.to_string())),
+                "{segment}"
+            );
+        }
+        for segment in [
+            // No blank, a quoted blank or a quoted expansion.
+            "X=${v:1} git status",
+            "X=\"${v: 1}\" git status",
+            "X='${v: 1}' git status",
+            "X=\\${v: 1} git status",
+            // An expansion with no close is left as written.
+            "X=${v: 1 git status",
+            // Only an argument holds one.
+            "git log ${v:- a}",
+            "echo $[ 1 + 1 ]",
+        ] {
+            assert_eq!(joined_expansion_reading(segment), None, "{segment}");
+        }
+        let expanded = expand_commands_read("X=${v: 1} git status");
+        assert!(expanded
+            .segments
+            .iter()
+            .any(|s| strip_launchers(&command_argv(s))
+                .is_some_and(|(program, args)| program == "git" && args == ["status"])));
+        assert!(expanded
+            .readings
+            .iter()
+            .any(|reading| reading.unread.is_none()));
+    }
+
     /// TSK-1002 review 02: env's split string is read by env's grammar into
     /// the words env runs, so its own `-C` is read again; a form the guard
     /// does not read exactly is an error.
@@ -17529,6 +19308,7 @@ mod tests {
                 vars: None,
                 location_unknown: false,
                 config_write: None,
+                line_env: false,
                 transport_env: None,
                 git_config_var: mentions,
                 narrows: false,
@@ -20581,6 +22361,7 @@ mod tests {
             context.alias_lookup.unwrap()(&AliasQuery {
                 target: mapped,
                 config: &config,
+                environment: query.environment,
                 name: query.name,
             })
         };

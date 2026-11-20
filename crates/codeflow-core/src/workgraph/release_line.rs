@@ -160,6 +160,9 @@ pub struct Destination {
     /// The waits for fetching a tip this clone lacks, from the trusted
     /// policy (TSK-1301); the shipped defaults until a caller sets them.
     pub limits: QueryLimits,
+    /// The read credential sent with every question to this destination
+    /// (the hosted run's token, TSK-1252); `None` asks with none.
+    pub auth: Option<crate::git::remote_query::HttpAuth>,
 }
 
 impl Destination {
@@ -184,6 +187,30 @@ pub fn ask_destination(
     limits: QueryLimits,
 ) -> Result<Destination, String> {
     ask(repo_root, url, limits).and_then(|answer| answer)
+}
+
+/// As [`ask_destination`], sending `auth` with the lookup and with any
+/// fetch of the tips it names, when `auth` is the credential for `url`
+/// (TSK-1252). The answer still comes only from the destination.
+///
+/// # Errors
+///
+/// As [`ask_destination`].
+pub fn ask_destination_with(
+    repo_root: &Path,
+    url: Option<&str>,
+    limits: QueryLimits,
+    auth: Option<&crate::git::remote_query::HttpAuth>,
+) -> Result<Destination, String> {
+    let Some(url) = url else {
+        return Ok(Destination::default());
+    };
+    let auth = auth.filter(|auth| auth.url() == url);
+    let listed = advertisement_with(repo_root, url, limits, auth)?;
+    from_advertisement(url, &listed).map(|destination| Destination {
+        auth: auth.cloned(),
+        ..destination.with_limits(limits)
+    })
 }
 
 /// As [`ask_destination`], keeping apart a destination that did not answer
@@ -216,10 +243,20 @@ pub fn ask(
 ///
 /// Returns why the destination could not be asked.
 pub fn advertisement(repo_root: &Path, url: &str, limits: QueryLimits) -> Result<String, String> {
-    crate::git::remote_query::ls_remote(
+    advertisement_with(repo_root, url, limits, None)
+}
+
+fn advertisement_with(
+    repo_root: &Path,
+    url: &str,
+    limits: QueryLimits,
+    auth: Option<&crate::git::remote_query::HttpAuth>,
+) -> Result<String, String> {
+    crate::git::remote_query::ls_remote_with(
         repo_root,
         &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
         limits,
+        auth,
     )
     .map_err(|why| {
         let shown = crate::git::remote_query::display_url(url);
@@ -286,6 +323,7 @@ pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String
         default,
         heads,
         limits: QueryLimits::default(),
+        auth: None,
     })
 }
 
@@ -674,7 +712,15 @@ fn ensure_objects(
     let refs: Vec<&str> = refs.iter().map(String::as_str).collect();
     let fetched = destination.url.as_deref().map_or_else(
         || Err("no destination to fetch from".to_string()),
-        |url| crate::git::remote_query::fetch_objects(repo_root, url, &refs, destination.limits),
+        |url| {
+            crate::git::remote_query::fetch_objects_with(
+                repo_root,
+                url,
+                &refs,
+                destination.limits,
+                destination.auth.as_ref(),
+            )
+        },
     );
     history::refresh(repo);
     let still = missing(wanted);

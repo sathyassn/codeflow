@@ -115,6 +115,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("ID_REGISTRY_UID", Runs),
     ("ACCEPTANCE_BINDING", Runs),
     ("REVIEW_ROW_BINDING", Runs),
+    ("LANDED_REVIEW", Runs),
+    ("LANDING_MARKER", Excluded(HumanAuthority)),
     ("EPIC_ACCEPTANCE_BINDING", Runs),
     ("ACCEPTANCE_BOUND", Excluded(HumanAuthority)),
     ("PLANNING_AMENDMENT", Excluded(HumanAuthority)),
@@ -229,6 +231,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_ID_REGISTRY", Runs),
     ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_PERIMETER", Excluded(HostingRemote)),
+    // Force-update and deletion rules are settings the host keeps.
+    ("DOCTOR_REMOTE_REF_PROTECTION", Excluded(HostingRemote)),
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
