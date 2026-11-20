@@ -14,17 +14,24 @@ mod capacity;
 #[cfg(unix)]
 #[path = "test_gate_cli/containment.rs"]
 mod containment;
+#[path = "test_gate_cli/coverage_defaults.rs"]
+mod coverage_defaults;
 #[path = "support/drain_pipe.rs"]
 mod drain_pipe;
 #[path = "test_gate_cli/evidence.rs"]
 mod evidence;
 #[path = "test_gate_cli/named_config.rs"]
 mod named_config;
+#[path = "test_gate_cli/no_comparison_base.rs"]
+mod no_comparison_base;
 #[path = "support/own_repository.rs"]
 mod own_repository;
 #[cfg(unix)]
 #[path = "test_gate_cli/reserved_lock.rs"]
 mod reserved_lock;
+#[cfg(unix)]
+#[path = "test_gate_cli/target_contract.rs"]
+mod target_contract;
 use drain_pipe::{drain_lines, drain_pipe};
 
 fn git(dir: &Path, args: &[&str]) {
@@ -92,7 +99,7 @@ fn every_selection_control_names_why_every_target_runs() {
     for (args, reason) in [
         (
             vec!["test", "--mode", "quick"],
-            "every target: no local run record earns selection credit (ADR-0089)",
+            "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)",
         ),
         (
             vec!["test", "--mode", "quick", "--since", "HEAD"],
@@ -112,6 +119,76 @@ fn every_selection_control_names_why_every_target_runs() {
             stderr(&output)
         );
     }
+}
+
+/// TSK-353 (AC-9, AC-10): with this repository's own mapping, `codeflow
+/// test guards` names the two tests PR 525's quick run missed for paths
+/// from its range (a managed skill asset and its record), prints an
+/// unmapped path as unguarded, counts both paths of a rename, and marks its
+/// declared selection as not applied.
+#[test]
+fn guards_name_the_tests_pr_525_missed_and_report_unguarded_paths() {
+    let own = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.codeflow/test-config.json"),
+    )
+    .unwrap();
+    let dir = repo(&own);
+    let home = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("old-name.md"),
+        "the same text on both sides of the rename\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "test: own config"]);
+    git(dir.path(), &["mv", "old-name.md", "new-name.md"]);
+    for (path, text) in [
+        (
+            "assets/base/agents/skills/cf-present/resources/figure-grammar.md",
+            "grammar\n",
+        ),
+        (
+            "project-management/tasks/TSK-1162.md",
+            "[swatches](../../docs/verification/evidence/tsk-1162/ink-swatches.html)\n",
+        ),
+        ("notes.txt", "unmapped\n"),
+    ] {
+        let file = dir.path().join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, text).unwrap();
+    }
+    let output = run(
+        dir.path(),
+        home.path(),
+        &["test", "guards", "--since", "HEAD"],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{}", stderr(&output));
+    for needle in [
+        "test guards: 5 changed path(s) against ",
+        "(--since HEAD)",
+        "guarded: assets/base/agents/skills/cf-present/resources/figure-grammar.md\n",
+        "guarded: old-name.md\n",
+        "guarded: new-name.md\n",
+        "  cargo test -p codeflow-cli --test init_e2e\n",
+        "guarded: project-management/tasks/TSK-1162.md\n",
+        "  cargo test -p codeflow-cli --test release_contract\n",
+        "unguarded: notes.txt (no guards rule names a test for it)\n",
+        "run these guarding tests:\n",
+        "declared selection for quick (not applied: every run still executes every eligible target, ADR-0089):\n",
+        "  every target: ",
+    ] {
+        assert!(stdout.contains(needle), "{needle:?} in {stdout}");
+    }
+    let no_base = run(dir.path(), home.path(), &["test", "guards"]);
+    assert_eq!(no_base.status.code(), Some(1), "{}", stderr(&no_base));
+    assert!(
+        stderr(&no_base).contains("no comparison base: "),
+        "{}",
+        stderr(&no_base)
+    );
+    let mixed = run(dir.path(), home.path(), &["test", "--all", "guards"]);
+    assert_eq!(mixed.status.code(), Some(2), "{}", stderr(&mixed));
 }
 
 /// What a spawned gate has written to stdout, read to the end on its own
@@ -1373,9 +1450,21 @@ fn selection_runs_everything_for_shared_unmatched_rename_deletion_and_unproven_b
             &["test", "--mode", "quick", "--since", &comparison],
         );
         assert!(output.status.success(), "{case}: {}", stderr(&output));
+        // TSK-1039 AC-4: each case prints the reason and says every target
+        // was selected for it, never that the change narrowed anything.
+        let text = stderr(&output);
+        let reason = format!(
+            "every target: --since {comparison} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)"
+        );
+        assert!(text.contains(&reason), "{case}: {text}");
+        assert!(!text.contains("skipped "), "{case}: {text}");
         let runs = std::fs::read_to_string(dir.path().join("runs")).unwrap();
         for target in ["producer", "docs", "present", "release"] {
             assert!(runs.lines().any(|line| line == target), "{case}: {runs}");
+            assert!(
+                text.contains(&format!("selected {target}: {reason}")),
+                "{case} {target}: {text}"
+            );
         }
     }
 }

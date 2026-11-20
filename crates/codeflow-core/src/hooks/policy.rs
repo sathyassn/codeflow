@@ -502,6 +502,23 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// Extra `##` sections every task record must carry, as heading names
+    /// without the leading `##` (TSK-1421). `CodeFlow`'s own sections stay
+    /// required whatever this lists. Empty by default; the shipped policy
+    /// file does not list it, so an older binary never meets the key. The
+    /// lists are read from the trusted policy joined with the working copy's
+    /// ([`crate::validate::record_sections`]), so a change cannot drop a
+    /// section it is judged by.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub task_required_sections: Vec<String>,
+    /// Extra `##` sections every epic record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub epic_required_sections: Vec<String>,
+    /// Extra `##` sections every spec record must carry; as
+    /// `task_required_sections`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub spec_required_sections: Vec<String>,
     /// The words a PR body may hold before `codeflow ci` warns (TSK-228,
     /// TSK-267): counted as a reader sees them, HTML comments left out.
     /// Default 1000; `0` turns the warning off. Advisory at every level,
@@ -734,6 +751,9 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: DEFAULT_PR_REQUIRED_SECTIONS.map(String::from).to_vec(),
             pr_code_sections: DEFAULT_PR_CODE_SECTIONS.map(String::from).to_vec(),
+            task_required_sections: Vec::new(),
+            epic_required_sections: Vec::new(),
+            spec_required_sections: Vec::new(),
             pr_body_max_words: 1000,
             work_records: PolicyLevel::Block,
             work_planning: PolicyLevel::Block,
@@ -859,21 +879,35 @@ impl GitPolicy {
     }
 
     /// `true` when `branch` starts with one of the sanctioned prefixes
-    /// (charter §6.4), or with `git.candidate_prefix` when that prefix keeps
-    /// landing candidates apart from every other branch
-    /// ([`Self::candidate_prefix_problem`]): a landing candidate is named by
-    /// it, and the name grants nothing else (TSK-1154 AC-10). Protected
-    /// branches are exempt — they are governed by the protection rules, not
-    /// naming.
+    /// (charter §6.4) or is a landing candidate
+    /// ([`Self::is_candidate_branch`], TSK-1351): a landing candidate is
+    /// named by it, and the name grants nothing else (TSK-1154 AC-10).
+    /// Protected branches are exempt — they are governed by the protection
+    /// rules, not naming.
     #[must_use]
     pub fn branch_name_ok(&self, branch: &str) -> bool {
         if self.branch_is_protected(branch) {
             return true;
         }
         self.branch_prefixes.iter().any(|p| branch.starts_with(p))
-            || (branch.starts_with(&self.candidate_prefix)
-                && branch.len() > self.candidate_prefix.len()
-                && self.candidate_prefix_problem().is_none())
+            || self.is_candidate_branch(branch)
+    }
+
+    /// `true` when `branch` is named as a landing candidate: it starts with
+    /// `git.candidate_prefix` and names something after it (TSK-1351). A
+    /// prefix that [`Self::candidate_prefix_problem`] refuses, that does not
+    /// end in `/` or that holds a glob character names no candidate, so a
+    /// policy the schema would refuse never turns other branches into
+    /// candidates. The name only opts a branch in to the candidate binding;
+    /// it grants nothing by itself.
+    #[must_use]
+    pub fn is_candidate_branch(&self, branch: &str) -> bool {
+        let prefix = self.candidate_prefix.as_str();
+        prefix.ends_with('/')
+            && !prefix.contains(['*', '?', '[', '{', '\\'])
+            && self.candidate_prefix_problem().is_none()
+            && branch.len() > prefix.len()
+            && branch.starts_with(prefix)
     }
 
     /// Why `git.candidate_prefix` does not keep landing candidates apart from
@@ -1017,7 +1051,16 @@ pub struct SecuritySection {
     /// operator's choice, applies the line's rule and verifies nothing.
     #[serde(skip_serializing_if = "TextGuard::is_strict")]
     pub text_guard: TextGuard,
+    /// The HTTP clients whose config files the project trusts (TSK-1346):
+    /// `curl`, `wget`, `httpie`, `xh` and `gh_aliases`. A listed tool's
+    /// config-file refusal is lifted; its GitHub destination checks stay.
+    /// Empty by default, so every config-file refusal stays on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub trusted_client_configs: Vec<String>,
 }
+
+/// The tools `security.trusted_client_configs` may list.
+pub const TRUSTED_CLIENT_CONFIG_TOOLS: &[&str] = &["curl", "wget", "httpie", "xh", "gh_aliases"];
 
 /// The `security.text_guard` values.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1054,6 +1097,7 @@ impl Default for SecuritySection {
             sandbox_retry: None,
             sandbox_retry_allow: None,
             text_guard: TextGuard::Strict,
+            trusted_client_configs: Vec::new(),
         }
     }
 }
@@ -1724,6 +1768,44 @@ mod tests {
         assert!(!overlapping.branch_name_ok("mai-c1"));
         // Protected branches are exempt from naming.
         assert!(g.branch_name_ok("main"));
+    }
+
+    /// TSK-1351 AC-1: a landing candidate under `git.candidate_prefix` is an
+    /// allowed name. The PR 600 security review's run-time cases: a prefix
+    /// that differs from a sanctioned one only in case, holds a `*`, or has
+    /// no trailing slash names no candidate, so a policy the schema would
+    /// refuse never makes another branch a candidate.
+    #[test]
+    fn a_landing_candidate_is_an_allowed_branch_name() {
+        let g = GitPolicy::default();
+        assert!(g.is_candidate_branch("candidate/epc-022-c4a"));
+        assert!(g.branch_name_ok("candidate/epc-022-c4a"));
+        assert!(!g.is_candidate_branch("candidate/"), "the prefix alone");
+        assert!(!g.is_candidate_branch("candidates/x"));
+        let land = GitPolicy {
+            candidate_prefix: "land/".into(),
+            ..GitPolicy::default()
+        };
+        assert!(land.branch_name_ok("land/epc-022-c4a"));
+        assert!(!land.branch_name_ok("candidate/epc-022-c4a"));
+        for prefix in ["Task/", "TASK/", "cand*/", "*/", "cand", "candidate"] {
+            let g = GitPolicy {
+                candidate_prefix: prefix.into(),
+                ..GitPolicy::default()
+            };
+            for branch in [
+                format!("{prefix}x"),
+                "task/TSK-001-x".to_string(),
+                "Task/x".to_string(),
+                "candidate-x".to_string(),
+            ] {
+                assert!(
+                    !g.is_candidate_branch(&branch),
+                    "prefix {prefix:?} must name no candidate, named {branch:?}"
+                );
+            }
+        }
+        assert!(!GitPolicy::default().branch_name_ok("Task/x"));
     }
 
     #[test]

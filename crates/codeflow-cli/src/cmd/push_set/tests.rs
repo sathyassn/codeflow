@@ -637,7 +637,12 @@ fn r15_tracking_namespace_preserves_config_bytes() {
         "+refs/heads/*:refs/remotes/fixture/*\u{a0}",
     ]);
     assert_eq!(
-        tracking_namespace(history.local.path(), "fixture").unwrap(),
+        tracking_namespace(
+            history.local.path(),
+            "fixture",
+            remote_query::QueryLimits::guard()
+        )
+        .unwrap(),
         None
     );
 }
@@ -839,7 +844,7 @@ fn round_two_hook_and_local_plans_use_the_same_epic_target() {
             h.local.path(),
             &pushed,
             branch,
-            &judged,
+            (&judged, &Landing::Ordinary),
             (&destination, &destination.policy.branch_prefixes),
             &mut report,
         )

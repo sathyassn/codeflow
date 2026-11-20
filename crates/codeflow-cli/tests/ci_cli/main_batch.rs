@@ -719,10 +719,13 @@ fn a_base_after_the_anchor_does_not_shorten_the_batch() {
     assert_ne!(tip, after);
 }
 
-/// A pushed batch gets the batch verdict: the clean batch passes the
-/// pre-push hook, and a forged member is refused there too.
+/// AC-17 as amended 2026-11-19: a pushed batch is refused even when it is
+/// clean. Only a landing candidate bound to its epic line (TSK-1351) is
+/// judged on a push; a batch into the default target lands through its
+/// pull request, whose run the tests above judge. The refusal's text is
+/// checked by `line_tip::tests::a_pushed_main_batch_is_refused_with_the_route`.
 #[test]
-fn a_pushed_main_batch_gets_the_batch_verdict() {
+fn a_pushed_main_batch_is_refused() {
     let (f, tip) = planned_with(
         &[
             ("TSK-010", main_task("TSK-010", None)),
@@ -736,18 +739,7 @@ fn a_pushed_main_batch_gets_the_batch_verdict() {
     land(&f, "TSK-012", &filed);
     seed(&f);
     let pushed = f.push_branch(BATCH, ZERO);
-    passes(&pushed);
-    let forged = records_only(&f, "task/TSK-011-work", &tip, |f| {
-        f.write("src/forged.rs", "pub fn forged() {}\n");
-    });
-    land(&f, "TSK-011", &forged);
-    let pushed = f.push_branch(BATCH, ZERO);
     assert!(!pushed.status.success(), "{}", output(&pushed));
-    assert!(
-        output(&pushed).contains(&format!("{forged:.9}")),
-        "{}",
-        output(&pushed)
-    );
 }
 
 /// A filing adds only new files at record paths: any other added path

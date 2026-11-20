@@ -25,6 +25,7 @@ mod classification;
 mod conflict_markers;
 mod context;
 pub(super) use context::{judged_declared_target, Declared};
+mod candidate;
 mod id_registry;
 mod judging;
 mod line_tip;
@@ -173,7 +174,8 @@ pub struct CiArgs {
     /// its HEAD, branches and tags) from stdin instead of asking it again.
     /// The pre-push hook passes what it already asked. It is the hook's
     /// hand-off, not an authority: a run given it is advisory only, and
-    /// hosted CI never passes it.
+    /// hosted CI never passes it. A landing candidate's run reads the
+    /// destination again itself and refuses when the two reads differ.
     #[arg(long, hide = true, requires = "destination")]
     pub advertisement_stdin: bool,
 
@@ -194,6 +196,19 @@ pub struct CiArgs {
     /// a landing candidate, and the hook itself judges a push to a line.
     #[arg(long, value_name = "REF", hide = true)]
     pub pushed_ref: Option<String>,
+
+    /// The registry's objects are here: the pre-push hook fetched what a
+    /// partial clone left out before it ran this check, so the registry
+    /// reads never fetch lazily and a missing registry object refuses
+    /// (TSK-327). Hosted CI never passes it.
+    #[arg(long, hide = true)]
+    pub registry_objects_local: bool,
+
+    /// Milliseconds left before the caller ends this run: every bounded
+    /// read is capped at that time. The pre-push hook passes its deadline
+    /// (TSK-327); it only shortens reads.
+    #[arg(long, value_name = "MS", hide = true)]
+    pub deadline_ms: Option<u64>,
 
     /// Print how long each check took, on stderr after the verdict, one
     /// line per check and then the total. The times only report; they
@@ -370,6 +385,13 @@ fn ci_environment(
 }
 
 pub fn run(args: &CiArgs) -> i32 {
+    if let Some(left) = args.deadline_ms {
+        // The pre-push hook ends this run at its deadline; every bounded
+        // read here ends by then by itself (TSK-327).
+        codeflow_core::git::remote_query::bound_reads_by(
+            std::time::Instant::now() + std::time::Duration::from_millis(left),
+        );
+    }
     let mut timings = timing::Timings::start();
     let code = run_timed(args, &mut timings);
     if args.timings {
@@ -432,6 +454,20 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             return 2;
         }
     };
+
+    // A landing candidate's hand-off without `--into` is refused before the
+    // target is resolved, so its cause is named first (TSK-1351 AC-3).
+    if let Some(refusal) = candidate::unnamed_line(
+        args.pushed_ref.as_deref(),
+        &working.git,
+        args.into.as_deref(),
+    ) {
+        let tagged = vec![refusal];
+        if let Some(out) = &args.blocking_rules_out {
+            write_blocking_rules(out, &tagged);
+        }
+        return report(&tagged, &["landing-candidate"], &[]);
+    }
 
     // Resolve names and pin revisions once before any range rule runs.
     // The working copy's policy finds the range, its work prefixes as its
@@ -506,6 +542,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     ) else {
         return 2;
     };
+    // The working copy's record sections join the judging policy's
+    // (TSK-1421), so they are kept before the working policy is consumed.
+    let working_sections =
+        codeflow_core::validate::record_sections::ProjectSections::from_git(&working.git);
     let Some(judging) = judging_policy(
         &root,
         authority.as_ref(),
@@ -678,10 +718,45 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         None
     };
+    // A pushed landing candidate, bound again from this run's own reads
+    // (TSK-1351), is judged as its line's next tip: the records, the
+    // acceptance binding and the line's direct-commit rule read the line,
+    // while the branch-naming check keeps the pushed name.
+    let candidate = candidate::check(
+        &root,
+        args.pushed_ref.as_deref(),
+        configured,
+        (
+            match &authority {
+                Some(Authority::Named(sha)) => Some(sha.as_str()),
+                _ => None,
+            },
+            args.into.as_deref(),
+        ),
+        (base_sha.as_deref(), &head),
+        (destination.as_deref(), advertisement.as_deref()),
+        &mut tagged,
+        &mut ran,
+    );
+    timings.lap("landing-candidate");
+    // Judged as a push of the line itself: the line's records into the
+    // line's own target, the default branch, as the hook hands a line push.
+    // The hand-off's `--into` named the bound line (checked above), so the
+    // line's own target replaces it only after that check.
+    let pushed_name = branch.clone();
+    let (branch, line_target, into, into_flag) = match &candidate {
+        Some(bound) => (
+            bound.line.line.clone(),
+            bound.target.clone(),
+            Some(bound.target.clone()),
+            Some(bound.target.clone()),
+        ),
+        None => (branch, line_target, into, args.into.clone()),
+    };
     let mut names = Names {
         branch: &branch,
         into: into.as_deref(),
-        into_flag: args.into.as_deref(),
+        into_flag: into_flag.as_deref(),
         destination: destination.as_deref(),
         advertisement: advertisement.as_deref(),
         candidate: match &authority {
@@ -723,7 +798,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     let target_tip = target_tip(
         &root,
         &line_target,
-        args.into.as_deref(),
+        into_flag.as_deref(),
         &names,
         &environment,
     );
@@ -748,6 +823,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
             &names,
             &line_target,
             &target_tip,
+            args.registry_objects_local,
             &mut tagged,
             &mut ran,
             timings,
@@ -755,7 +831,8 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     }
 
     // --- branch-naming check ---------------------------------------------
-    if branch.is_empty() {
+    let branch_name = &pushed_name;
+    if branch_name.is_empty() {
         let finding = codeflow_core::remedy::Finding::new(
             "no branch name resolved; branch-naming check skipped",
             codeflow_core::remedy::CI_BRANCH_UNRESOLVED.remedy(),
@@ -765,9 +842,9 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     } else {
         println!(
             "codeflow ci: branch '{}'",
-            codeflow_core::git::display_text(&branch)
+            codeflow_core::git::display_text(branch_name)
         );
-        if let Some(v) = evaluate_branch(git, &branch) {
+        if let Some(v) = evaluate_branch(git, branch_name) {
             tagged.push(v);
         }
         ran.push("branch-naming");
@@ -783,25 +860,26 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         || is_pr_event(|key| environment.get(key).cloned());
     // A landing candidate's head judged as its line's next tip (TSK-1155):
     // the rule the pre-push hook applies to a push to the line.
-    let candidate_branch = git.candidate_prefix_problem().is_none()
-        && branch.len() > git.candidate_prefix.len()
-        && branch.starts_with(&git.candidate_prefix);
+    // A pushed head reaches a line only through `candidate::check`'s
+    // binding (TSK-1351); the caller's policy prefix selects no line here.
     let landing_run = line_tip::Run {
         line_tip: args.line_tip.as_deref(),
+        candidate: candidate.as_ref().map(|bound| bound.line.line.as_str()),
         base: base_sha.as_deref(),
         head: &head,
         merge_landing: pr_body.is_some() || pr_context,
         pushed: args.pushed_ref.is_some() || args.advertisement_stdin,
-        candidate_push: (args.pushed_ref.is_some() || args.advertisement_stdin) && candidate_branch,
     };
     names.landing = line_tip::check(&root, &landing_run, &mut tagged, &mut ran);
-    // A batch into the default target, judged member by member from that
-    // target's fetched tip (TSK-1154 AC-16).
+    // A batch pull request into the default target, judged member by member
+    // from that target's fetched tip (TSK-1154 AC-17); a pushed batch is
+    // refused there. The head's name is the pushed or checked-out branch,
+    // never the bound line's.
     if names.landing.is_none() {
         names.landing = line_tip::main_batch(
             &root,
             &landing_run,
-            candidate_branch,
+            git.is_candidate_branch(&pushed_name),
             names.into,
             &mut tagged,
             &mut ran,
@@ -879,6 +957,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
                 configured,
                 authority: authority.as_ref(),
                 baseline: args.baseline_from.as_deref(),
+                registry_local: args.registry_objects_local,
             },
             &target_tip,
             &mut tagged,
@@ -904,17 +983,34 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     // The visible workgraph is checked once for tracked work, whether the
     // task comes from the branch or from the `Task:` line (TSK-133), or
     // from the records at each member head of a batch into the default
-    // target (TSK-1154 AC-16).
+    // target (TSK-1154 AC-17).
+    // Extra record sections (TSK-1421): the judging policy's lists joined
+    // with the working copy's, so a head can add a section but never drop
+    // one; records unchanged since the base are warned, not refused. A batch
+    // member's own graph is validated with the same sections.
+    let required = codeflow_core::validate::record_sections::Required::judged(
+        &judging.policy.git,
+        &working_sections,
+        Some(base_sha.clone().unwrap_or_else(|| head.clone())),
+    );
     if own_task
         || work_class.as_ref().is_some_and(|class| {
             class.task_id().is_some() || *class == classification::Class::MainBatch
         })
     {
-        visible_graph_check(&root, level, &mut tagged, &mut ran);
+        visible_graph_check(&root, &required, level, &mut tagged, &mut ran);
     }
-    // And each member's own graph, on the commit it lands as alone (AC-16).
+    // And each member's own graph, on the commit it lands as alone (AC-17).
     if let (true, Some(landing)) = (scope_ready, names.main_batch()) {
-        main_batch::graphs(&root, landing, &head, level, &mut tagged, &mut ran);
+        main_batch::graphs(
+            &root,
+            landing,
+            &head,
+            level,
+            &required,
+            &mut tagged,
+            &mut ran,
+        );
     }
     timings.lap("visible-graph");
 
@@ -1394,6 +1490,7 @@ fn record_checks(
     names: &Names<'_>,
     line_target: &str,
     target_tip: &Result<String, NoTarget>,
+    registry_local: bool,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
     timings: &mut timing::Timings,
@@ -1458,7 +1555,7 @@ fn record_checks(
         ran,
     );
     timings.lap("work-records");
-    id_registry::dispatch(root, base_candidates, head, tagged, ran);
+    id_registry::dispatch(root, base_candidates, head, registry_local, tagged, ran);
     timings.lap("id-registry");
 }
 
@@ -1987,6 +2084,7 @@ pub(super) fn tracking_judged(root: &Path, base: Option<&str>, head: &str) -> Re
 /// `git.work_planning` level (TSK-133).
 fn visible_graph_check(
     root: &Path,
+    required: &codeflow_core::validate::record_sections::Required,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
@@ -1995,7 +2093,7 @@ fn visible_graph_check(
     // in the output.
     ran.push("work.valid_graph");
     println!("codeflow ci: work.valid_graph: the docs validation of this run");
-    let workgraph = validate_workgraph(root);
+    let workgraph = validate_workgraph(root, required);
     if !workgraph.is_clean() {
         let findings = workgraph
             .issues
@@ -2985,20 +3083,28 @@ fn named_branch(base: &str) -> Option<String> {
 /// the destination whose policy judges the push, so an unreadable one refuses
 /// instead of reading as absent (OS text rule, issue 79).
 fn origin_url(root: &Path) -> Result<Option<String>, String> {
-    let out = codeflow_core::workgraph::history::command()
+    use codeflow_core::git::remote_query::{bounded_local, LocalAnswer, QueryLimits};
+    let mut command = codeflow_core::workgraph::history::command();
+    command
         .arg("-C")
         .arg(root)
-        .args(["remote", "get-url", "origin"])
-        .output()
-        .map_err(|error| format!("cannot query origin URL: {error}"))?;
-    if !out.status.success() {
-        return if out.status.code() == Some(2) {
-            Ok(None)
-        } else {
-            Err(format!("cannot query origin URL: {}", out.status))
-        };
-    }
-    let bytes = out.stdout.strip_suffix(b"\n").unwrap_or(&out.stdout);
+        .args(["remote", "get-url", "origin"]);
+    // Read within the destination lookup's wait (TSK-327): a read that
+    // stalls, overflows or cannot run refuses; only exit 2 means absent.
+    let limits = QueryLimits::from_authority_or_default(root);
+    let stdout = match bounded_local(command, limits.timeout())
+        .map_err(|why| format!("cannot query origin URL: {why}"))?
+    {
+        LocalAnswer::Answer(stdout) => stdout,
+        LocalAnswer::Exit(Some(2)) => return Ok(None),
+        LocalAnswer::Exit(code) => {
+            return Err(format!(
+                "cannot query origin URL: git exited with {}",
+                code.map_or_else(|| "no exit code".to_string(), |code| code.to_string())
+            ))
+        }
+    };
+    let bytes = stdout.strip_suffix(b"\n").unwrap_or(&stdout);
     let url = std::str::from_utf8(bytes)
         .map_err(|_| {
             "the URL of `origin` is not valid UTF-8, so its policy cannot be asked".to_string()

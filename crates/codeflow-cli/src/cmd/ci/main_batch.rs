@@ -26,6 +26,9 @@ pub(super) struct Judged<'a> {
     pub configured: &'a GitPolicy,
     pub authority: Option<&'a Authority>,
     pub baseline: Option<&'a str>,
+    /// The run's `--registry-objects-local`, as a one-pull-request filing's
+    /// run passes it to the id registry check.
+    pub registry_local: bool,
 }
 
 /// Judge each filing member of the batch `landing` at `head`.
@@ -81,7 +84,14 @@ pub(super) fn filings(
             &mut found,
             &mut checks,
         );
-        super::id_registry::dispatch(root, &bases, &tip, &mut found, &mut checks);
+        super::id_registry::dispatch(
+            root,
+            &bases,
+            &tip,
+            judged.registry_local,
+            &mut found,
+            &mut checks,
+        );
         let named = format!(
             "member {tip:.9} (a filing of new records), merged by {:.9}",
             member.merge
@@ -95,12 +105,14 @@ pub(super) fn filings(
 
 /// The workgraph of each member of the batch `landing` at `head`, filing or
 /// task, validated on the commit that member lands as on its own, at the
-/// run's `git.work_planning` level. Each finding names the member.
+/// run's `git.work_planning` level, with the extra record sections the run
+/// requires (`required`, TSK-1421). Each finding names the member.
 pub(super) fn graphs(
     root: &Path,
     landing: &super::line_tip::Landing,
     head: &str,
     level: codeflow_core::hooks::PolicyLevel,
+    required: &codeflow_core::validate::record_sections::Required,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -139,7 +151,7 @@ pub(super) fn graphs(
             .map_err(|error| format!("cannot make a scratch directory: {error}"))
             .and_then(|dir| {
                 candidate::check_out_landing(root, &landing.tip, member, dir.path())
-                    .map(|()| codeflow_core::validate::validate_workgraph(dir.path()))
+                    .map(|()| codeflow_core::validate::validate_workgraph(dir.path(), required))
             });
         match checked {
             Ok(report) if report.is_clean() => {}

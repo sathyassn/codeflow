@@ -463,9 +463,9 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
     let reason = if options.all {
         "--all: every target".to_string()
     } else if let Some(base) = &options.since {
-        format!("every target: --since {base} narrows nothing, since no local run record earns selection credit (ADR-0089)")
+        format!("every target: --since {base} narrows nothing; local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)")
     } else {
-        "every target: no local run record earns selection credit (ADR-0089)".to_string()
+        "every target: local narrowing is unavailable, since no local run record earns selection credit (ADR-0089)".to_string()
     };
     Selection {
         selected: eligible,
@@ -477,7 +477,7 @@ pub fn select(targets: &[TargetConfig], mode: &str, options: &GateOptions) -> Se
 }
 
 /// Add every target the selection requires, transitively.
-fn with_prerequisites(
+pub(super) fn with_prerequisites(
     targets: &[TargetConfig],
     mut selected: BTreeSet<String>,
 ) -> BTreeSet<String> {
@@ -536,12 +536,31 @@ pub fn check_only(
 /// UTF-8 is never matched by its lossy spelling. No run is narrowed by it:
 /// no record earns selection credit (ADR-0089).
 pub(super) fn git_output(root: &Path, args: &[&str]) -> Result<String, String> {
-    let output = crate::git::command()
+    git_output_with_index(root, args, None)
+}
+
+/// [`git_output`], reading `index` in place of the repository's index when
+/// given. Every read runs with `--no-optional-locks`. That flag does not
+/// stop a porcelain `git diff` from writing refreshed stat data back to the
+/// index it reads (Git 2.53, `diff.autoRefreshIndex`), so a working-tree
+/// diff passes a private copy of the index here (TSK-353).
+pub(super) fn git_output_with_index(
+    root: &Path,
+    args: &[&str],
+    index: Option<&Path>,
+) -> Result<String, String> {
+    let mut command = crate::git::command();
+    command
+        .arg("--no-optional-locks")
         .args(args)
         .current_dir(root)
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_INDEX_FILE");
+    if let Some(index) = index {
+        command.env("GIT_INDEX_FILE", index);
+    }
+    let output = command
         .output()
         .map_err(|error| format!("cannot read Git comparison: {error}"))?;
     if !output.status.success() {
@@ -725,6 +744,44 @@ mod tests {
         );
         assert_eq!(only.selected, every, "--only keeps the prerequisite");
         assert!(only.skipped.is_empty());
+    }
+
+    /// TSK-353 under credit row B: this repository's declared inputs narrow
+    /// no run. Every eligible target of each mode runs with the ADR-0089
+    /// reason, including the `content` targets whose declarations would
+    /// leave out a records-only change and the targets that read docs.
+    #[test]
+    fn this_repositorys_declarations_narrow_no_run() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.codeflow/test-config.json");
+        let config = super::super::config::load_test_config(&path).unwrap();
+        let content: Vec<_> = config
+            .targets
+            .iter()
+            .filter(|t| t.input_class == Some(super::super::config::InputClass::Content))
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(content.contains(&"rust-clippy"), "{content:?}");
+        for mode in ["quick", "essential", "full"] {
+            let every: BTreeSet<String> = config
+                .targets
+                .iter()
+                .filter(|t| t.enabled && t.modes.contains_key(mode))
+                .map(|t| t.name.clone())
+                .collect();
+            for since in [None, Some("HEAD".to_string())] {
+                let selection = select(
+                    &config.targets,
+                    mode,
+                    &GateOptions {
+                        since: since.clone(),
+                        ..GateOptions::default()
+                    },
+                );
+                assert_eq!(selection.selected, every, "{mode} {since:?}");
+                assert!(selection.skipped.is_empty(), "{mode} {since:?}");
+                assert!(selection.reason.contains("ADR-0089"), "{mode}");
+            }
+        }
     }
 
     /// A repository whose index and first commit hold `caf\xe9.txt`, a name

@@ -80,6 +80,24 @@ pub enum TestCommand {
     /// Configure `.codeflow/test-config.json` using root detection, an embedded
     /// template, or an appended target. Safe auto-detection is the default.
     Setup(SetupArgs),
+    /// Name the tests that guard each path this change touches, from the
+    /// config's `guards` rules, and print each path no rule matches as
+    /// unguarded. Also lists the targets the declared inputs would select,
+    /// which no run applies yet: every run executes every eligible target
+    /// (ADR-0089). Runs nothing itself.
+    Guards(GuardsArgs),
+}
+
+#[derive(Args)]
+pub struct GuardsArgs {
+    /// Compare the working tree with this commit. Default: the merge base of
+    /// HEAD with the integration target of the task the branch names.
+    #[arg(long, value_name = "REV")]
+    pub since: Option<String>,
+
+    /// The mode whose targets the declared selection lists.
+    #[arg(long, default_value = "quick", value_parser = ["full", "quick", "essential"])]
+    pub mode: String,
 }
 
 #[derive(Args)]
@@ -115,6 +133,104 @@ fn setup_conflict(args: &TestArgs) -> Option<&'static str> {
     } else {
         None
     }
+}
+
+/// A gate flag that `codeflow test guards` does not read.
+fn guards_conflict(args: &TestArgs) -> Option<&'static str> {
+    if args.lock_status {
+        Some("--lock-status")
+    } else if args.since.is_some() {
+        Some("--since before guards (give it after: `codeflow test guards --since <rev>`)")
+    } else if args.all {
+        Some("--all")
+    } else if !args.only.is_empty() {
+        Some("--only")
+    } else if args.config.is_some() {
+        Some("--config")
+    } else {
+        None
+    }
+}
+
+/// `codeflow test guards`: the guarding tests and declared selection for
+/// the change from the comparison base to the working tree.
+fn run_guards(args: &GuardsArgs) -> i32 {
+    use codeflow_core::git::display_text;
+    use codeflow_core::testing::declared;
+    let root = match super::repo_root() {
+        Ok(root) => root,
+        Err(error) => {
+            eprintln!("codeflow: {error}", error = crate::cmd::shown(&error));
+            return 2;
+        }
+    };
+    let config = match codeflow_core::testing::config::load_test_config(
+        &root.join(codeflow_core::testing::gate::TEST_CONFIG_PATH),
+    ) {
+        Ok(config) => config,
+        Err(error) => {
+            eprintln!("codeflow test guards: {}", crate::cmd::shown(&error));
+            return 1;
+        }
+    };
+    let (base, source) = match declared::comparison_base(&root, args.since.as_deref()) {
+        Ok(found) => found,
+        Err(reason) => {
+            eprintln!(
+                "codeflow test guards: no comparison base: {}; name one with `codeflow test guards --since <rev>`",
+                display_text(&reason)
+            );
+            return 1;
+        }
+    };
+    let changes = match declared::changes_since(&root, &base) {
+        Ok(changes) => changes,
+        Err(reason) => {
+            eprintln!("codeflow test guards: {}", display_text(&reason));
+            return 1;
+        }
+    };
+    let report = declared::guards(&config, &changes);
+    // Count the paths listed below: a rename lists both of its paths.
+    println!(
+        "test guards: {} changed path(s) against {} ({})",
+        report.guarded.len() + report.unguarded.len(),
+        display_text(&base),
+        display_text(&source)
+    );
+    for (path, tests) in &report.guarded {
+        println!("guarded: {}", display_text(path));
+        for test in tests {
+            println!("  {}", display_text(test));
+        }
+    }
+    for path in &report.unguarded {
+        println!(
+            "unguarded: {} (no guards rule names a test for it)",
+            display_text(path)
+        );
+    }
+    if !report.tests.is_empty() {
+        println!("run these guarding tests:");
+        for test in &report.tests {
+            println!("  {}", display_text(test));
+        }
+    }
+    let selection = declared::declared_selection(&config, &args.mode, &changes);
+    println!(
+        "declared selection for {} (not applied: every run still executes every eligible target, ADR-0089):",
+        args.mode
+    );
+    if let Some(reason) = &selection.every_target {
+        println!("  every target: {}", display_text(reason));
+    }
+    for (name, reason) in &selection.selected {
+        println!("  {}: {}", display_text(name), display_text(reason));
+    }
+    for name in &selection.prerequisites {
+        println!("  {}: prerequisite", display_text(name));
+    }
+    0
 }
 
 fn print_target(r: &codeflow_core::testing::gate::GateTargetResult) {
@@ -160,6 +276,13 @@ pub fn run(args: &TestArgs) -> i32 {
         }
         return run_setup(setup_args);
     }
+    if let Some(TestCommand::Guards(guards_args)) = &args.command {
+        if let Some(flag) = guards_conflict(args) {
+            eprintln!("codeflow test: {flag} cannot be combined with guards");
+            return 2;
+        }
+        return run_guards(guards_args);
+    }
 
     let root = match super::repo_root() {
         Ok(root) => root,
@@ -204,6 +327,12 @@ pub fn run(args: &TestArgs) -> i32 {
                 print_target(result);
             }
             print_coverage_report(&coverage);
+            let executed = results
+                .iter()
+                .filter(|r| {
+                    r.status != codeflow_core::testing::runner::deadline::TargetStatus::NotSelected
+                })
+                .count();
             let verdict = if !passed {
                 "FAILED"
             } else if results.is_empty() || !skipped.is_empty() {
@@ -213,9 +342,9 @@ pub fn run(args: &TestArgs) -> i32 {
             };
             println!(
                 "test gate: {verdict} (executed {}; skipped {}{})",
-                results.len(),
+                executed,
                 skipped.len(),
-                evidence_suffix(results.len(), skipped.len(), complete)
+                evidence_suffix(executed, skipped.len(), complete)
             );
             if passed && args.strict && (results.is_empty() || evidence_skipped > 0) {
                 2
@@ -522,9 +651,16 @@ fn print_coverage_report(reports: &[CoverageReport]) {
     }
     println!("coverage:");
     for r in reports {
+        // Rules the target did not write itself are named as the project's
+        // defaults, so a verdict says which floor judged it (TSK-1014).
+        let source = if r.rules_from_defaults {
+            " (rules from defaults.coverage)"
+        } else {
+            ""
+        };
         if let Some(note) = &r.note {
             println!(
-                "  {}: {}",
+                "  {}: {}{source}",
                 codeflow_core::git::display_text(&r.target),
                 codeflow_core::git::display_line(note)
             );
@@ -539,7 +675,7 @@ fn print_coverage_report(reports: &[CoverageReport]) {
             String::new()
         };
         println!(
-            "  {}: {overall} overall — {} pass, {} fail{exceptions}",
+            "  {}: {overall} overall — {} pass, {} fail{exceptions}{source}",
             codeflow_core::git::display_text(&r.target),
             r.thresholds_passed,
             r.thresholds_failed,

@@ -44,6 +44,7 @@ pub mod limits;
 pub mod orient;
 pub mod path_policy;
 pub mod policy;
+pub mod policy_baseline;
 pub mod policy_schema;
 pub mod ref_authority;
 pub mod repo;
