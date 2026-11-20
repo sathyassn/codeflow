@@ -1,0 +1,11 @@
+id = "TSK-1558"
+uid = "d201b7b9-e441-49dc-bd90-4ddf0f758cdf"
+kind = "TSK"
+title = "The guard reads a program word that a shell expands in another way, or refuses it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:25:55Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
