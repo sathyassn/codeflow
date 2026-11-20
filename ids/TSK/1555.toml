@@ -1,0 +1,11 @@
+id = "TSK-1555"
+uid = "f34175c8-a5e8-4be6-880a-658d4f6c10b3"
+kind = "TSK"
+title = "The local gate runs coverage within a bounded amount of disk"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:19:49Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
