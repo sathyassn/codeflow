@@ -1390,23 +1390,61 @@ fn producer_changing_tracked_bytes_refuses_candidate() {
 }
 
 /// TSK-1554: a producer that rewrites a tracked file with identical bytes
-/// under `umask 077` changes only permission bits Git does not track, so the
-/// candidate keeps its generation check.
+/// under another umask (0644 to 0600 under 077, 0600 to 0644 under 022)
+/// changes only permission bits Git does not track, so the candidate keeps
+/// its generation check. Each case sets and checks the starting mode, so the
+/// harness umask cannot make it pass without a transition.
 #[cfg(unix)]
 #[test]
-fn producer_rewriting_identical_bytes_under_umask_077_keeps_candidate() {
+fn producer_rewriting_identical_bytes_under_another_umask_keeps_candidate() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    for (start, umask, end) in [(0o644, "077", 0o600), (0o600, "022", 0o644)] {
+        let dir = repo(&format!(
+            r#"{{"schema_version":"1.0","targets":[
+      {{"name":"producer","runner":"custom","outputs":["README.md"],"modes":{{"full":{{"command":"umask {umask} && cat README.md > copied && mv copied README.md"}}}}}}] }}"#
+        ));
+        let readme = dir.path().join("README.md");
+        std::fs::set_permissions(&readme, std::fs::Permissions::from_mode(start)).unwrap();
+        assert_eq!(mode(&readme), start, "starting mode");
+        let home = tempfile::tempdir().unwrap();
+        let output = run(dir.path(), home.path(), &["test"]);
+        assert!(
+            !stderr(&output).contains("generation changed the candidate"),
+            "{start:o} to {end:o}: {}",
+            stderr(&output)
+        );
+        assert!(
+            output.status.success(),
+            "{start:o} to {end:o}: {}",
+            stderr(&output)
+        );
+        assert_eq!(mode(&readme), end, "the producer rewrote README.md");
+    }
+}
+
+/// TSK-1554: a producer that removes a tracked path from the index fails its
+/// own generation check, so its consumer never runs.
+#[cfg(unix)]
+#[test]
+fn producer_removing_a_tracked_path_from_the_index_refuses_candidate() {
     let dir = repo(
         r#"{"schema_version":"1.0","targets":[
-      {"name":"producer","runner":"custom","outputs":["README.md"],"modes":{"full":{"command":"umask 077 && cp README.md copied && mv copied README.md"}}}] }"#,
+      {"name":"producer","runner":"custom","outputs":["README.md"],"modes":{"full":{"command":"git rm -q --cached README.md"}}},
+      {"name":"consumer","runner":"custom","requires":["producer"],"modes":{"full":{"command":"touch consumed"}}}] }"#,
     );
     let home = tempfile::tempdir().unwrap();
     let output = run(dir.path(), home.path(), &["test"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
     assert!(
-        !stderr(&output).contains("generation changed the candidate"),
+        stderr(&output).contains("generation changed the candidate: README.md"),
         "{}",
         stderr(&output)
     );
-    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(
+        !dir.path().join("consumed").exists(),
+        "the consumer ran after the producer removed an index path"
+    );
 }
 
 /// TSK-1554: the executable bit is tracked, so a producer that sets it on a

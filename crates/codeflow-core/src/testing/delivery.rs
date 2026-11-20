@@ -1033,6 +1033,7 @@ mod git_mode_snapshot {
             ("own.sh", b"#!/bin/sh\n", 0o700),
         ]);
         let before = tracked(dir.path()).unwrap();
+        assert_eq!(before.len(), 4, "{before:?}");
         rewrite(dir.path(), "public.js", b"same", 0o600);
         rewrite(dir.path(), "private.txt", b"same", 0o644);
         rewrite(dir.path(), "tool.sh", b"#!/bin/sh\n", 0o700);
@@ -1103,10 +1104,10 @@ mod git_mode_snapshot {
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
         let unreadable = tracked(dir.path());
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(
-            unreadable.is_err(),
-            "an unreadable tracked file was snapshotted"
-        );
+        let error = unreadable
+            .expect_err("an unreadable tracked file was snapshotted")
+            .to_string();
+        assert!(error.contains("locked.txt"), "{error}");
     }
 
     /// AC-2: a path added to the index and a path that left it are both
