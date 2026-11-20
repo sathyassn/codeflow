@@ -1,0 +1,11 @@
+id = "TSK-1556"
+uid = "20be53a0-b317-4800-b2af-fb3a245b93d1"
+kind = "TSK"
+title = "The install-run rule allows an env assignment with a command-substitution value for a non-install command"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T05:22:24Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
