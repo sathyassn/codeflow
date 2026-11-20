@@ -1466,8 +1466,8 @@ pub(super) fn configure_environment(
     // Gate-owned hints replace inherited values, including when the exact
     // path cannot be represented in the target's UTF-8 environment. The names
     // are literal so the git spawn contract can see that no Git
-    // configuration key is removed; a test in `target_inputs` keeps this
-    // list equal to `ENV_KEYS`.
+    // configuration key is removed; a test in `target_inputs` checks that
+    // every name in `ENV_KEYS` is removed.
     cmd.env_remove("CODEFLOW_BASE")
         .env_remove("CODEFLOW_HEAD")
         .env_remove("CODEFLOW_CHANGED_PATHS_FILE")
