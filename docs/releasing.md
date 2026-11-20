@@ -372,7 +372,9 @@ The guard cannot judge these routes, so a remote setting is their floor:
 The floors and who can set them:
 
 - **A `creation` rule on the `release tags` ruleset (`refs/tags/v*`).**
-  `codeflow remote protect` can write it under an administrator's token.
+  An administrator sets it in the repository's ruleset settings or through
+  the rulesets API. `codeflow remote protect` writes branch rulesets only,
+  so it neither writes nor changes a tag ruleset.
 - **A `release` environment with the operator as required reviewer.**
   While agents and the operator share one account, this is a floor only
   together with the guard's `pending_deployments` refusal, because an agent
