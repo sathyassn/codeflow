@@ -452,18 +452,14 @@ without writing files (ADR-0079).
 Each hook name under `codeflow hook` has its own exit contract, and exit 0
 does not by itself mean enforcement succeeded.
 
-- `git-guard` exits 0 to allow the tool call and 2 to make the harness block it.
-- `exec-guard` exits 0 to allow, including when it only warns, and 2 to block.
-- `git-guard` and `exec-guard` both exit 0 on a payload they cannot read, after
-  printing a warning to stderr. An unrecognized payload therefore looks the
-  same to the harness as an allowed call.
-- `edit-guard` exits 2 to block an edit and when it cannot inspect the edit
-  payload or target. It exits 0 when the payload names no edit.
-- `session-orient`, `prompt-reminder` and `session-summary` always exit 0 and
-  warn on stderr instead, because a failed digest or summary must never fail
-  the session. `prompt-reminder` is the one name meant for manual use.
-- `delegate-turn` exits 1 when `--run-id` is missing and 2 when a
-  lifecycle-directory payload cannot be read.
+| Hook | Exit contract |
+|---|---|
+| `git-guard` | 0 to allow the tool call and 2 to make the harness block it |
+| `exec-guard` | 0 to allow, including when it only warns, and 2 to block |
+| `git-guard` and `exec-guard` on a payload they cannot read | 0, after printing a warning to stderr, so an unrecognized payload looks the same to the harness as an allowed call |
+| `edit-guard` | 2 to block an edit and when it cannot inspect the edit payload or target; 0 when the payload names no edit |
+| `session-orient`, `prompt-reminder` and `session-summary` | always 0, warning on stderr instead, because a failed digest or summary must never fail the session; `prompt-reminder` is the one name meant for manual use |
+| `delegate-turn` | 1 when `--run-id` is missing and 2 when a lifecycle-directory payload cannot be read |
 
 Read stderr, not the exit code, to tell an advisory failure from a clean pass.
 
@@ -566,15 +562,12 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
   advertised tip, read from the task record.
 - The hook names what it left to CI, such as an unresolved range.
 
-`codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target by default, runs every full-gate target, then
-fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
-commit whose first parent is the old target tip and whose second parent is
-the unchanged source head, and gates that merge result. This keeps a task's
-acceptance binding to its reviewed commit intact. Run `--merge` from a linked
-worktree; a root checkout is refused before candidate preparation. A head
-already contained in the target needs no new merge commit. The subject names
-both refs: `Merge branch '<branch>' into <target>`.
+`codeflow integrate` is the local landing path for protected branches.
+
+| Mode | What it does |
+|---|---|
+| Default | Rebases the branch onto the target, runs every full-gate target, then fast-forwards the target ref |
+| `--merge` | Creates a `--no-ff` merge commit whose first parent is the old target tip and whose second parent is the unchanged source head, and gates that merge result. This keeps a task's acceptance binding to its reviewed commit intact. Run it from a linked worktree; a root checkout is refused before candidate preparation. A head already contained in the target needs no new merge commit. The subject names both refs: `Merge branch '<branch>' into <target>` |
 
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse failed, skipped or incomplete gates; a
