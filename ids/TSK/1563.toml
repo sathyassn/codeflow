@@ -1,0 +1,11 @@
+id = "TSK-1563"
+uid = "ba95f5f5-e476-4b4c-bb38-9369c78e75db"
+kind = "TSK"
+title = "The acceptance binding accepts a revert that re-creates an earlier completion"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-20T08:34:43Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
