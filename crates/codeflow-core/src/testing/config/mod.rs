@@ -43,6 +43,23 @@ pub struct TestConfig {
     /// Test targets.
     #[serde(default)]
     pub targets: Vec<TargetConfig>,
+
+    /// The tests that guard each class of path, which `codeflow test
+    /// guards` names for a change. A touched path no rule matches is
+    /// reported as unguarded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub guards: Vec<GuardRule>,
+}
+
+/// Paths and the tests that guard them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuardRule {
+    /// Repository path globs, matched like `narrow`.
+    pub paths: Vec<String>,
+    /// The commands that run the guarding tests, such as
+    /// `cargo test -p codeflow-cli --test init_e2e`.
+    pub tests: Vec<String>,
 }
 
 /// Default class for undeclared targets in a configured quick mode.
@@ -626,6 +643,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "execution",
         "defaults",
         "targets",
+        "guards",
     ];
     if let Some(object) = raw.as_object() {
         for key in object.keys() {
@@ -672,17 +690,34 @@ fn validate_deadline(path: &Path, target: &TargetConfig) -> Result<(), TestingEr
     Ok(())
 }
 
-fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
-    let validate_globs = |patterns: &[String]| -> Result<(), TestingError> {
-        for pattern in patterns {
-            glob::Pattern::new(pattern).map_err(|error| TestingError::ConfigInvalid {
+fn validate_glob_list(path: &Path, patterns: &[String]) -> Result<(), TestingError> {
+    for pattern in patterns {
+        glob::Pattern::new(pattern).map_err(|error| TestingError::ConfigInvalid {
+            path: path.to_path_buf(),
+            message: format!("invalid glob {pattern:?}: {error}; repair the test config"),
+        })?;
+    }
+    Ok(())
+}
+
+/// Each `guards` rule names at least one path glob and one test command.
+fn validate_guards(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    for rule in &config.guards {
+        if rule.paths.is_empty() || rule.tests.iter().all(|test| test.trim_ascii().is_empty()) {
+            return Err(TestingError::ConfigInvalid {
                 path: path.to_path_buf(),
-                message: format!("invalid glob {pattern:?}: {error}; repair the test config"),
-            })?;
+                message: "a guards rule needs at least one path and one test".into(),
+            });
         }
-        Ok(())
-    };
+        validate_glob_list(path, &rule.paths)?;
+    }
+    Ok(())
+}
+
+fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError> {
+    let validate_globs = |patterns: &[String]| validate_glob_list(path, patterns);
     validate_globs(&config.execution.run_everything)?;
+    validate_guards(path, config)?;
     for rule in config.defaults.coverage.iter().chain(
         config
             .targets
@@ -1178,6 +1213,30 @@ mod tests {
     }
 
     #[test]
+    fn guards_rules_load_and_malformed_rules_are_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = |guards: &str| {
+            format!(r#"{{"schema_version": "1.0", "targets": [], "guards": {guards}}}"#)
+        };
+        let path = write_config(
+            dir.path(),
+            &config(r#"[{"paths": ["docs/**"], "tests": ["codeflow validate --docs"]}]"#),
+        );
+        let loaded = load_test_config(&path).unwrap();
+        assert_eq!(loaded.guards.len(), 1);
+        assert_eq!(loaded.guards[0].tests, ["codeflow validate --docs"]);
+        for bad in [
+            r#"[{"paths": [], "tests": ["t"]}]"#,
+            r#"[{"paths": ["docs/**"], "tests": [" "]}]"#,
+            r#"[{"paths": ["docs/[**"], "tests": ["t"]}]"#,
+            r#"[{"paths": ["docs/**"], "tests": ["t"], "runs": true}]"#,
+        ] {
+            let path = write_config(dir.path(), &config(bad));
+            assert!(load_test_config(&path).is_err(), "accepted {bad}");
+        }
+    }
+
+    #[test]
     fn test_load_missing_schema_version() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(dir.path(), r#"{"targets": []}"#);
@@ -1361,6 +1420,7 @@ mod tests {
             schema_version: "1.0".to_string(),
             execution: ExecutionConfig::default(),
             defaults: DefaultsConfig::default(),
+            guards: Vec::new(),
             targets: vec![TargetConfig {
                 name: "test".to_string(),
                 enabled: true,

@@ -100,7 +100,9 @@ impl TargetRunResult {
             self.error.as_deref(),
             self.supervision.as_ref(),
         );
-        if self.termination_unconfirmed && status == TargetStatus::Passed {
+        if self.termination_unconfirmed
+            && matches!(status, TargetStatus::Passed | TargetStatus::NotSelected)
+        {
             TargetStatus::CleanupIncomplete
         } else {
             status
@@ -205,7 +207,7 @@ fn run_target_with_workers(
         let _ = writeln!(stderr, "[codeflow test] cleanup: {detail}");
     }
     let exit_code = outcome.exit_code;
-    Ok(TargetRunResult {
+    let mut result = TargetRunResult {
         supervision: Some(outcome.supervision),
         termination_unconfirmed: outcome.termination_unconfirmed,
         error,
@@ -219,7 +221,12 @@ fn run_target_with_workers(
         duration_ms,
         report_path,
         coverage_path,
-    })
+    };
+    if result.status() == TargetStatus::NotSelected {
+        result.report_path = None;
+        result.coverage_path = None;
+    }
+    Ok(result)
 }
 
 /// Run all enabled targets for a mode, sequentially or in parallel.
@@ -859,6 +866,9 @@ fn run_owed_target(
         before,
         after,
     })?);
+    if result.status() == TargetStatus::NotSelected {
+        result.evidence = None;
+    }
 
     if !target.outputs.is_empty() && result.exit_code == 0 {
         let mut failures = Vec::new();
@@ -1536,6 +1546,11 @@ pub(super) fn configure_environment(
 
     // Set TARGET env var
     cmd.env("TARGET", target_name);
+    // Gate-owned hints replace inherited values, including when the exact
+    // path cannot be represented in the target's UTF-8 environment.
+    for key in super::target_inputs::ENV_KEYS {
+        cmd.env_remove(key);
+    }
 
     // Set target-local env vars (validated)
     for (key, val) in env {
@@ -1766,21 +1781,22 @@ mod tests {
         assert_eq!(result.exit_code, 1);
     }
 
-    /// The work outlasts the base timeout and ends well inside the ceiling.
-    /// Leave startup margin on loaded hosts: a 3 s base, 12 s ceiling
-    /// and 3.6 s of work still prove that work can pass the base timeout.
+    /// A heavy target that is still working after its base timeout is not
+    /// stopped there (TSK-1413 AC-3). The proof is an event, not a fixed
+    /// amount of work: the target ticks into a file until the test releases
+    /// it, and the test releases it only after it has seen a tick written
+    /// once the base timeout has passed, counted from the target's first
+    /// tick (which comes after the runner started its clock). The base is
+    /// 3 s, so the ceiling (4 x base, 12 s) leaves about 8 s of margin for a
+    /// loaded host; `an_active_heavy_target_still_reaches_its_ceiling`
+    /// remains the proof that the ceiling holds.
     #[test]
     fn a_heavy_target_keeps_progressing_past_the_base_timeout() {
-        let (command, base) = if cfg!(windows) {
-            (
-                "1..12 | ForEach-Object { Write-Output 'PASS work'; Start-Sleep -Milliseconds 300 }",
-                3,
-            )
+        const BASE: u64 = 3;
+        let command = if cfg!(windows) {
+            "while (-not (Test-Path release)) { Write-Output 'PASS work'; Add-Content -Path ticks -Value x; Start-Sleep -Milliseconds 200 }; Set-Content -Path finished -Value done"
         } else {
-            (
-                "for i in 1 2 3 4 5 6; do echo 'PASS work'; sleep 0.6; done",
-                3,
-            )
+            "while [ ! -e release ]; do echo 'PASS work'; echo x >> ticks; sleep 0.2; done; echo done > finished"
         };
         let mut target = make_target("reduced-workers", command);
         if cfg!(windows) {
@@ -1790,11 +1806,46 @@ mod tests {
         target.workers = Some(4);
         target.env.insert("CARGO_BUILD_JOBS".into(), "1".into());
         target.env.insert("NEXTEST_TEST_THREADS".into(), "1".into());
-        target.timeout_seconds = Some(base);
+        target.timeout_seconds = Some(BASE);
         let dir = tempfile::tempdir().unwrap();
-        let result = run_target(&target, "full", dir.path()).unwrap();
+        let project = dir.path().to_path_buf();
+        let runner = std::thread::spawn(move || run_target(&target, "full", &project));
+        let ticks = dir.path().join("ticks");
+        let tick_count = || std::fs::read(&ticks).map_or(0, |bytes| bytes.len());
+        // A safety bound only, far past the ceiling and its cleanup grace,
+        // so a broken runner fails the test instead of hanging it.
+        let safety = Instant::now() + Duration::from_secs(120);
+        let wait_for = |what: &str, done: &dyn Fn() -> bool| {
+            while !done() {
+                assert!(
+                    !runner.is_finished(),
+                    "the target ended before {what}: {:?}",
+                    tick_count()
+                );
+                assert!(Instant::now() < safety, "no {what} within the safety bound");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait_for("its first tick", &|| tick_count() > 0);
+        let first_tick = Instant::now();
+        wait_for("the base timeout to pass", &|| {
+            first_tick.elapsed() > Duration::from_secs(BASE)
+        });
+        let at_base = tick_count();
+        wait_for("a tick after the base timeout", &|| tick_count() > at_base);
+        std::fs::write(dir.path().join("release"), "").unwrap();
+        let result = runner.join().unwrap().unwrap();
         assert_eq!(result.exit_code, 0, "active work was killed: {result:?}");
-        assert!(result.duration_ms >= base * 1000, "{result:?}");
+        assert_eq!(result.status(), TargetStatus::Passed, "{result:?}");
+        assert!(result.stdout.contains("PASS work"), "{result:?}");
+        assert!(
+            dir.path().join("finished").exists(),
+            "the target did not finish after its release: {result:?}"
+        );
+        assert!(
+            result.duration_ms > BASE * 1000,
+            "the run did not outlast its base timeout: {result:?}"
+        );
     }
 
     #[test]
@@ -1966,7 +2017,9 @@ mod tests {
             libc::kill(pid, libc::SIGKILL);
         }
         let result = result.unwrap();
-        assert!(started.elapsed() < Duration::from_secs(10));
+        // About 6 s expected (1 s timeout, 5 s cleanup grace); 30 s still
+        // proves collection did not wait out the fixture's 60 s sleep.
+        assert!(started.elapsed() < Duration::from_secs(30));
         assert_eq!(result.status(), TargetStatus::TimedOut);
         assert!(result.termination_unconfirmed);
         assert!(result

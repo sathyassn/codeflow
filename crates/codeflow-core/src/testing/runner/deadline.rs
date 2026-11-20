@@ -13,6 +13,8 @@ pub const DEFAULT_CLEANUP_GRACE_SECONDS: u64 = 5;
 /// keeps every deadline sum far inside `Instant` and `Duration` arithmetic.
 pub const MAX_CLEANUP_GRACE_SECONDS: u64 = 3600;
 pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
+/// A target declined its work. It grants no pass, evidence or reuse credit.
+pub const NOT_SELECTED_EXIT_CODE: i32 = 77;
 pub const DEFAULT_STALL_SECONDS: u64 = 300;
 pub const MAX_TIMEOUT_SECONDS: u64 =
     (u64::MAX - DEFAULT_CLEANUP_GRACE_SECONDS * 1_000) / (HEAVY_TIMEOUT_MULTIPLIER * 1_000);
@@ -21,6 +23,7 @@ pub const MAX_TIMEOUT_SECONDS: u64 =
 #[serde(rename_all = "snake_case")]
 pub enum TargetStatus {
     Passed,
+    NotSelected,
     Failed,
     Stalled,
     TimedOut,
@@ -33,6 +36,7 @@ impl TargetStatus {
     pub fn label(self) -> &'static str {
         match self {
             Self::Passed => "passed",
+            Self::NotSelected => "skipped, not selected",
             Self::Failed => "FAILED",
             Self::Stalled => "stalled",
             Self::TimedOut => "timed out",
@@ -47,6 +51,7 @@ impl TargetStatus {
             Self::Stalled => "not run: prerequisite stalled",
             Self::TimedOut => "not run: prerequisite timed out",
             Self::CleanupIncomplete => "not run: prerequisite cleanup incomplete",
+            Self::NotSelected => "not run: prerequisite skipped, not selected",
             _ => "not run: prerequisite failed",
         }
     }
@@ -117,9 +122,14 @@ pub fn result_status(exit: i32, error: Option<&str>, info: Option<&Supervision>)
         if info.status != TargetStatus::Passed && info.status != TargetStatus::Failed {
             return info.status;
         }
+        if exit == NOT_SELECTED_EXIT_CODE && !info.cleanup_details.is_empty() {
+            return TargetStatus::CleanupIncomplete;
+        }
     }
     if exit == 0 && error.is_none() {
         TargetStatus::Passed
+    } else if exit == NOT_SELECTED_EXIT_CODE && error.is_none() {
+        TargetStatus::NotSelected
     } else {
         TargetStatus::Failed
     }
@@ -234,6 +244,34 @@ impl Deadline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_exit_codes_distinguish_pass_skip_and_failure() {
+        assert_eq!(result_status(0, None, None), TargetStatus::Passed);
+        assert_eq!(
+            serde_json::to_value(result_status(77, None, None)).unwrap(),
+            "not_selected"
+        );
+        for code in [1, 2, 76, 78, 124, -1] {
+            assert_eq!(result_status(code, None, None), TargetStatus::Failed);
+        }
+        assert_eq!(
+            result_status(77, Some("runner error"), None),
+            TargetStatus::Failed
+        );
+        let mut d = Deadline::new(Duration::from_secs(1), false, 1, None);
+        d.info.status = TargetStatus::TimedOut;
+        assert_eq!(
+            result_status(77, None, Some(&d.info)),
+            TargetStatus::TimedOut
+        );
+        d.info.status = TargetStatus::Failed;
+        d.info.cleanup_details.push("cleanup failed".into());
+        assert_eq!(
+            result_status(77, None, Some(&d.info)),
+            TargetStatus::CleanupIncomplete
+        );
+    }
 
     #[test]
     fn deadline_invariants_hold_across_windows_and_activity_times() {

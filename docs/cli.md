@@ -225,6 +225,9 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--template <NAME>` | Write an embedded test-config template by name. |
 | | `--replace` | Explicitly replace an existing config when applying --template. |
 | | `--add-target` | Interactively append one target to the existing config. |
+| `codeflow test guards` | | Name the tests that guard each path this change touches, from the config's `guards` rules, and print each path no rule matches as unguarded. Also lists the targets the declared inputs would select, which no run applies yet: every run executes every eligible target (ADR-0089). Runs nothing itself |
+| | `--since <REV>` | Compare the working tree with this commit. Default: the merge base of HEAD with the integration target of the task the branch names. |
+| | `--mode <MODE>` | The mode whose targets the declared selection lists. One of `full`, `quick`, `essential`. Default `quick`. |
 | `codeflow reserve <COMMAND>...` | | Run a direct heavy command in a heavy-run slot, beside other heavy runs |
 | | `--wait-seconds <WAIT_SECONDS>` | Maximum seconds to wait while a host-exclusive target holds the host. Zero refuses immediately. Other heavy runs never make a reserve wait. Default `0`. |
 | | `--timeout-seconds <TIMEOUT_SECONDS>` | Stop the command and its descendants after this many seconds. Default `3600`. |
@@ -549,12 +552,20 @@ and CI runs it again.
 | Coverage | File and aggregate thresholds count toward the verdict; `changed_files` rules are rejected until an explicit comparison base exists (ADR-0021) |
 | Captured output | Bounded, with truncation reported |
 | `test setup` | Detects only at the repository root; monorepos declare package `cwd` targets; never automatically replaces populated or malformed config |
+| `test guards` | Runs nothing. For the change from the merge base of `HEAD` with the task's line (or `--since <rev>`) to the working tree, names the tests the config's `guards` rules give each touched path, prints each path no rule covers as unguarded, and lists the targets the declared inputs would select. Run the named tests as the build loop's targeted tests. No run applies that selection while no local record earns selection credit (ADR-0089) |
 
 Heavy runs share the host by capacity and start with fewer jobs past its
 budget; only a `host_exclusive` target runs alone
 ([details](troubleshooting.md#heavy-work-shares-the-host)).
 
 Heavy-target deadlines: [test gate reference](test-gate.md#technical).
+
+Target commands receive `CODEFLOW_BASE`, `CODEFLOW_HEAD`,
+`CODEFLOW_CHANGED_PATHS_FILE` and `CODEFLOW_LANDING_LINE` in every mode.
+The comparison inputs say `unknown` when no base is proven; they never
+narrow CodeFlow's selection. Exit 77 reports `skipped, not selected` and
+fails the gate with incomplete evidence. The [target-command contract](test-gate.md#inputs-and-exit-codes-for-target-commands)
+defines the base source, path-file format and other exit codes.
 
 - A gate that runs cargo warns about a `CARGO_TARGET_DIR` outside the
   worktree, and each target prints a start line on stderr as it begins.
@@ -581,7 +592,8 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 | A passing push | Every check runs, as before. |
 | A landing candidate | A branch named with `git.candidate_prefix` starts at its line's fetched tip and is judged into that line once the binding in the `codeflow ci` table above holds; otherwise the push is refused with `work.landing_candidate` and its cause, and no `codeflow ci` runs for it. |
 | A line push to a candidate's tip | A push of an epic line whose new tip is a landing candidate's tip (the pushed ref's source, a local branch at that commit, or an advertised candidate branch) is admitted only when that candidate binds to the line and the push fast-forwards the line to it. |
-| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget only reports; it never refuses a push. `codeflow ci --timings` prints the time of every check. |
+| Time | Over `git.push_budget_seconds` (default 60) the hook names the slowest step and, for a `codeflow ci` step, its three slowest checks. The budget alone only reports. `codeflow ci --timings` prints the time of every check. |
+| Deadline | Each `codeflow ci` must finish within the lookup wait times its attempts, plus the fetch wait, plus the push budget (270 s by default), or it is ended and the push refused under `git.test_gate_on_push`. The check runs away from the terminal, so in a partial clone a fetch of a missing object that needs a password or passphrase cannot ask for it and is refused this way. The refusal then names the fix, built from the range the check read: run `git log --diff-merges=separate --stat --format= <from>..<head>` and `git diff --stat <from>...<head>` in your terminal, where a prompt can be answered, then push again. `<from>` is the check's `--commits-from`, or its base without one. The two commands read both sides of each commit's changes and of the range's diff, so they fetch every file version the added-lines, conflict-marker and size-and-ignore checks read. They do not fetch a file the check reads whole at one commit that neither shows changed, such as the policy at the target's tip or a file a sparse checkout leaves out, and the refusal says so. A plain `git fetch` keeps the clone's filter and fetches none of them. |
 
 `codeflow integrate` is the local landing path for protected branches. It
 rebases the branch onto the target by default, runs every full-gate target, then

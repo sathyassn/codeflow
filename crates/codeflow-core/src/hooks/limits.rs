@@ -233,11 +233,12 @@ mod tests {
     /// `policy_authority_journey` proves the behaviour.
     #[test]
     fn guard_code_names_no_configured_wait() {
-        const CONFIGURED: [&str; 7] = [
+        const CONFIGURED: [&str; 8] = [
             "QueryLimits::from",
             "QueryLimits::default",
             "remote_query::ls_remote",
             "remote_query::fetch_objects",
+            "remote_query::fetch_tip",
             "release_line::advertisement",
             "release_line::ask_destination",
             "release_line::checkout_scope",
