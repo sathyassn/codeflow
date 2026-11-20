@@ -234,7 +234,67 @@ fn link_target_bytes(target: &Path) -> Vec<u8> {
     target.as_os_str().as_encoded_bytes().to_vec()
 }
 
-/// Snapshot the bytes and modes of every tracked path, including dirty edits.
+/// The mode Git records for a work-tree path, read from its metadata
+/// (TSK-1554): 0o120000 for a link, 0o100755 for a regular file with the
+/// owner executable bit, 0o100644 for any other regular file, and 0 for a
+/// path that is absent. Git keeps no other permission bit, so a rewrite under
+/// another umask (0644 to 0600, 0755 to 0700) is no change, while a change of
+/// kind or of the executable bit is. Where the platform has no executable bit,
+/// the index entry's `indexed` mode supplies it. Any other kind keeps its own
+/// type bits, so it never equals a regular file or a link.
+fn git_mode(metadata: Option<&std::fs::Metadata>, indexed: u32) -> u32 {
+    let Some(metadata) = metadata else {
+        return 0;
+    };
+    let kind = metadata.file_type();
+    if kind.is_symlink() {
+        return 0o120_000;
+    }
+    #[cfg(unix)]
+    let raw = {
+        use std::os::unix::fs::MetadataExt;
+        metadata.mode()
+    };
+    #[cfg(not(unix))]
+    let raw = indexed;
+    if kind.is_file() {
+        return if raw & 0o100 == 0 {
+            0o100_644
+        } else {
+            0o100_755
+        };
+    }
+    #[cfg(unix)]
+    let other = raw & 0o170_000;
+    #[cfg(not(unix))]
+    let other = if kind.is_dir() { 0o040_000 } else { 0o170_000 };
+    #[cfg(unix)]
+    let _ = indexed;
+    other
+}
+
+/// The paths whose snapshot differs between `before` and `after`, in either
+/// direction and in order: a changed path, a path added to the index and a
+/// path that left it are each named once (TSK-1554).
+#[must_use]
+pub fn changed<'a>(
+    before: &'a BTreeMap<String, String>,
+    after: &'a BTreeMap<String, String>,
+) -> Vec<&'a str> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Snapshot every tracked path as Git sees it, including dirty edits: its
+/// bytes (a link's target bytes) and its Git mode (`git_mode`), so content,
+/// kind and the executable bit are compared and other permission bits are
+/// not.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
     let repo = match git2::Repository::discover(root) {
         Ok(repo) => repo,
@@ -301,13 +361,7 @@ fn tracked_repository(
         } else {
             b"<deleted>".to_vec()
         };
-        #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.map_or(0, |m| m.permissions().mode())
-        };
-        #[cfg(not(unix))]
-        let mode = entry.mode;
+        let mode = git_mode(metadata.as_ref(), entry.mode);
         result.insert(
             name,
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
@@ -932,6 +986,145 @@ mod tests {
         let first = tracked(dir.path()).unwrap();
         target(b"caf\xfe").unwrap();
         assert_ne!(first, tracked(dir.path()).unwrap());
+    }
+}
+
+/// TSK-1554: the snapshot holds what Git tracks for a path (its content, its
+/// kind and the executable bit), so a permission change Git does not record
+/// is no generation change, and every change Git does record still is.
+#[cfg(all(test, unix))]
+mod git_mode_snapshot {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A repository whose index tracks each `(name, bytes, mode)` file.
+    fn repository_tracking(files: &[(&str, &[u8], u32)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (name, bytes, mode) in files {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(*mode)).unwrap();
+            index.add_path(Path::new(name)).unwrap();
+        }
+        index.write().unwrap();
+        dir
+    }
+
+    /// Replace `name` with a new file of `bytes` at `mode`, as a generator
+    /// that renames its output into place under another umask does.
+    fn rewrite(root: &Path, name: &str, bytes: &[u8], mode: u32) {
+        let path = root.join(name);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// AC-1: identical bytes rewritten at 0600 from 0644, at 0644 from 0600,
+    /// at 0700 from 0755 and at 0755 from 0700 keep the snapshot, as they keep
+    /// Git's own record of each file.
+    #[test]
+    fn a_permission_change_git_does_not_track_keeps_the_snapshot() {
+        let dir = repository_tracking(&[
+            ("public.js", b"same", 0o644),
+            ("private.txt", b"same", 0o600),
+            ("tool.sh", b"#!/bin/sh\n", 0o755),
+            ("own.sh", b"#!/bin/sh\n", 0o700),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        rewrite(dir.path(), "public.js", b"same", 0o600);
+        rewrite(dir.path(), "private.txt", b"same", 0o644);
+        rewrite(dir.path(), "tool.sh", b"#!/bin/sh\n", 0o700);
+        rewrite(dir.path(), "own.sh", b"#!/bin/sh\n", 0o755);
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(
+            changed(&before, &after),
+            Vec::<&str>::new(),
+            "a permission change alone read as a generation change"
+        );
+    }
+
+    /// AC-2: the executable bit is tracked, so gaining it (0644 to 0755) or
+    /// losing it (0755 to 0644) with identical bytes is a change.
+    #[test]
+    fn an_executable_bit_change_changes_the_snapshot() {
+        let dir = repository_tracking(&[
+            ("gains.sh", b"#!/bin/sh\n", 0o644),
+            ("loses.sh", b"#!/bin/sh\n", 0o755),
+            ("kept.txt", b"same", 0o644),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        rewrite(dir.path(), "gains.sh", b"#!/bin/sh\n", 0o755);
+        std::fs::set_permissions(
+            dir.path().join("loses.sh"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["gains.sh", "loses.sh"]);
+    }
+
+    /// AC-2: the file kind is tracked, so a regular file replaced by a link
+    /// whose target spells the file's bytes is a change, and so is the
+    /// reverse.
+    #[test]
+    fn a_file_replaced_by_a_link_with_the_same_bytes_changes_the_snapshot() {
+        let dir = repository_tracking(&[("file", b"target.txt", 0o644)]);
+        std::os::unix::fs::symlink("target.txt", dir.path().join("link")).unwrap();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("link")).unwrap();
+        index.write().unwrap();
+        let before = tracked(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join("file")).unwrap();
+        std::os::unix::fs::symlink("target.txt", dir.path().join("file")).unwrap();
+        std::fs::remove_file(dir.path().join("link")).unwrap();
+        std::fs::write(dir.path().join("link"), b"target.txt").unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["file", "link"]);
+    }
+
+    /// AC-2: a content change at the same mode is a change, a deleted
+    /// tracked file is a change, and an unreadable tracked file is refused.
+    #[test]
+    fn a_content_change_or_deletion_changes_the_snapshot_and_unreadable_refuses() {
+        let dir = repository_tracking(&[
+            ("edited.txt", b"one", 0o644),
+            ("deleted.txt", b"gone", 0o644),
+            ("locked.txt", b"same", 0o644),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        rewrite(dir.path(), "edited.txt", b"two", 0o644);
+        std::fs::remove_file(dir.path().join("deleted.txt")).unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["deleted.txt", "edited.txt"]);
+        let locked = dir.path().join("locked.txt");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = tracked(dir.path());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            unreadable.is_err(),
+            "an unreadable tracked file was snapshotted"
+        );
+    }
+
+    /// AC-2: a path added to the index and a path that left it are both
+    /// named, so the per-target check sees a removal as the whole-run check
+    /// does.
+    #[test]
+    fn a_path_added_to_or_removed_from_the_index_is_named() {
+        let dir = repository_tracking(&[("kept.txt", b"same", 0o644), ("leaves.txt", b"x", 0o644)]);
+        let before = tracked(dir.path()).unwrap();
+        std::fs::write(dir.path().join("joins.txt"), b"new").unwrap();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("joins.txt")).unwrap();
+        index.remove_path(Path::new("leaves.txt")).unwrap();
+        index.write().unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert!(!after.contains_key("leaves.txt"));
+        assert_eq!(changed(&before, &after), ["joins.txt", "leaves.txt"]);
     }
 }
 

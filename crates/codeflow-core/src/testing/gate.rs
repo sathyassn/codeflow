@@ -451,13 +451,7 @@ fn run_configured(
 
     let mut failure_reasons = Vec::new();
     if !generation_unchanged {
-        let changed: std::collections::BTreeSet<_> = before
-            .keys()
-            .chain(after.keys())
-            .filter(|path| before.get(*path) != after.get(*path))
-            .map(String::as_str)
-            .collect();
-        let changed = changed.into_iter().collect::<Vec<_>>().join(", ");
+        let changed = delivery::changed(&before, &after).join(", ");
         failure_reasons.push(format!("tracked files changed during the gate: {changed}"));
         progress!(
             "[codeflow test] generation changed the candidate: {}",

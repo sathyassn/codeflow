@@ -1389,6 +1389,45 @@ fn producer_changing_tracked_bytes_refuses_candidate() {
     assert!(!dir.path().join("consumed").exists());
 }
 
+/// TSK-1554: a producer that rewrites a tracked file with identical bytes
+/// under `umask 077` changes only permission bits Git does not track, so the
+/// candidate keeps its generation check.
+#[cfg(unix)]
+#[test]
+fn producer_rewriting_identical_bytes_under_umask_077_keeps_candidate() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"producer","runner":"custom","outputs":["README.md"],"modes":{"full":{"command":"umask 077 && cp README.md copied && mv copied README.md"}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert!(
+        !stderr(&output).contains("generation changed the candidate"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+/// TSK-1554: the executable bit is tracked, so a producer that sets it on a
+/// tracked file still changes the candidate and names the path.
+#[cfg(unix)]
+#[test]
+fn producer_setting_the_executable_bit_refuses_candidate() {
+    let dir = repo(
+        r#"{"schema_version":"1.0","targets":[
+      {"name":"producer","runner":"custom","outputs":["README.md"],"modes":{"full":{"command":"chmod u+x README.md"}}}] }"#,
+    );
+    let home = tempfile::tempdir().unwrap();
+    let output = run(dir.path(), home.path(), &["test"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("generation changed the candidate: README.md"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn unavailable_gate_lock_refuses_before_start() {
