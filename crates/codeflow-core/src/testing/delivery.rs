@@ -244,19 +244,25 @@ fn link_target_bytes(target: &Path) -> Vec<u8> {
 /// type bits, so it never equals a regular file or a link.
 ///
 /// The kind is read from the metadata already fetched, as type bits compared
-/// with constants, so it is never an existence check.
-fn git_mode(metadata: Option<&std::fs::Metadata>, indexed: u32) -> u32 {
+/// with constants, so it is never an existence check. On a platform that is
+/// neither Unix nor Windows the kind of a path that is not a link cannot be
+/// established, so this refuses it (`unclassifiable_kind`) rather than guess.
+fn git_mode(
+    metadata: Option<&std::fs::Metadata>,
+    indexed: u32,
+    path: &Path,
+) -> Result<u32, TestingError> {
     let Some(metadata) = metadata else {
-        return 0;
+        return Ok(0);
     };
     if metadata.file_type().is_symlink() {
-        return 0o120_000;
+        return Ok(0o120_000);
     }
-    match kind_and_execute(metadata, indexed) {
+    Ok(match kind_and_execute(metadata, indexed, path)? {
         (REGULAR_FILE, true) => 0o100_755,
         (REGULAR_FILE, false) => 0o100_644,
         (other, _) => other,
-    }
+    })
 }
 
 /// The type bits of a regular file and of a folder, as Git and Unix spell
@@ -270,17 +276,27 @@ const FOLDER: u32 = 0o040_000;
 /// The type bits of a path that is not a link, and whether its owner execute
 /// bit is set, from Unix metadata.
 #[cfg(unix)]
-fn kind_and_execute(metadata: &std::fs::Metadata, _indexed: u32) -> (u32, bool) {
+#[allow(clippy::unnecessary_wraps)] // The shared signature lets other platforms refuse.
+fn kind_and_execute(
+    metadata: &std::fs::Metadata,
+    _indexed: u32,
+    _path: &Path,
+) -> Result<(u32, bool), TestingError> {
     use std::os::unix::fs::MetadataExt;
     let raw = metadata.mode();
-    (raw & KIND_MASK, raw & 0o100 != 0)
+    Ok((raw & KIND_MASK, raw & 0o100 != 0))
 }
 
 /// Windows has no execute bit, so the index entry supplies it; a folder is
 /// marked by its attribute, and anything else that is not a link is a file,
 /// as `std` reads it.
 #[cfg(windows)]
-fn kind_and_execute(metadata: &std::fs::Metadata, indexed: u32) -> (u32, bool) {
+#[allow(clippy::unnecessary_wraps)] // The shared signature lets other platforms refuse.
+fn kind_and_execute(
+    metadata: &std::fs::Metadata,
+    indexed: u32,
+    _path: &Path,
+) -> Result<(u32, bool), TestingError> {
     use std::os::windows::fs::MetadataExt;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
     let kind = if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY == 0 {
@@ -288,15 +304,34 @@ fn kind_and_execute(metadata: &std::fs::Metadata, indexed: u32) -> (u32, bool) {
     } else {
         FOLDER
     };
-    (kind, indexed & 0o100 != 0)
+    Ok((kind, indexed & 0o100 != 0))
 }
 
-/// Other platforms expose no kind bits; a path that is not a link reaches
-/// here only after `std::fs::read` read it, which refuses a folder, so it is
-/// a file, and the index entry supplies the execute bit.
+/// Other platforms expose no kind bits, and reading a path proves nothing
+/// about its kind: `std::fs::read` opens and reads a device or a socket as
+/// it does a file. So a path that is not a link is refused here, before its
+/// bytes are read.
 #[cfg(not(any(unix, windows)))]
-fn kind_and_execute(_metadata: &std::fs::Metadata, indexed: u32) -> (u32, bool) {
-    (REGULAR_FILE, indexed & 0o100 != 0)
+fn kind_and_execute(
+    _metadata: &std::fs::Metadata,
+    _indexed: u32,
+    path: &Path,
+) -> Result<(u32, bool), TestingError> {
+    Err(unclassifiable_kind(path))
+}
+
+/// The refusal for a tracked path whose file kind this platform cannot
+/// classify (TSK-1554), naming the path as the snapshot's other read errors
+/// do.
+#[cfg(any(test, not(any(unix, windows))))]
+fn unclassifiable_kind(path: &Path) -> TestingError {
+    TestingError::Io(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "cannot snapshot {}: file kinds cannot be classified on this platform, so the generation check refuses it; run the gate on Unix or Windows",
+            path.display()
+        ),
+    ))
 }
 
 /// The paths whose snapshot differs between `before` and `after`, in either
@@ -375,6 +410,9 @@ fn tracked_repository(
         } else {
             Some(std::fs::symlink_metadata(&path).map_err(unreadable)?)
         };
+        // The mode comes first, so a platform that cannot classify the kind
+        // refuses the path before reading it.
+        let mode = git_mode(metadata.as_ref(), entry.mode, &path)?;
         let bytes = if metadata
             .as_ref()
             .is_some_and(|m| m.file_type().is_symlink())
@@ -387,7 +425,6 @@ fn tracked_repository(
         } else {
             b"<deleted>".to_vec()
         };
-        let mode = git_mode(metadata.as_ref(), entry.mode);
         result.insert(
             name,
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
@@ -1152,6 +1189,50 @@ mod git_mode_snapshot {
         let after = tracked(dir.path()).unwrap();
         assert!(!after.contains_key("leaves.txt"));
         assert_eq!(changed(&before, &after), ["joins.txt", "leaves.txt"]);
+    }
+}
+
+/// TSK-1554: where the platform cannot classify a file's kind, the snapshot
+/// refuses the path instead of reading it as a regular file.
+#[cfg(test)]
+mod unclassifiable_kind_refusal {
+    use super::*;
+
+    /// The refusal names the path and says why, as an unsupported operation.
+    #[test]
+    fn the_refusal_names_the_path_and_the_reason() {
+        let error = unclassifiable_kind(Path::new("repo/tool.sh"));
+        let TestingError::Io(io) = &error else {
+            panic!("the refusal is not an I/O error: {error}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(message.contains("repo/tool.sh"), "{message}");
+        assert!(
+            message.contains("file kinds cannot be classified on this platform"),
+            "{message}"
+        );
+    }
+
+    /// On a platform that is neither Unix nor Windows, a tracked regular
+    /// file is refused with that error. Only such a target compiles this.
+    #[cfg(not(any(unix, windows)))]
+    #[test]
+    fn a_tracked_file_is_refused_where_kinds_cannot_be_classified() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("tool.sh"), b"#!/bin/sh\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("tool.sh")).unwrap();
+        index.write().unwrap();
+        let message = tracked(dir.path())
+            .expect_err("a file of unknown kind was snapshotted")
+            .to_string();
+        assert!(message.contains("tool.sh"), "{message}");
+        assert!(
+            message.contains("file kinds cannot be classified on this platform"),
+            "{message}"
+        );
     }
 }
 
