@@ -242,35 +242,61 @@ fn link_target_bytes(target: &Path) -> Vec<u8> {
 /// kind or of the executable bit is. Where the platform has no executable bit,
 /// the index entry's `indexed` mode supplies it. Any other kind keeps its own
 /// type bits, so it never equals a regular file or a link.
+///
+/// The kind is read from the metadata already fetched, as type bits compared
+/// with constants, so it is never an existence check.
 fn git_mode(metadata: Option<&std::fs::Metadata>, indexed: u32) -> u32 {
     let Some(metadata) = metadata else {
         return 0;
     };
-    let kind = metadata.file_type();
-    if kind.is_symlink() {
+    if metadata.file_type().is_symlink() {
         return 0o120_000;
     }
-    #[cfg(unix)]
-    let raw = {
-        use std::os::unix::fs::MetadataExt;
-        metadata.mode()
-    };
-    #[cfg(not(unix))]
-    let raw = indexed;
-    if kind.is_file() {
-        return if raw & 0o100 == 0 {
-            0o100_644
-        } else {
-            0o100_755
-        };
+    match kind_and_execute(metadata, indexed) {
+        (REGULAR_FILE, true) => 0o100_755,
+        (REGULAR_FILE, false) => 0o100_644,
+        (other, _) => other,
     }
-    #[cfg(unix)]
-    let other = raw & 0o170_000;
-    #[cfg(not(unix))]
-    let other = if kind.is_dir() { 0o040_000 } else { 0o170_000 };
-    #[cfg(unix)]
-    let _ = indexed;
-    other
+}
+
+/// The type bits of a regular file and of a folder, as Git and Unix spell
+/// them, and the mask that selects type bits from a Unix mode.
+#[cfg(unix)]
+const KIND_MASK: u32 = 0o170_000;
+const REGULAR_FILE: u32 = 0o100_000;
+#[cfg(windows)]
+const FOLDER: u32 = 0o040_000;
+
+/// The type bits of a path that is not a link, and whether its owner execute
+/// bit is set, from Unix metadata.
+#[cfg(unix)]
+fn kind_and_execute(metadata: &std::fs::Metadata, _indexed: u32) -> (u32, bool) {
+    use std::os::unix::fs::MetadataExt;
+    let raw = metadata.mode();
+    (raw & KIND_MASK, raw & 0o100 != 0)
+}
+
+/// Windows has no execute bit, so the index entry supplies it; a folder is
+/// marked by its attribute, and anything else that is not a link is a file,
+/// as `std` reads it.
+#[cfg(windows)]
+fn kind_and_execute(metadata: &std::fs::Metadata, indexed: u32) -> (u32, bool) {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    let kind = if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        REGULAR_FILE
+    } else {
+        FOLDER
+    };
+    (kind, indexed & 0o100 != 0)
+}
+
+/// Other platforms expose no kind bits; a path that is not a link reaches
+/// here only after `std::fs::read` read it, which refuses a folder, so it is
+/// a file, and the index entry supplies the execute bit.
+#[cfg(not(any(unix, windows)))]
+fn kind_and_execute(_metadata: &std::fs::Metadata, indexed: u32) -> (u32, bool) {
+    (REGULAR_FILE, indexed & 0o100 != 0)
 }
 
 /// The paths whose snapshot differs between `before` and `after`, in either
