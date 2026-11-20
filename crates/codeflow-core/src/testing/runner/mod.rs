@@ -1464,10 +1464,14 @@ pub(super) fn configure_environment(
     // Set TARGET env var
     cmd.env("TARGET", target_name);
     // Gate-owned hints replace inherited values, including when the exact
-    // path cannot be represented in the target's UTF-8 environment.
-    for key in super::target_inputs::ENV_KEYS {
-        cmd.env_remove(key);
-    }
+    // path cannot be represented in the target's UTF-8 environment. The names
+    // are literal so the git spawn contract can see that no Git
+    // configuration key is removed; a test in `target_inputs` keeps this
+    // list equal to `ENV_KEYS`.
+    cmd.env_remove("CODEFLOW_BASE")
+        .env_remove("CODEFLOW_HEAD")
+        .env_remove("CODEFLOW_CHANGED_PATHS_FILE")
+        .env_remove("CODEFLOW_LANDING_LINE");
 
     // Set target-local env vars (validated)
     for (key, val) in env {
