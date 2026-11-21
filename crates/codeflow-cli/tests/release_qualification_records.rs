@@ -22,6 +22,7 @@ fn harness() -> PathBuf {
 /// Outcome step is disabled. Returns the script's exit status, its output
 /// and the result rows as `(command, check, status, observed)`.
 fn run_records(work: &Path, outcomes: bool) -> (bool, String, Vec<[String; 4]>) {
+    codeflow_fixture::require_cargo_environment();
     let script = r#"
 set -eu
 . "$HARNESS/lib.sh"

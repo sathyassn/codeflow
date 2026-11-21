@@ -42,7 +42,7 @@ use std::process::{Command, Output};
 mod fixture_seed;
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn codeflow() -> Command {
     codeflow_at(Path::new(env!("CARGO_BIN_EXE_codeflow")))

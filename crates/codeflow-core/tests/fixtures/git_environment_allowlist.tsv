@@ -1,4 +1,16 @@
 # file	normalized call span	count	reason
+crates/codeflow-cli/tests/support/process_folders.rs	starts_with("GIT_")	1	Excludes every Git variable when deriving forced-empty CI names from the Cargo table; never mutates Git configuration (TSK-1473).
+crates/codeflow-cli/tests/support/process_folders.rs	env_remove(name)	1	Clears only Cargo's forced-empty CI defaults, excluding Git settings and root_checkout::AGENT_MARKERS; names come from the Cargo table and no inherited values are read (TSK-1473).
+crates/codeflow-cli/tests/work_cli.rs	env_remove(name)	1	Clears only root_checkout::AGENT_MARKERS for every fixture Git command, including pushes through installed hooks; preserves Git configuration (TSK-1473).
+crates/codeflow-cli/tests/ci_cli/destination.rs	env_remove(name)	1	Clears only root_checkout::AGENT_MARKERS for the installed pre-push fixture; preserves Git configuration (TSK-1473).
+crates/codeflow-cli/tests/refusal_journey/landed.rs	env_remove(name)	1	Clears only root_checkout::AGENT_MARKERS for the landed fixture's Git and codeflow commands; preserves Git configuration (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_COUNT"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_KEY_0"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_VALUE_0"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_KEY_1"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_VALUE_1"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-fixture/src/lib.rs	"GIT_CONFIG_PARAMETERS"	1	Names a fixed Cargo-forced maintenance value in the read-only environment probe; no configuration mutation (TSK-1473).
+crates/codeflow-cli/tests/read_benchmark.rs	env_remove(name)	1	Clears only root_checkout::AGENT_MARKERS from fixture commands, including init and Git descendants, without depending on Cargo's blank markers (TSK-1473).
 crates/codeflow-cli/tests/hooks_cli.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.wt GIT_CONFIG_VALUE_0=worktree git wt add -b t .worktrees/n && printf x > .worktrees/n/.claude/settings.json"	1	Inert TSK-406 report-04 alias payload sent only to the guard for judgment; never executed and never changes a process environment or Git configuration.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.hidden GIT_CONFIG_VALUE_0='config core.bare true' git rebase -x 'git hidden' HEAD~1"	1	Inert hook payload for command-local alias inheritance; no process environment or Git configuration is changed by this string.
 crates/codeflow-cli/src/cmd/ci.rs	env(key)	4	Reads CI variables through injected lookup closures, including branch and head detection; not a process mutation.
@@ -62,7 +74,7 @@ crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_COUNT","3")	1	Append
 crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_KEY_2",key)	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
 crates/codeflow-cli/tests/workspace_mode.rs	env("GIT_CONFIG_VALUE_2",value)	1	Appends core.ignoreCase at slot 2 while retaining maintenance slots 0 and 1; behaviorally verified.
 crates/codeflow-cli/tests/workspace_mode.rs	env(name,"1")	1	Agent identity marker controls preserve inherited Git settings.
-crates/codeflow-cli/tests/workspace_mode.rs	env_remove(name)	1	Agent identity marker controls preserve inherited Git settings.
+crates/codeflow-cli/tests/workspace_mode.rs	env_remove(name)	3	Agent identity controls and the human fixture's codeflow and Git commands clear root_checkout::AGENT_MARKERS while preserving inherited Git settings (TSK-1473).
 crates/codeflow-core/src/doctor/mod.rs	env(&self,name:&str)	1	Read-only environment lookup function and its test doubles, not process mutation.
 crates/codeflow-core/src/doctor/mod.rs	env(name)	2	Read-only environment lookup function and its test doubles, not process mutation.
 crates/codeflow-core/src/doctor/mod.rs	env(name:&str)	2	Read-only environment lookup function and its test doubles, not process mutation.

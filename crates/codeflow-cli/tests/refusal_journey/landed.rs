@@ -47,6 +47,9 @@ impl Repo {
     }
     fn command(&self, program: &str) -> Command {
         let mut c = Command::new(program);
+        for name in codeflow_core::root_checkout::AGENT_MARKERS {
+            c.env_remove(name);
+        }
         c.current_dir(self.root())
             .env("HOME", self.root())
             .env("XDG_CONFIG_HOME", self.root().join(".config"))

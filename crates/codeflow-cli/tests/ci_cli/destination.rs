@@ -291,6 +291,9 @@ fn installed_pre_push_refuses_timeout_then_allows_the_same_task_push() {
     std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
     let push = || {
         let mut git = std::process::Command::new("git");
+        for name in codeflow_core::root_checkout::AGENT_MARKERS {
+            git.env_remove(name);
+        }
         git.env("CODEFLOW_HOME", super::isolated_home())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_SYSTEM", "/dev/null")

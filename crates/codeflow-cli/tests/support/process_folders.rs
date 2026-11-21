@@ -104,3 +104,39 @@ pub fn isolated_home() -> &'static Path {
     static HOME: OnceLock<PathBuf> = OnceLock::new();
     HOME.get_or_init(|| until_exit(tempfile::tempdir().expect("home tempdir")))
 }
+
+/// An isolated home for suites whose fixtures inherit Cargo's Git settings
+/// or blank CI platform variables. Refuse before starting a fixture when
+/// Cargo skipped the repository's environment table.
+#[allow(dead_code)]
+pub fn cargo_home() -> &'static Path {
+    codeflow_fixture::require_cargo_environment();
+    isolated_home()
+}
+
+/// Clear the CI defaults that Cargo normally blanks, without reading any
+/// inherited value. Direct release-journey runs need the same isolation.
+#[allow(dead_code)]
+pub fn clear_ci_environment(command: &mut std::process::Command) {
+    static NAMES: OnceLock<Vec<String>> = OnceLock::new();
+    let names = NAMES.get_or_init(|| {
+        let config: toml::Value = include_str!("../../../../.cargo/config.toml")
+            .parse()
+            .expect("valid Cargo configuration");
+        config["env"]
+            .as_table()
+            .expect("Cargo environment table")
+            .iter()
+            .filter(|(name, setting)| {
+                !name.starts_with("GIT_")
+                    && !codeflow_core::root_checkout::AGENT_MARKERS.contains(&name.as_str())
+                    && setting["value"].as_str() == Some("")
+                    && setting["force"].as_bool() == Some(true)
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    });
+    for name in names {
+        command.env_remove(name);
+    }
+}

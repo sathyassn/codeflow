@@ -259,6 +259,7 @@ impl Fixture {
     }
 
     fn codeflow(&self, cwd: &Path) -> Command {
+        codeflow_fixture::require_cargo_environment();
         let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
         command
             .current_dir(cwd)
@@ -271,6 +272,7 @@ impl Fixture {
     /// Shell command in the fixture repository with a scrubbed CI environment
     /// and the local release, ready for a script or an environment probe.
     fn script_environment(&self) -> Command {
+        codeflow_fixture::require_cargo_environment();
         // Scratch space inside the fixture, so nothing a script leaves
         // reaches the user's temporary directory, holding one directory the
         // scripts did not create.

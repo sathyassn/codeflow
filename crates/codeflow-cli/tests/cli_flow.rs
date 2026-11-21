@@ -13,6 +13,7 @@ use std::process::{Command, Output};
 /// commit to the ID registry, so the git identity is fixed here, never read
 /// from the developer's or the runner's configuration.
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
+    codeflow_fixture::require_cargo_environment();
     let home = tempfile::tempdir().expect("home tempdir");
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)

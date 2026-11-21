@@ -43,6 +43,7 @@ pub fn names_host_state(name: &OsStr) -> bool {
 /// configuration at `/dev/null`. A test that needs a value sets it after this
 /// call.
 pub fn strip_host_git_state(cmd: &mut Command) -> &mut Command {
+    codeflow_fixture::require_cargo_environment();
     let host: Vec<OsString> = std::env::vars_os()
         .map(|(name, _)| name)
         .chain(cmd.get_envs().map(|(name, _)| name.to_os_string()))
