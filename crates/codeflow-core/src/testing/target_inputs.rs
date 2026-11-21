@@ -346,6 +346,25 @@ mod tests {
             .any(|(key, value)| key == ENV_KEYS[2] && value.is_none()));
     }
 
+    #[test]
+    fn the_runner_removes_every_inherited_hint() {
+        let mut cmd = std::process::Command::new("true");
+        super::super::runner::configure_environment(
+            &mut cmd,
+            &std::collections::BTreeMap::new(),
+            "inputs",
+        )
+        .unwrap();
+        let removed: Vec<_> = cmd
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_owned())
+            .collect();
+        for key in ENV_KEYS {
+            assert!(removed.iter().any(|name| name == key), "{key} is inherited");
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn non_utf8_path_bytes_are_never_replaced() {
