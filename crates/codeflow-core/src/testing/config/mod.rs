@@ -93,10 +93,9 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "QuickTargetClass::is_light")]
     pub quick_default_class: QuickTargetClass,
 
-    /// Maximum wait for a host-exclusive target: for a heavy run while one
-    /// holds the host, and for one while other heavy runs hold it. Set only
-    /// by `codeflow test --wait-seconds`, never by the config file; heavy
-    /// runs never wait for each other (TSK-1145).
+    /// Maximum wait for named resources or host-exclusive admission. Set only
+    /// by `codeflow test --wait-seconds`, never by the config file. Capacity
+    /// admission remains shared (TSK-1145).
     #[serde(skip)]
     pub heavy_wait_seconds: u64,
 
@@ -229,6 +228,11 @@ pub struct TargetConfig {
     /// cannot share the host, such as a timing-sensitive one.
     #[serde(default, skip_serializing_if = "is_false")]
     pub host_exclusive: bool,
+
+    /// Fixed host resources used by this target. Equal names serialize across
+    /// gates; unrelated names and targets continue to share host capacity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_resources: Vec<String>,
 
     /// Runner type.
     pub runner: RunnerType,
@@ -574,6 +578,15 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
+pub(super) fn valid_resource_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name.as_bytes()[0].is_ascii_alphanumeric()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
 fn default_true() -> bool {
     true
 }
@@ -604,6 +617,7 @@ fn validate_raw_fields(path: &Path, raw: &serde_json::Value) -> Result<(), Testi
         "evidence",
         "exclusive",
         "host_exclusive",
+        "shared_resources",
         "heavy",
         "workers",
     ];
@@ -735,6 +749,16 @@ fn validate_targets(path: &Path, config: &TestConfig) -> Result<(), TestingError
     let mut seen_names = std::collections::HashSet::new();
     for target in &config.targets {
         validate_deadline(path, target)?;
+        if target
+            .shared_resources
+            .iter()
+            .any(|name| !valid_resource_name(name))
+        {
+            return Err(TestingError::ConfigInvalid {
+                path: path.to_path_buf(),
+                message: format!("target '{}': shared_resources names must start with an ASCII letter or digit, contain only ASCII letters, digits, dots, underscores, colons or hyphens, and have at most 128 bytes", target.name),
+            });
+        }
         validate_globs(&target.narrow)?;
         if let Some(workers) = target.workers {
             if workers == 0
@@ -1142,6 +1166,36 @@ mod tests {
     }
 
     #[test]
+    fn shared_resource_names_round_trip_and_reject_invalid_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut raw = serde_json::json!({"schema_version":"1.0","targets":[{"name":"t","runner":"custom","shared_resources":["port:4700","cache.browser"],"modes":{"quick":{"command":"true"}}}]});
+        let path = write_config(dir.path(), &raw.to_string());
+        let config = load_test_config(&path).unwrap();
+        assert_eq!(
+            config.targets[0].shared_resources,
+            ["port:4700", "cache.browser"]
+        );
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["targets"][0]["shared_resources"],
+            raw["targets"][0]["shared_resources"]
+        );
+        for name in [
+            String::new(),
+            "a b".into(),
+            "../cache".into(),
+            "a\n".into(),
+            "a".repeat(129),
+        ] {
+            raw["targets"][0]["shared_resources"] = serde_json::json!([name]);
+            std::fs::write(&path, raw.to_string()).unwrap();
+            assert!(load_test_config(&path)
+                .unwrap_err()
+                .to_string()
+                .contains("shared_resources"));
+        }
+    }
+
+    #[test]
     fn test_load_valid_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
@@ -1380,6 +1434,7 @@ mod tests {
                 evidence: None,
                 exclusive: false,
                 host_exclusive: false,
+                shared_resources: Vec::new(),
                 heavy: None,
                 workers: None,
                 runner: RunnerType::Custom,

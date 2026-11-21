@@ -32,7 +32,10 @@ impl GroupWatch {
             .ok_or_else(|| io::Error::other("cannot read the open descriptor limit"))?;
         // Rust creates both endpoints close-on-exec. Other execs cannot retain them.
         let (controller, child_end) = UnixStream::pair()?;
-        let locks = crate::testing::gate_guard::inherited_gate_locks()?;
+        let mut locks = crate::testing::gate_guard::inherited_gate_locks()?;
+        if !hand_over {
+            locks.extend(crate::testing::gate_guard::resource_lock_copies()?);
+        }
         let lock_descriptors: Vec<_> = locks.iter().map(AsRawFd::as_raw_fd).collect();
         if hand_over && !lock_descriptors.is_empty() {
             let names: Vec<_> = lock_descriptors.iter().map(ToString::to_string).collect();

@@ -479,6 +479,8 @@ pub fn run_dependency_targets_with_admission(
     let bound = parallel_bound(execution.parallel, execution.max_parallel);
     let mut admission: Option<super::gate_guard::GateLock> = None;
     let mut wait_started = None;
+    let wait_log = super::wait::WaitLog::current();
+    let mut admission_wait: Option<super::wait::Attempt> = None;
     // The jobs heavy targets share: the run's own budget, lowered when more
     // heavy runs share the host than its job budget holds (TSK-1145).
     let mut budget = super::gate_guard::held_runs().map_or(execution.worker_budget, |runs| {
@@ -554,7 +556,7 @@ pub fn run_dependency_targets_with_admission(
                 // refuses only while a host-exclusive target holds the host,
                 // and then waits up to the run's bound.
                 let bound = Duration::from_secs(execution.heavy_wait_seconds);
-                match super::gate_guard::acquire_project_gate_lock(project_dir, "quick") {
+                match super::gate_guard::try_project_gate_lock(project_dir, "quick") {
                     Ok(lock) => {
                         for note in &lock.notes {
                             progress!("[codeflow test] {note}");
@@ -562,11 +564,22 @@ pub fn run_dependency_targets_with_admission(
                         budget = Some(run_budget(execution, lock.runs));
                         admission = Some(lock);
                         wait_started = None;
+                        if let Some(attempt) = admission_wait.take() {
+                            attempt.acquired();
+                        }
                     }
-                    Err(message) => {
+                    Err(held) => {
                         let first_wait = wait_started.is_none();
+                        let attempt = admission_wait.get_or_insert_with(|| {
+                            super::wait::Attempt::new("heavy admission", &held.holder)
+                        });
+                        let message = format!(
+                            "{}; {}",
+                            super::gate_guard::with_repair_pointer(&held),
+                            attempt.description()
+                        );
                         let since = wait_started.get_or_insert_with(Instant::now);
-                        if message.contains("host-exclusive") && since.elapsed() < bound {
+                        if held.exclusive && since.elapsed() < bound {
                             if first_wait {
                                 progress!(
                                     "[codeflow test] waiting up to {}s for heavy work: {message}",
@@ -581,6 +594,7 @@ pub fn run_dependency_targets_with_admission(
                         results.insert(index, Ok(not_run(target, &reason)));
                         completed.insert(target.name.clone(), TargetStatus::Failed);
                         pending.remove(&index);
+                        admission_wait = None;
                         continue;
                     }
                 }
@@ -672,9 +686,19 @@ pub fn run_dependency_targets_with_admission(
             let baseline = baseline.clone();
             let tx = tx.clone();
             let run_dir = run_dir.to_path_buf();
+            let wait_log = wait_log.clone();
+            let resource_wait = Duration::from_secs(execution.heavy_wait_seconds);
             std::thread::spawn(move || {
+                let _scope = wait_log.enter();
                 announce_start(&target, &mode);
                 let result = std::panic::catch_unwind(|| {
+                    let _resources = super::gate_guard::hold_shared_resources(
+                        &root,
+                        &target.shared_resources,
+                        &mode,
+                        resource_wait,
+                    )
+                    .map_err(|message| super::delivery::invalid(&root, message))?;
                     run_owed_target(
                         &target,
                         &mode,
@@ -805,7 +829,7 @@ fn run_owed_target(
     let locate = |path: &Path| super::delivery::locate(root, &anchor, &output, path);
     // Held until this function returns, so the target's output is written
     // and collected before another run's same target can touch it.
-    let _leases = evidence_leases(target, root, &anchor, &output)?;
+    let _leases = evidence_leases(target, root, &anchor, &output, mode)?;
     if let Some(report) = &target.report {
         if target.modes[mode].command.contains("nextest") {
             let path = resolve_cwd(root, target.cwd.as_deref())?.join(&report.path);
@@ -1001,6 +1025,23 @@ fn shared_outputs(target: &TargetConfig, root: &Path) -> Result<Vec<PathBuf>, Te
     Ok(shared)
 }
 
+fn lease_refused(
+    path: &Path,
+    attempt: &mut Option<super::wait::Attempt>,
+    error: &impl std::fmt::Display,
+) -> TestingError {
+    let attempt = attempt.get_or_insert_with(|| {
+        super::wait::Attempt::new(
+            format!("output lease {}", crate::git::display_path(path)),
+            "",
+        )
+    });
+    TestingError::Io(std::io::Error::other(format!(
+        "{error}; {}",
+        attempt.description()
+    )))
+}
+
 /// Exclusive leases on the [`shared_outputs`] of `target`, one lock file per
 /// output under `<build output>/codeflow-gate/leases/`, taken in a fixed
 /// order so two runs never wait on each other in a cycle. A run whose output
@@ -1014,6 +1055,7 @@ fn evidence_leases(
     root: &Path,
     anchor: &Path,
     output: &str,
+    mode: &str,
 ) -> Result<Vec<std::fs::File>, TestingError> {
     use fs2::FileExt;
     let shared = shared_outputs(target, root)?;
@@ -1025,34 +1067,75 @@ fn evidence_leases(
     tree.create_dir_all(&folder)
         .map_err(|error| super::delivery::evidence_refused(tree.path(), &folder, &error))?;
     let mut leases = Vec::new();
+    let started = Instant::now();
+    let bound = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
     for path in shared {
         let key = super::delivery::digest(path.as_os_str().as_encoded_bytes());
         let relative = format!("{folder}/{}.lock", &key[..32]);
-        // Opened or created with read access only, as the gate locks are:
-        // on Windows a creating handle with `DELETE` access makes every
-        // other run's open fail with a sharing violation instead of waiting.
-        let file = tree
-            .create_read_only(&relative)
-            .map_err(|error| super::delivery::evidence_refused(tree.path(), &relative, &error))?;
-        if file.try_lock_exclusive().is_err() {
-            let bound = target.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
-            eprintln!(
-                "[codeflow test] {}: another run is writing {}; waiting up to {bound}s for it",
-                target.name,
-                crate::git::display_path(&path)
-            );
-            let start = Instant::now();
-            while file.try_lock_exclusive().is_err() {
-                if start.elapsed() >= Duration::from_secs(bound) {
-                    return Err(TestingError::Io(std::io::Error::other(format!(
-                        "another run still wrote {} after {bound}s (the target's timeout_seconds); \
-                         lease: {}",
-                        crate::git::display_path(&path),
-                        crate::git::display_path(&tree.path().join(&relative))
-                    ))));
+        let record = format!("{folder}/{}.record", &key[..32]);
+        let mut attempt: Option<super::wait::Attempt> = None;
+        let file = tree.create_read_only(&relative).map_err(|error| {
+            lease_refused(
+                &path,
+                &mut attempt,
+                &super::delivery::evidence_refused(tree.path(), &relative, &error),
+            )
+        })?;
+        loop {
+            match file.try_lock_exclusive() {
+                Ok(()) => break,
+                Err(error) if error.kind() == fs2::lock_contended_error().kind() => {
+                    if attempt.is_none() {
+                        let holder = tree
+                            .read(&record, 4096)
+                            .ok()
+                            .and_then(|bytes| String::from_utf8(bytes).ok())
+                            .and_then(|text| {
+                                super::gate_guard::parse_record(
+                                    &text,
+                                    &super::gate_guard::trusted_dirs(root),
+                                )
+                                .ok()
+                            })
+                            .unwrap_or_default();
+                        let wait = super::wait::Attempt::new(
+                            format!("output lease {}", crate::git::display_path(&path)),
+                            &holder,
+                        );
+                        eprintln!(
+                            "[codeflow test] {}: waiting up to {bound}s; {}",
+                            target.name,
+                            wait.description()
+                        );
+                        attempt = Some(wait);
+                    }
+                    if started.elapsed() >= Duration::from_secs(bound) {
+                        let detail = attempt
+                            .as_ref()
+                            .map_or_else(String::new, super::wait::Attempt::description);
+                        return Err(TestingError::Io(std::io::Error::other(format!(
+                            "another run still wrote {} after {bound}s (the target's timeout_seconds); lease: {}; {detail}",
+                            crate::git::display_path(&path), crate::git::display_path(&tree.path().join(&relative))
+                        ))));
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
                 }
-                std::thread::sleep(Duration::from_millis(50));
+                Err(error) => return Err(lease_refused(&path, &mut attempt, &error)),
             }
+        }
+        tree.write(
+            &record,
+            super::gate_guard::holder_record(root, mode).as_bytes(),
+        )
+        .map_err(|error| {
+            lease_refused(
+                &path,
+                &mut attempt,
+                &super::delivery::evidence_refused(tree.path(), &record, &error),
+            )
+        })?;
+        if let Some(attempt) = attempt {
+            attempt.acquired();
         }
         leases.push(file);
     }
@@ -1209,7 +1292,7 @@ fn spawn_command(
         &target.name,
         limits,
         super::evidence::redacted_values(target).is_empty(),
-        target.heavy == Some(true) || target.host_exclusive,
+        target.heavy == Some(true) || target.host_exclusive || !target.shared_resources.is_empty(),
         false,
     )
 }
@@ -1568,6 +1651,8 @@ mod tests {
     /// the wait end with the target's bound named, never an unbounded wait.
     #[test]
     fn an_output_lease_wait_ends_at_the_targets_timeout() {
+        let waits = crate::testing::wait::WaitLog::default();
+        let _scope = waits.enter();
         let dir = tempfile::tempdir().unwrap();
         let mut target = make_target("reporter", "true");
         target.report = Some(crate::testing::config::ReportConfig {
@@ -1576,17 +1661,24 @@ mod tests {
             derive_from: None,
         });
         target.timeout_seconds = Some(1);
-        let held = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap();
+        let held = evidence_leases(&target, dir.path(), dir.path(), "target", "full").unwrap();
         assert_eq!(held.len(), 1);
         let start = Instant::now();
-        let refused = evidence_leases(&target, dir.path(), dir.path(), "target").unwrap_err();
+        let refused =
+            evidence_leases(&target, dir.path(), dir.path(), "target", "full").unwrap_err();
         // The refusal must be the bound, not an open that failed at once
         // (on Windows a sharing violation did, before the read-only open).
         assert!(refused.to_string().contains("after 1s"), "{refused}");
         assert!(start.elapsed() >= Duration::from_secs(1));
+        assert!(refused.to_string().contains("asked at"), "{refused}");
+        let mut record = serde_json::json!({"schema_version":2});
+        waits.apply(&mut record);
+        assert_eq!(record["wait"]["holder"]["pid"], std::process::id());
+        assert_eq!(record["wait"]["holder"]["mode"], "full");
+        assert!(record["wait"]["acquired"].is_null());
         drop(held);
         assert_eq!(
-            evidence_leases(&target, dir.path(), dir.path(), "target")
+            evidence_leases(&target, dir.path(), dir.path(), "target", "full")
                 .unwrap()
                 .len(),
             1
@@ -1607,6 +1699,7 @@ mod tests {
             evidence: None,
             exclusive: false,
             host_exclusive: false,
+            shared_resources: Vec::new(),
             heavy: None,
             workers: None,
             runner: RunnerType::Custom,

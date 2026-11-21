@@ -413,7 +413,7 @@ impl std::fmt::Display for LockHeld {
             );
         }
         let holder = if self.holder.trim().is_empty() {
-            "a process that has not recorded itself yet".to_string()
+            "holder unknown (a process that has not recorded itself yet)".to_string()
         } else {
             describe_holder(&self.holder)
         };
@@ -699,17 +699,25 @@ fn fence_status(path: &Path, trusted: &[String]) -> Result<String, String> {
 /// ([`RESERVED_LOCKS_ENV`]). Full and essential gates admit themselves
 /// through [`acquire_gate_lock`] and never inherit.
 pub fn acquire_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, String> {
-    let dirs = project_lock_dirs(root)?;
+    try_project_gate_lock(root, mode).map_err(|held| with_repair_pointer(&held))
+}
+
+/// Keep the native refusal and its holder together for structured wait evidence.
+pub(super) fn try_project_gate_lock(root: &Path, mode: &str) -> Result<GateLock, LockHeld> {
+    let dirs = lock_dirs(root, crate::registry::codeflow_home().as_deref()).map_err(|error| {
+        LockHeld::unavailable(
+            root.to_path_buf(),
+            format!("gate lock unavailable: cannot discover repository: {error}"),
+        )
+    })?;
     #[cfg(unix)]
     {
         let adopted = adopted().clone();
-        if let Some(lock) = inherit_gate_lock(&dirs, &adopted, trusted_dirs(root))
-            .map_err(|held| with_repair_pointer(&held))?
-        {
+        if let Some(lock) = inherit_gate_lock(&dirs, &adopted, trusted_dirs(root))? {
             return Ok(lock);
         }
     }
-    acquire_gate_lock(&dirs, root, mode).map_err(|held| with_repair_pointer(&held))
+    acquire_gate_lock(&dirs, root, mode)
 }
 
 /// A refusal's text, with the permissions pointer when a lock is unavailable.
@@ -1308,18 +1316,9 @@ pub fn hold_host_exclusive_in(
     root: &Path,
     wait: std::time::Duration,
 ) -> Result<HostExclusive, String> {
-    if held().iter().any(|lock| {
-        lock.inherited
-            && lock.paths.iter().any(|path| {
-                path.parent()
-                    .is_some_and(|parent| dirs.iter().any(|dir| dir == parent))
-            })
-    }) {
-        return Err(
-            "a host-exclusive target cannot run under `codeflow reserve`, which holds the host \
-             for its command; run it outside the reserve"
-                .to_string(),
-        );
+    if let Some(holder) = inherited_reserve_holder(dirs) {
+        let attempt = super::wait::Attempt::new("host exclusive admission", &holder);
+        return Err(format!("a host-exclusive target cannot run under `codeflow reserve`, which holds the host for its command; run it outside the reserve; {}", attempt.description()));
     }
     let trusted = trusted_dirs(root);
     let fences = take_fences(dirs, &trusted).map_err(|held| with_repair_pointer(&held))?;
@@ -1330,6 +1329,7 @@ pub fn hold_host_exclusive_in(
     }
     let start = std::time::Instant::now();
     let mut taken: Vec<(PathBuf, Option<AcquiredFile>)> = Vec::new();
+    let mut attempt: Option<super::wait::Attempt> = None;
     let result = loop {
         let mut busy = None;
         let mut failed = None;
@@ -1376,6 +1376,13 @@ pub fn hold_host_exclusive_in(
         let Some(path) = busy else {
             break Ok(());
         };
+        if attempt.is_none() {
+            let holder = contention_holder(&path, dirs, &trusted);
+            attempt = Some(super::wait::Attempt::new(
+                "host exclusive admission",
+                &holder,
+            ));
+        }
         if start.elapsed() >= wait {
             break Err(format!(
                 "a host-exclusive target waits for the other heavy runs on this machine to \
@@ -1389,23 +1396,54 @@ pub fn hold_host_exclusive_in(
     if let Err(message) = result {
         release_exclusive(taken);
         retake_shared(wait.max(std::time::Duration::from_secs(5)));
-        return Err(message);
+        return Err(attempt.as_ref().map_or(message.clone(), |attempt| {
+            format!("{message}; {}", attempt.description())
+        }));
     }
-    let record = holder_record(root, "exclusive");
-    let unwritten = taken.iter().find_map(|(path, _)| {
-        write_record(path, &record)
-            .err()
-            .map(|error| (path.clone(), error))
-    });
-    if let Some((path, error)) = unwritten {
+    if let Err(message) = write_host_records(&taken, root) {
         release_exclusive(taken);
         retake_shared(std::time::Duration::from_secs(5));
-        return Err(format!(
-            "gate lock unavailable: the host-exclusive record beside {} cannot be written: {error}",
-            crate::git::display_path(&path)
-        ));
+        return Err(attempt.as_ref().map_or(message.clone(), |attempt| {
+            format!("{message}; {}", attempt.description())
+        }));
+    }
+    if let Some(attempt) = attempt {
+        attempt.acquired();
     }
     Ok(held_exclusively(taken, fences))
+}
+
+fn write_host_records(
+    taken: &[(PathBuf, Option<AcquiredFile>)],
+    root: &Path,
+) -> Result<(), String> {
+    let record = holder_record(root, "exclusive");
+    for (path, _) in taken {
+        write_record(path, &record).map_err(|error| {
+            format!(
+            "gate lock unavailable: the host-exclusive record beside {} cannot be written: {error}",
+            crate::git::display_path(path)
+        )
+        })?;
+    }
+    Ok(())
+}
+
+fn inherited_reserve_holder(dirs: &[PathBuf]) -> Option<String> {
+    let inherited = held()
+        .iter()
+        .find(|lock| {
+            lock.inherited
+                && lock.paths.iter().any(|path| {
+                    path.parent()
+                        .is_some_and(|parent| dirs.iter().any(|dir| dir == parent))
+                })
+        })
+        .map(|lock| (lock.paths.first().cloned(), lock.trusted.clone()));
+    inherited.map(|(path, trusted)| {
+        path.and_then(|path| read_holder(&path, None, &trusted).ok())
+            .unwrap_or_default()
+    })
 }
 
 /// The host-exclusive hold over the host locks `taken` and the `fences`
@@ -1734,9 +1772,12 @@ pub(crate) fn fence_copies() -> std::io::Result<Vec<File>> {
     use std::os::fd::BorrowedFd;
     let held = held();
     let hosts = host_fences();
+    let resources =
+        RESOURCE_FDS.with(|fds| fds.borrow().iter().map(|(_, fd)| *fd).collect::<Vec<_>>());
     held.iter()
         .flat_map(|lock| lock.fences.iter().copied())
         .chain(hosts.iter().map(|(_, fd)| *fd))
+        .chain(resources)
         .map(|descriptor| {
             // SAFETY: the registry guards keep the owning fence open.
             unsafe { BorrowedFd::borrow_raw(descriptor) }
@@ -2296,7 +2337,7 @@ fn read_record(file: &mut File) -> std::io::Result<String> {
 /// with trailing separators removed. Only the project folder, which this
 /// process was given, is resolved; the git-listed paths are taken as text
 /// and never touched, since a seat that writes `.git` can change them.
-fn trusted_dirs(project_dir: &Path) -> Vec<String> {
+pub(super) fn trusted_dirs(project_dir: &Path) -> Vec<String> {
     let mut dirs = vec![project_dir.to_path_buf()];
     if let Ok(canonical) = std::fs::canonicalize(project_dir) {
         dirs.push(canonical);
@@ -2355,7 +2396,7 @@ const LOCK_MODES: [&str; 5] = ["full", "quick", "essential", "reserve", "exclusi
 /// refuses the whole record. Errors are fixed texts that never include the
 /// record's text, so a file reached through a planted link reveals nothing
 /// beyond a folder the gate already trusts.
-fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
+pub(super) fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut out = String::new();
     for line in text.split_terminator('\n') {
@@ -2412,7 +2453,7 @@ fn parse_record(text: &str, trusted: &[String]) -> Result<String, String> {
 /// raw it would split the record into lines that every reader, this
 /// binary's included, refuses as unreadable, and the slot could not be
 /// cleared or taken again. Readers show a missing folder as unknown.
-fn holder_record(project_dir: &Path, mode: &str) -> String {
+pub(super) fn holder_record(project_dir: &Path, mode: &str) -> String {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
@@ -2485,6 +2526,227 @@ fn describe_holder(record: &str) -> String {
         "pid {pid}{dir}{age}, {} mode",
         field("mode").unwrap_or("full")
     )
+}
+
+/// Named resources held for one target. Unix targets inherit only this
+/// thread's handles, so a surviving target retains its own resource leases.
+#[derive(Debug)]
+pub struct SharedResources {
+    files: Vec<File>,
+    #[cfg(unix)]
+    id: u64,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+#[cfg(unix)]
+thread_local! {
+    static RESOURCE_FDS: std::cell::RefCell<Vec<(u64, std::os::fd::RawFd)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl Drop for SharedResources {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        RESOURCE_FDS.with(|fds| fds.borrow_mut().retain(|(id, _)| *id != self.id));
+        // Close rather than unlock: the watcher may still hold a copy.
+        // Stale holder records are replaced by the next owner under its lock.
+        self.files.clear();
+    }
+}
+
+/// Copies only the current target's resource leases for its group watcher.
+/// # Errors
+/// Refuses a target whose lease descriptors cannot be duplicated.
+#[cfg(unix)]
+pub(crate) fn resource_lock_copies() -> std::io::Result<Vec<File>> {
+    use std::os::fd::BorrowedFd;
+    RESOURCE_FDS.with(|fds| {
+        fds.borrow()
+            .iter()
+            .map(|(_, fd)| {
+                // SAFETY: the non-Send resource hold lives on this same thread,
+                // and cannot drop during this synchronous copy.
+                unsafe { BorrowedFd::borrow_raw(*fd) }
+                    .try_clone_to_owned()
+                    .map(File::from)
+            })
+            .collect()
+    })
+}
+
+/// Take every declared resource in a fixed order across the host and repo.
+/// Only these names are locked; heavy admission remains shared.
+/// # Errors
+/// Refuses invalid names, unavailable lock state, and contention past `wait`.
+pub fn hold_shared_resources(
+    root: &Path,
+    names: &[String],
+    mode: &str,
+    wait: std::time::Duration,
+) -> Result<SharedResources, String> {
+    if names.is_empty() {
+        return shared_resources_in(&[], root, names, mode, wait);
+    }
+    let dirs = project_lock_dirs(root).map_err(|message| {
+        let attempt = super::wait::Attempt::new("named resource admission", "");
+        format!("{message}; {}", attempt.description())
+    })?;
+    shared_resources_in(&dirs, root, names, mode, wait)
+}
+
+fn contention_holder(path: &Path, dirs: &[PathBuf], trusted: &[String]) -> String {
+    match read_holder(path, None, trusted) {
+        Ok(holder) if !holder.is_empty() => return holder,
+        Err(_) => return String::new(),
+        Ok(_) => {}
+    }
+    let own: BTreeSet<_> = held().iter().flat_map(|lock| lock.paths.clone()).collect();
+    for dir in dirs {
+        for index in slot_indices(dir).unwrap_or_default() {
+            let path = dir.join(slot_file(index));
+            if !own.contains(&path) && slot_busy(&path, trusted).unwrap_or(false) {
+                if let Ok(holder) = read_holder(&path, None, trusted) {
+                    if !holder.is_empty() {
+                        return holder;
+                    }
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn resource_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(format!(
+        "shared-{}.lock",
+        super::delivery::digest(name.as_bytes())
+    ))
+}
+
+/// Validate a name's record before using it. The name is compared against
+/// the declaration, and only the existing holder parser's safe fields escape.
+fn resource_holder(path: &Path, name: &str, trusted: &[String]) -> std::io::Result<String> {
+    let record = record_path(path);
+    if crate::absence::proven_absent(&record)? {
+        return Ok(String::new());
+    }
+    let (anchor, relative) = lock_anchor(&record)?;
+    let bytes = crate::contained::Tree::open(anchor)?.read(&relative, 4096)?;
+    let record: serde_json::Value =
+        serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+    if record["name"] != name {
+        return Err(std::io::Error::other(
+            "shared resource record names another resource",
+        ));
+    }
+    let holder = record["holder"]
+        .as_str()
+        .ok_or_else(|| std::io::Error::other("shared resource record has no holder"))?;
+    parse_record(holder, trusted).map_err(std::io::Error::other)
+}
+
+fn resource_refused(name: &str, attempt: &mut Option<super::wait::Attempt>, cause: &str) -> String {
+    let attempt = attempt
+        .get_or_insert_with(|| super::wait::Attempt::new(format!("shared resource {name}"), ""));
+    format!("{cause}; {}", attempt.description())
+}
+
+fn shared_resources_in(
+    dirs: &[PathBuf],
+    root: &Path,
+    names: &[String],
+    mode: &str,
+    wait: std::time::Duration,
+) -> Result<SharedResources, String> {
+    if names
+        .iter()
+        .any(|name| !super::config::valid_resource_name(name))
+    {
+        return Err("shared_resources requires names of 1..=128 ASCII letters, digits, dots, underscores, colons or hyphens, starting with a letter or digit".into());
+    }
+    if !names.is_empty() && dirs.is_empty() {
+        return Err("shared resources unavailable: no host or repository lock directory".into());
+    }
+    let trusted = trusted_dirs(root);
+    let mut paths: Vec<_> = dirs
+        .iter()
+        .flat_map(|dir| {
+            names
+                .iter()
+                .map(move |name| (resource_path(dir, name), name))
+        })
+        .collect();
+    paths.sort();
+    paths.dedup();
+    let started = std::time::Instant::now();
+    let mut files = Vec::new();
+    for (path, name) in paths {
+        let mut attempt: Option<super::wait::Attempt> = None;
+        let file = loop {
+            match try_open_and_lock(&path, false)
+                .map_err(|held| resource_refused(name, &mut attempt, &with_repair_pointer(&held)))?
+            {
+                Slot::Taken(file) => break file,
+                Slot::Busy => {
+                    let holder = resource_holder(&path, name, &trusted);
+                    if attempt.is_none() {
+                        attempt = Some(super::wait::Attempt::new(
+                            format!("shared resource {name}"),
+                            holder.as_deref().unwrap_or(""),
+                        ));
+                    }
+                    let detail = attempt
+                        .as_ref()
+                        .map_or_else(String::new, super::wait::Attempt::description);
+                    holder.map_err(|error| {
+                        format!("shared resource {name}: holder unknown; holder record cannot be read: {error}; {detail}")
+                    })?;
+                    if started.elapsed() >= wait {
+                        return Err(format!(
+                            "shared resource {name} still held after {}s; {detail}",
+                            wait.as_secs()
+                        ));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            }
+        };
+        // Check stale records too: an unreadable record is never overwritten.
+        resource_holder(&path, name, &trusted).map_err(|error| {
+            resource_refused(
+                name,
+                &mut attempt,
+                &format!(
+                    "shared resource {name}: holder unknown; holder record cannot be read: {error}"
+                ),
+            )
+        })?;
+        let record = serde_json::json!({"name":name,"holder":holder_record(root, mode)});
+        write_record(&path, &record.to_string()).map_err(|error| {
+            resource_refused(
+                name,
+                &mut attempt,
+                &format!("shared resource {name}: holder record cannot be written: {error}"),
+            )
+        })?;
+        if let Some(attempt) = attempt {
+            attempt.acquired();
+        }
+        files.push(file);
+    }
+    let hold = SharedResources {
+        #[cfg(unix)]
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        files,
+        _thread: std::marker::PhantomData,
+    };
+    #[cfg(unix)]
+    RESOURCE_FDS.with(|fds| {
+        use std::os::fd::AsRawFd;
+        fds.borrow_mut()
+            .extend(hold.files.iter().map(|file| (hold.id, file.as_raw_fd())));
+    });
+    Ok(hold)
 }
 
 /// Warn about a `CARGO_TARGET_DIR` outside the worktree when the gate runs
@@ -5041,5 +5303,182 @@ mod old_binary_fence_tests {
             "the ended hold passes none"
         );
         drop(old_take_eventually(&dirs[0]));
+    }
+}
+
+#[cfg(test)]
+mod shared_resource_tests {
+    use super::*;
+
+    fn setup() -> (tempfile::TempDir, Vec<PathBuf>) {
+        let temp = tempfile::tempdir().unwrap();
+        let dirs = vec![
+            temp.path().join("home/locks"),
+            temp.path().join("repo/locks"),
+        ];
+        (temp, dirs)
+    }
+
+    #[test]
+    fn names_are_ordered_deduplicated_and_independent() {
+        let (temp, dirs) = setup();
+        let names = vec!["z".into(), "a".into(), "a".into()];
+        let hold = shared_resources_in(
+            &dirs,
+            temp.path(),
+            &names,
+            "quick",
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        let record: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(record_path(&resource_path(&dirs[0], "a"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["name"], "a");
+        assert!(record["holder"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("pid={}", std::process::id())));
+        assert!(shared_resources_in(
+            &dirs,
+            temp.path(),
+            &["a".into(), "z".into()],
+            "quick",
+            std::time::Duration::ZERO
+        )
+        .is_err());
+        let other = shared_resources_in(
+            &dirs,
+            temp.path(),
+            &["b".into()],
+            "quick",
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        drop(hold);
+        // A sibling test's fork can briefly retain close-on-exec handles.
+        // The contract permits waiting; it does not promise an immediate retake.
+        drop(
+            shared_resources_in(
+                &dirs,
+                temp.path(),
+                &["a".into(), "z".into()],
+                "quick",
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
+        drop(other);
+    }
+
+    #[test]
+    fn unreadable_named_records_refuse_instead_of_being_overwritten() {
+        let (temp, dirs) = setup();
+        let names = vec!["cache".into()];
+        drop(
+            shared_resources_in(
+                &dirs,
+                temp.path(),
+                &names,
+                "quick",
+                std::time::Duration::ZERO,
+            )
+            .unwrap(),
+        );
+        let record = record_path(&resource_path(&dirs[0], "cache"));
+        std::fs::write(&record, "invalid record").unwrap();
+        let error = shared_resources_in(
+            &dirs,
+            temp.path(),
+            &names,
+            "quick",
+            std::time::Duration::ZERO,
+        )
+        .unwrap_err();
+        assert!(error.contains("holder unknown"), "{error}");
+        assert!(error.contains("cannot be read"), "{error}");
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "invalid record");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unwritable_named_record_refuses_and_releases_the_lock() {
+        use std::os::unix::fs::PermissionsExt;
+        let (temp, dirs) = setup();
+        let names = vec!["cache".into()];
+        drop(
+            shared_resources_in(
+                &dirs,
+                temp.path(),
+                &names,
+                "quick",
+                std::time::Duration::ZERO,
+            )
+            .unwrap(),
+        );
+        std::fs::set_permissions(&dirs[0], std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = shared_resources_in(
+            &dirs,
+            temp.path(),
+            &names,
+            "quick",
+            std::time::Duration::from_secs(5),
+        );
+        std::fs::set_permissions(&dirs[0], std::fs::Permissions::from_mode(0o755)).unwrap();
+        let error = result.unwrap_err();
+        assert!(error.contains("cannot be written"), "{error}");
+        drop(
+            shared_resources_in(
+                &dirs,
+                temp.path(),
+                &names,
+                "quick",
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_target_copy_keeps_its_resource_after_the_controller_drops_it() {
+        let (temp, dirs) = setup();
+        let names = vec!["cache".into()];
+        let hold = shared_resources_in(
+            &dirs,
+            temp.path(),
+            &names,
+            "quick",
+            std::time::Duration::ZERO,
+        )
+        .unwrap();
+        let identity = FileIdentity::of(&hold.files[0]).unwrap();
+        let copies: Vec<File> = resource_lock_copies()
+            .unwrap()
+            .into_iter()
+            .filter(|file| FileIdentity::of(file).unwrap() == identity)
+            .collect();
+        assert_eq!(copies.len(), 1);
+        drop(hold);
+        assert!(shared_resources_in(
+            &dirs,
+            temp.path(),
+            &names,
+            "quick",
+            std::time::Duration::ZERO
+        )
+        .is_err());
+        drop(copies);
+        drop(
+            shared_resources_in(
+                &dirs,
+                temp.path(),
+                &names,
+                "quick",
+                std::time::Duration::from_secs(5),
+            )
+            .unwrap(),
+        );
     }
 }
