@@ -24,14 +24,14 @@ fn fixture(exit: i32) -> tempfile::TempDir {
     ]});
     let dir = repo(&config.to_string());
     std::fs::write(dir.path().join(".gitignore"), "target/\n").unwrap();
-    std::fs::write(dir.path().join("inputs.py"), r#"import os,sys,json
+    std::fs::write(dir.path().join("inputs.py"), r"import os,sys,json
 from pathlib import Path
 data={k:os.environ.get(k) for k in ['CODEFLOW_BASE','CODEFLOW_HEAD','CODEFLOW_CHANGED_PATHS_FILE','CODEFLOW_LANDING_LINE']}
 print('Summary inputs '+json.dumps(data))
 Path('target/inputs.json').write_text(json.dumps(data))
 override=Path('target/exit-code')
 sys.exit(int(override.read_text() if override.exists() else sys.argv[1]))
-"#).unwrap();
+").unwrap();
     git(dir.path(), &["add", "."]);
     git(dir.path(), &["commit", "-qm", "test: target contract"]);
     dir
@@ -202,7 +202,7 @@ fn comparison_fixture(mode: &str) {
     assert_eq!(record["comparison"]["proven"], true);
     assert_eq!(record["schema_version"], 2);
     // This is the built-binary journey output, retained by --nocapture.
-    println!("{mode} known: {}", data);
+    println!("{mode} known: {data}");
     println!(
         "{mode} known binary output:\n{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -238,7 +238,7 @@ fn comparison_fixture(mode: &str) {
         no_base["target_evidence"].as_array().unwrap().len()
     );
     assert_eq!(no_base["results"].as_array().unwrap().len(), 2);
-    println!("{mode} unknown: {}", data);
+    println!("{mode} unknown: {data}");
     println!(
         "{mode} unknown binary output:\n{}{}",
         String::from_utf8_lossy(&unknown.stdout),
