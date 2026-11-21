@@ -1,0 +1,11 @@
+id = "TSK-1568"
+uid = "9423c468-24e9-4aa6-b629-d32dacd11373"
+kind = "TSK"
+title = "Quick gate runs every contract target and lists all failures"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-21T00:18:09Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
