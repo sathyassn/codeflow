@@ -10,6 +10,7 @@ Usage: python3 scripts/journey-gate.py --results <junit file or directory>
        python3 scripts/journey-gate.py --list
        python3 scripts/journey-gate.py --part python|results [...]
        python3 scripts/journey-gate.py --nextest-filter [--skip-benchmark]
+       python3 scripts/journey-gate.py --check-pending
 
 `--part` runs one half of the gate: `python` runs the Python journeys,
 which need no test results, and `results` reads the Rust journeys from the
@@ -19,6 +20,11 @@ results. Two jobs that each run one part together run every journey once
 `--nextest-filter` prints the filterset of exactly the Rust journey tests this
 platform runs, for the reduced Windows tier (TSK-1242), which runs them without
 the partitions and then reads their results with `--part results`.
+
+`--check-pending` runs no tests: it fails when a journey's `pending` task
+record is complete, missing or unreadable, or when a pending journey names
+tests. It reads task records, so the `docs-validation` record check runs it
+and a records-only landing that completes such a task is refused (TSK-1151).
 """
 
 from __future__ import annotations
@@ -46,6 +52,67 @@ SUMMARY = re.compile(r"^(OK|FAILED|NO TESTS RAN)(?: \((.*)\))?$", re.MULTILINE)
 def load_journeys() -> list[dict]:
     with MAP.open("rb") as handle:
         return tomllib.load(handle)["journey"]
+
+
+# The task statuses the record parser accepts (`models/status.rs` TaskStatus).
+STATUSES = {"todo", "blocked", "in_progress", "complete", "cancelled"}
+STATUS_KEY = re.compile(r"^status[ \t]*:(.*)$")
+DOUBLE_QUOTED = re.compile(r'"([^"\\]*)"(?:[ \t]+#.*)?')
+SINGLE_QUOTED = re.compile(r"'((?:[^']|'')*)'(?:[ \t]+#.*)?")
+
+
+def record_status(text: str) -> tuple[str | None, str | None]:
+    """The front matter's `status`, read as the YAML scalar the record parser
+    reads, so a quoted `"complete"` counts as complete. Returns (status, None),
+    or (None, reason) for anything it cannot read: no front matter, no or a
+    repeated `status` key, an escape or tag, or a value outside STATUSES."""
+    lines = text.splitlines()
+    if not lines or lines[0].rstrip() != "---":
+        return None, "no front matter"
+    try:
+        end = next(i for i in range(1, len(lines)) if lines[i].rstrip() == "---")
+    except StopIteration:
+        return None, "front matter is not closed"
+    found = [m.group(1) for m in (STATUS_KEY.match(line) for line in lines[1:end]) if m]
+    if not found:
+        return None, "no status line"
+    if len(found) > 1:
+        return None, "more than one status line"
+    raw = found[0].strip()
+    if raw.startswith('"'):
+        match = DOUBLE_QUOTED.fullmatch(raw)
+        value = match.group(1) if match else None
+    elif raw.startswith("'"):
+        match = SINGLE_QUOTED.fullmatch(raw)
+        value = match.group(1).replace("''", "'") if match else None
+    else:
+        value = re.split(r"[ \t]+#", raw, maxsplit=1)[0].strip()
+    if value not in STATUSES:
+        return None, f"unreadable status {raw!r}"
+    return value, None
+
+
+def pending_problems(journeys: list[dict], root: Path) -> list[str]:
+    """Problems with pending journeys, judged against the task records."""
+    problems: list[str] = []
+    for journey in journeys:
+        task = journey.get("pending")
+        if not task:
+            continue
+        record = root / "project-management" / "tasks" / f"{task}.md"
+        try:
+            text = record.read_text(encoding="utf-8")
+        except OSError as error:
+            problems.append(f"{journey['text']}: pending on {task}, whose record cannot be read: {error}")
+            continue
+        status, error = record_status(text)
+        if error:
+            problems.append(f"{journey['text']}: pending on {task}, whose status cannot be read: {error}")
+        elif status == "complete":
+            problems.append(f"{journey['text']}: pending on {task}, which is complete; name its tests")
+        if journey.get("control") or journey.get("fault"):
+            problems.append(f"{journey['text']}: a pending journey names no tests")
+    return problems
 
 
 def plan(journeys: list[dict], on_unix: bool, with_benchmark: bool):
@@ -206,9 +273,19 @@ def main() -> int:
     parser.add_argument("--part", choices=PARTS, help="run only the Python journeys or only the results")
     parser.add_argument("--nextest-filter", action="store_true",
                         help="print the filterset of this platform's Rust journey tests")
+    parser.add_argument("--check-pending", action="store_true",
+                        help="fail when a pending journey's task is complete; runs no tests")
     args = parser.parse_args()
 
     journeys = load_journeys()
+    if args.check_pending:
+        problems = pending_problems(journeys, ROOT)
+        for problem in problems:
+            print(f"journey gate: FAILED {problem}")
+        if not problems:
+            pending = sum(1 for journey in journeys if journey.get("pending"))
+            print(f"journey gate: {pending} pending journeys, none on a complete task")
+        return 1 if problems else 0
     groups, skipped, pending = plan(
         journeys, on_unix=os.name != "nt", with_benchmark=not args.skip_benchmark
     )

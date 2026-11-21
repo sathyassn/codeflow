@@ -182,7 +182,7 @@ const RECORD_SECTIONS_NOTES: &str = "Empty by default. `validate --docs`, `work 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 90] = [
+pub const SCHEMA: [KeySpec; 91] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -840,6 +840,13 @@ pub const SCHEMA: [KeySpec; 90] = [
                 omits this key.",
     },
     KeySpec {
+        path: "git.record_paths",
+        kind: KeyKind::StringList,
+        valid: "an array of repository-relative path globs (the `glob` crate's syntax, where `*` also crosses `/`)",
+        purpose: "Markdown records eligible for the records-only integration landing class.",
+        notes: "Read from the line tip. Empty by default: a project with no list keeps the full gate on every landing. List only Markdown that no build or test reads. Product and watched paths, instructions, configuration, mode changes and special files always require the full gate. The shipped policy file does not list it, so an older binary never meets the key.",
+    },
+    KeySpec {
         path: "git.direct_changes",
         kind: KeyKind::Enum(&["allow", "forbid"]),
         valid: "allow | forbid",
@@ -1492,6 +1499,22 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
     }
 }
 
+fn validate_record_paths(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    for entry in value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if let Err(error) = glob::Pattern::new(entry) {
+            errors.push(PolicyError {
+                key: path.to_string(),
+                message: format!("invalid glob {entry:?}: {error}"),
+            });
+        }
+    }
+}
+
 /// The value checks for the candidate-removal keys (TSK-1308):
 /// `git.candidate_prefix` is a branch name prefix ending in `/`, and
 /// `git.candidate_search_depth` is positive.
@@ -1565,6 +1588,7 @@ fn validate_trusted_client_configs(path: &str, value: &Value, errors: &mut Vec<P
 
 fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
     match path {
+        "git.record_paths" => validate_record_paths(path, value, errors),
         "git.document_indexes" => {
             for entry in value
                 .as_array()

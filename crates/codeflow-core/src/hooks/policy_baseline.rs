@@ -356,6 +356,9 @@ const INTERSECT_LISTS: &[&str] = &[
     "security.sandbox_retry_allow",
     "security.trusted_client_configs",
     "git.ignored_files.allow",
+    // More record paths let more changes onto the record-check route, so the
+    // intersection is the stricter value.
+    "git.record_paths",
 ];
 
 /// String values that are not levels even when they spell one.

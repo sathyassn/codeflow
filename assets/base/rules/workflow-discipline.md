@@ -201,7 +201,8 @@ mutation testing, or project-owned architecture fitness checks only from the
 orchestrator's evidence triggers; `none selected` is valid and is written
 nowhere per task, and normal scenario coverage remains mandatory. Builders
 run targeted tests as they go and `codeflow test --mode quick` once before
-ready, and cite them with the revision and the command; the full gate runs once on each exact landing candidate,
+ready, and cite them with the revision and the command; the landing checks run once on each exact landing candidate
+(one full gate for a code candidate; `git-rules.md` "Bodies of work"),
 which carries every PR ready when its line lands, and a standalone PR is its
 own candidate. Gates, full ones included, run in parallel as host capacity
 allows. Adopted push and CI

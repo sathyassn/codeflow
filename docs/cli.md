@@ -596,21 +596,24 @@ under the `git.test_gate_on_push` policy key, which this repository sets to
 | Deadline | Each `codeflow ci` must finish within the lookup wait times its attempts, plus the fetch wait, plus the push budget (270 s by default), or it is ended and the push refused under `git.test_gate_on_push`. The check runs away from the terminal, so in a partial clone a fetch of a missing object that needs a password or passphrase cannot ask for it and is refused this way. The refusal then names the fix, built from the range the check read: run `git log --diff-merges=separate --stat --format= <from>..<head>` and `git diff --stat <from>...<head>` in your terminal, where a prompt can be answered, then push again. `<from>` is the check's `--commits-from`, or its base without one. The two commands read both sides of each commit's changes and of the range's diff, so they fetch every file version the added-lines, conflict-marker and size-and-ignore checks read. They do not fetch a file the check reads whole at one commit that neither shows changed, such as the policy at the target's tip or a file a sparse checkout leaves out, and the refusal says so. A plain `git fetch` keeps the clone's filter and fetches none of them. |
 
 `codeflow integrate` is the local landing path for protected branches. It
-rebases the branch onto the target by default, runs every full-gate target, then
+rebases the branch onto the target by default, runs the selected checks, then
 fast-forwards the target ref. With `--merge`, it creates a `--no-ff` merge
 commit whose first parent is the old target tip and whose second parent is
 the unchanged source head, and gates that merge result. This keeps a task's
-acceptance binding to its reviewed commit intact. Run `--merge` from a linked
-worktree; a root checkout is refused before candidate preparation. A head
+acceptance bound to its reviewed commit. Run `--merge` from a linked
+worktree; a root checkout is refused. A head
 already contained in the target needs no new merge commit. The subject names
 both refs: `Merge branch '<branch>' into <target>`.
 
+An `integration/` target's gate follows the diff from its pinned tip
+(`.codeflow/rules/git-rules.md`, "Bodies of work");
+`<git-common-dir>/codeflow/landings/<candidate>.json` records the class and reason.
+
 Both modes advance the local target only after the gate and the adopted
 release structure check pass. They refuse failed, skipped or incomplete gates; a
-repository with no gate targets lands with the loud not-test-verified warning.
-They also refuse if the source or target moved while testing. A conflict or
-failed gate leaves the target unchanged and restores the original checkout. The command does not push; the operator or
-primary handles the remote landing through the project's PR flow.
+code candidate with no gate targets lands with a not-test-verified warning.
+They refuse if the source or target moved while testing. A conflict or
+failed gate leaves the target unchanged and restores the original checkout. The command does not push.
 
 - It runs under a gate-context token that the git hooks and git-guard verify,
   so a raw `git merge` or a manual ref move onto a protected branch stays

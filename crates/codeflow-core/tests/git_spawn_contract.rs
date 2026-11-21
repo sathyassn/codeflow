@@ -42,6 +42,12 @@ use std::path::{Path, PathBuf};
 /// argument with whitespace removed, how many, why it never holds git).
 const DYNAMIC: &[(&str, &str, usize, &str)] = &[
     (
+        "codeflow-core/src/git/mod.rs",
+        "CALLING_BINARY.get().map_or_else(||PathBuf::from(\"codeflow\"),Clone::clone),",
+        1,
+        "codeflow_command starts this CLI's own binary (or `codeflow` on PATH) for the records-only landing checks, never git (TSK-1151)",
+    ),
+    (
         "codeflow-core/src/security/outward.rs",
         "shell",
         2,

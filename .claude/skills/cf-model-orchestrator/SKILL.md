@@ -384,7 +384,7 @@ responsible primary delegates, inspects,
 integrates and accepts eligible work under the assignment rules; actual
 authorship determines independent review. Task branches are not final
 evidence: the primary lands reviewed heads through the batch candidate and
-its one full gate as the delivery process reference states.
+its selected landing checks as the delivery process reference states.
 
 A Codex-produced or Codex-reviewed unit runs in the Codex seat that
 cross-family transport names, at the primary's selector and default effort
