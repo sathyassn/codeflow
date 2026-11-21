@@ -3,7 +3,7 @@ id: ADR-0102
 uid: 4f4dd15e-4827-4724-bd3e-05ce79753706
 title: "A marked epic reaches main once and complete, and line pushes start no hosted run"
 date: 2026-11-12
-status: proposed          # proposed | accepted | superseded
+status: accepted          # proposed | accepted | superseded
 superseded_by: null       # ADR id, set on supersession; a dated Note may also be appended
 architecture_impact: none # none | one line naming what in architecture.md changes
 ---
@@ -131,6 +131,45 @@ EPC-056 (the epic graph and the landing answers) and EPC-057
   EPC-056 and EPC-057. Status stays proposed until the operator
   approves the wording that splits ADR-0098 between marked and unmarked
   epics.
+- 2026-11-12, about 10:36 EST. The operator accepted this record's
+  wording as drafted, in item D6 of the "yes to all" answer recorded in
+  the workspace `RELEASE-PLAN.md` (lines 1354 to 1361): "built_by,
+  cf-seats, ADR-0102's wording and the Codex builder seat profile are
+  accepted as drafted". The status was set to accepted on 2026-11-20 by
+  the planning amendment that adds this entry and the next one. The text
+  above is unchanged.
+- 2026-11-20, about 21:2x EST. The operator ruled, relayed
+  by the Director and recorded in the workspace `RELEASE-PLAN.md` (lines
+  1711 to 1717): "merge all tasks that have been locally properly tested directly
+  into the epics lines and not through PRs, only PRs to main should be
+  raised - either from the lines (mostly) or via tasks (when individual
+  tasks are needed for certain reasons)". In CodeFlow's own repository
+  this applies to every line, EPC-022 included, and to unmarked epics as
+  well as marked ones:
+  - A tested and reviewed task merges directly into its epic's line with
+    no pull request. No new pull request into an integration line is
+    opened.
+  - Pull requests are raised only into `main`: from a line, mostly, or
+    from a task that must land alone.
+  - After each task landing, the landing owner checks `main` and, when it
+    moved, merges `main` into the line.
+  - For CodeFlow's own repository this replaces the table row "Pull
+    request into a line (an unmarked epic's task)"; the Decision's
+    sentence that a pull request into a line runs the short checks; the
+    Decision's sentence that epics planned before the marker keep
+    checkpoint pull requests until they close, and the matching sentence
+    on ADR-0098 for unmarked epics, both now narrowed to the milestone
+    line below; and the Consequences items on a pull request into a line
+    and on two landing rules running side by side. The shipped product
+    keeps the task pull request route for adopters' unmarked epics.
+  - The marker still decides how a line reaches `main`: `whole-epic` once
+    and complete, and `checkpoint-prs`, set explicitly, in checkpoint pull
+    requests for a milestone line only (Director's rulings of 2026-11-20).
+    EPC-022 is the one milestone line named today. It reaches `main`
+    through its checkpoint pull request, carries no marker now, and takes
+    `whole-epic` after the TSK-1513 sync and its next checkpoint. Every
+    other epic line is a whole-epic line, marked by a planning range into
+    `main`.
 
 ## Architecture impact
 

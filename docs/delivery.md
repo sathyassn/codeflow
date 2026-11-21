@@ -285,6 +285,16 @@ change to a record whose home is the line, so the refusal applies only when
 that rule was broken. A records-only sync that already passes as a planning
 amendment keeps that class.
 
+Exception, 2026-11-20 (operator ruling, narrow, for the `main_landing` field
+only): `main_landing` is set and changed only on `main`, by a records pull
+request to `main`, and each line takes it through its next sync of `main`.
+A line-side edit of the field has no effect, and the marker gates refuse
+one. Reason: the gate on a line's pull request to `main` reads `main`'s tip,
+so a marker held only on the line is not there when the gate judges and a
+line change could drop it, while a marker on the base branch is one the
+requester cannot change. Every other field of an epic record keeps its home
+as above.
+
 When `main` moved a task's home, the sync keeps that home only if every
 move was a reviewed planning merge of records on `main`, and the line
 already names the new home or kept its copy of a `todo` or `blocked` task
