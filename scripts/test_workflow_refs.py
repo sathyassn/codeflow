@@ -13,6 +13,8 @@ a script does once called: a script that checks out another ref is outside it.
 
 from pathlib import Path
 import re
+import subprocess
+import sys
 import unittest
 
 
@@ -22,9 +24,12 @@ WORKFLOWS = ROOT / ".github/workflows"
 SAME_COMMIT = "${{ github.sha }}"
 # Git commands that replace the working tree with another commit. `git fetch` is
 # allowed: it brings another ref in as data, and these then find any step using it.
+# An option's value is a word that does not start with "-", or a lone "-". An
+# option is "-" plus at least one more character, so each word reads one way only
+# and a long line of options cannot make the match backtrack exponentially.
 SWITCHES_TREE = re.compile(
-    r"\bgit\b(?:[ \t]+-\S+(?:[ \t]+\S+)?)*[ \t]+(?:checkout|switch|worktree|pull|restore)\b"
-    r"|\bgit\b(?:[ \t]+-\S+(?:[ \t]+\S+)?)*[ \t]+reset[ \t]+--hard\b"
+    r"\bgit\b(?:[ \t]+-\S+(?:[ \t]+(?:[^-\s]\S*|-(?!\S)))?)*[ \t]+(?:checkout|switch|worktree|pull|restore)\b"
+    r"|\bgit\b(?:[ \t]+-\S+(?:[ \t]+(?:[^-\s]\S*|-(?!\S)))?)*[ \t]+reset[ \t]+--hard\b"
     r"|\bgh[ \t]+pr[ \t]+checkout\b"
     r"|\bgit\b[^\n]*\bclone\b"
 )
@@ -126,7 +131,8 @@ class CrossingTests(unittest.TestCase):
     def test_commands_that_replace_the_tree_are_refused(self):
         for command in ('git checkout "$SHA"', "git -C source checkout abc", "git switch -d abc",
                         "git worktree add ../x abc", "git pull origin main", "git reset --hard abc",
-                        "gh pr checkout 1", "git clone https://example.invalid/x", "git restore --source=abc ."):
+                        "gh pr checkout 1", "git clone https://example.invalid/x", "git restore --source=abc .",
+                        "git -C - checkout main", "git -c - -C - reset --hard abc"):
             with self.subTest(command=command):
                 self.assertEqual(len(crossings(f"        run: {command}\n")), 1)
 
@@ -138,6 +144,19 @@ class CrossingTests(unittest.TestCase):
 
     def test_a_comment_is_not_a_crossing(self):
         self.assertEqual(crossings("      # git checkout is never used here\n"), [])
+
+    def test_a_long_line_of_options_is_read_in_linear_time(self):
+        """Run in a child so a pattern that backtracks exponentially fails on the timeout."""
+        probe = ("import re, sys\n"
+                 "rx = re.compile(sys.argv[1])\n"
+                 "options = ' -a -b' * 20000\n"
+                 "print([bool(rx.search('git' + options + tail)) for tail in ('\\t', ' checkout x', ' -C dir reset --hard')])\n")
+        try:
+            done = subprocess.run([sys.executable, "-I", "-c", probe, SWITCHES_TREE.pattern],
+                                  capture_output=True, text=True, timeout=10, check=True)
+        except subprocess.TimeoutExpired:
+            self.fail("the pattern took over 10 seconds on 100,000 characters of options")
+        self.assertEqual(done.stdout.strip(), "[False, True, True]")
 
 
 if __name__ == "__main__":
