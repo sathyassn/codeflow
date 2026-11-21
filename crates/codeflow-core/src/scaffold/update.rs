@@ -49,6 +49,7 @@ use std::path::{Path, PathBuf};
 use super::assets::Shipped;
 use super::init::{build_context, render_entry};
 use super::manifest::{ManifestEntry, Ownership, RegionFormat, ScaffoldManifest};
+use super::pipeline_stage;
 use super::prior_release;
 use super::region::{self, BlockOutcome};
 use super::report::{Action, Report};
@@ -1174,6 +1175,19 @@ fn update_entry(
                 )?;
             } else {
                 let mut notes = vec![Shown::fixed("user-owned: never mutated by update")];
+                if entry.dest == pipeline_stage::PIPELINE_DEST {
+                    // Read only to advise: the copy is never written here.
+                    // Read like the doctor check, so a fifo or other
+                    // non-regular file is refused without being opened. An
+                    // unreadable copy is said, never a reason to stop update.
+                    match crate::bounded_file::read_regular(&dest_path) {
+                        Ok(live) if pipeline_stage::runs_essential_per_change(&live) => {
+                            notes.push(Shown::fixed(pipeline_stage::UPDATE_NOTICE));
+                        }
+                        Ok(_) => {}
+                        Err(_) => notes.push(Shown::fixed(pipeline_stage::UNREAD_NOTICE)),
+                    }
+                }
                 let is_new_entry = !installed.files.contains_key(&entry.dest);
                 let baseline_missing = Baseline::read(root, &entry.dest)?.is_none();
                 if is_new_entry || baseline_missing {

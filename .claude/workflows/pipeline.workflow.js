@@ -221,7 +221,7 @@ const STAGES = {
       rule: "SET your `verdict` from the SecurityFinding enums, never from prose — the gate branches on that verdict: return 'changes_requested' when any finding has severity in {critical,high} AND confidence in {confirmed,likely}; otherwise 'approved'. One finding string per issue.",
     }),
   review: gate('review',
-    'Run `codeflow validate` and `codeflow test --mode quick --strict`; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
+    'Run `codeflow validate`' + (PRESET.includes('verify') ? ' and read the diff and the tests; the verify stage that follows runs the affected targeted checks and then the quick gate once for this revision, so never run `codeflow test` here' : ' and the affected targeted checks (a check defined only in a heavier mode runs alone through `--only`), then `codeflow test --mode quick --strict`') + '; any nonzero exit is an automatic changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: that is not-verified, treat it as changes_requested, never as a pass.'),
   qa: gate('qa',
     'QA lens: exercise each acceptance criterion against actual behavior — run the code and tests, record observed vs expected per criterion; any unmet criterion fails.'),
   // Optional independent-review consult: a fresh-context second read of the built
@@ -249,7 +249,7 @@ const STAGES = {
     schema: VERDICT,
     prompt: () => [
       `Final verification gate for: ${TASK}`, WHERE,
-      'Run the affected targeted checks, then `codeflow test --mode essential --strict` when a target in `.codeflow/test-config.json` defines an `essential` mode, else `codeflow test --mode quick --strict`; say which ran and report the exact exit code as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
+      'Run the affected targeted checks (a check defined only in a heavier mode runs alone through `--only`, such as `codeflow test --mode essential --only <target>`), then `codeflow test --mode quick --strict`; never run a whole essential or full gate here, since the primary runs one full gate on the exact landing candidate. Report the exact exit code of each as a finding; any nonzero exit is changes_requested. `--strict` makes a NoTargets run (the loud "nothing to run" banner — zero tests executed) exit non-zero: a no-op is not-verified, report it as changes_requested, never approved.',
       `Then check every acceptance criterion one by one, citing evidence per criterion in findings:\n${CRITERIA}`,
       "Verdict 'approved' only when targeted checks and that gate ran green (never on a NoTargets/no-op run) and every criterion is met. The primary runs the full gate once on the exact landing candidate.",
     ].filter(Boolean).join('\n\n'),
