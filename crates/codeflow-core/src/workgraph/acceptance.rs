@@ -329,19 +329,34 @@ mod authority {
     /// `imported_records` proves its home landing; the receiving head never
     /// supplies that authority.
     #[derive(Clone, Debug, Default)]
-    pub struct RunBases(Vec<Oid>);
+    pub struct RunBases(Vec<Oid>, Option<Vec<Oid>>);
+
+    /// `tips`, deduplicated in order.
+    fn distinct(tips: impl IntoIterator<Item = Oid>) -> Vec<Oid> {
+        let mut bases: Vec<Oid> = Vec::new();
+        for tip in tips {
+            if !bases.contains(&tip) {
+                bases.push(tip);
+            }
+        }
+        bases
+    }
 
     impl RunBases {
         /// The run's fixed target tips, deduplicated in order.
         #[must_use]
         pub fn new(tips: impl IntoIterator<Item = Oid>) -> Self {
-            let mut bases: Vec<Oid> = Vec::new();
-            for tip in tips {
-                if !bases.contains(&tip) {
-                    bases.push(tip);
-                }
-            }
-            Self(bases)
+            Self(distinct(tips), None)
+        }
+
+        /// These bases, with the stacking authority bounded to `tips`
+        /// instead of the bases (TSK-1154): a landing candidate's member is
+        /// compared with the tip it merged onto, which holds earlier
+        /// members that have not landed, so only the candidate's trusted
+        /// tip may carry its clean merges after a review.
+        #[must_use]
+        pub fn stacking_from(self, tips: impl IntoIterator<Item = Oid>) -> Self {
+            Self(self.0, Some(distinct(tips)))
         }
 
         /// The tips whose first-parent lines may carry a clean merge after a
@@ -349,7 +364,7 @@ mod authority {
         /// head.
         #[must_use]
         pub fn stacking(&self) -> StackingTips {
-            StackingTips(self.0.clone(), Vec::new())
+            StackingTips(self.1.clone().unwrap_or_else(|| self.0.clone()), Vec::new())
         }
 
         /// The bases that alone may supply a reopened task's criteria.
@@ -461,6 +476,7 @@ mod authority {
 }
 pub use authority::{CriteriaBases, RunBases, StackingTips};
 
+pub mod candidate;
 mod imports;
 mod planning_move;
 mod receiving_merges;
@@ -2601,6 +2617,17 @@ pub struct Scope<'a> {
     /// library caller that judges with the checkout; `codeflow ci` always
     /// passes the policy it judges with.
     pub branch_prefixes: Option<&'a [String]>,
+    /// The task whose reviewed head this range is, when a landing
+    /// candidate's member judgment read it from the records at the exact
+    /// member head ([`candidate::candidate_findings`]): the range is then
+    /// that task's own, as a branch carrying it would make it.
+    pub member: Option<&'a str>,
+    /// The trusted tip whose first-parent line alone, with the run's
+    /// candidate authority, may carry the range's clean merges after a
+    /// review, when it is not the base: a landing candidate's member is
+    /// compared with the tip it merged onto, which holds earlier members
+    /// that have not landed, and those grant no stacking (TSK-1154).
+    pub stacking: Option<&'a str>,
 }
 
 /// Whether a record of a task shows a completion of it: it is complete,
@@ -3759,6 +3786,8 @@ impl<'r> Judging<'r> {
             own_line: self.own_line.as_ref(),
             replaced: self.replaced.as_ref(),
             branch_prefixes: None,
+            member: None,
+            stacking: None,
         };
         judge_in_range(
             &mut self.store,
@@ -4292,7 +4321,7 @@ pub fn completions_in_range(
         run,
         (line, receiving_line(line, None), None),
         stacked,
-        None,
+        (None, None),
     )
 }
 
@@ -4325,7 +4354,7 @@ fn completions_received(
     run: &RunBases,
     (line, receiving, sync_tip): (Option<&str>, Option<&str>, Option<LineSyncTip>),
     stacked: &[StackedHead],
-    prefixes: Option<&[String]>,
+    (prefixes, member): (Option<&[String]>, Option<&str>),
 ) -> Result<Vec<Finding>, String> {
     let _judgment = history::judgment();
     let amendable = criteria.amends();
@@ -4366,7 +4395,11 @@ fn completions_received(
         &local,
         *criteria == Criteria::Amendable,
     );
-    let branch_task = if receiving.is_some() && receiving_line(line, None).is_none() {
+    let branch_task = if let Some(member) = member {
+        // A landing candidate's member: its task was read from the records
+        // at the exact member head, never from a name.
+        Some(member.to_string())
+    } else if receiving.is_some() && receiving_line(line, None).is_none() {
         let root = repo.workdir().unwrap_or_else(|| repo.path());
         // The judged policy's prefixes, as `codeflow ci` reads its own
         // task (TSK-1309 AC-6): the checkout's policy may name others.
@@ -5016,6 +5049,10 @@ pub fn pull_request_findings_into(
         _ => None,
     };
     let run = RunBases::new(std::iter::once(target_tip).chain(candidate));
+    let run = match scope.stacking {
+        Some(trusted) => run.stacking_from(std::iter::once(oid(trusted)?).chain(candidate)),
+        None => run,
+    };
     let head_tip = oid(head)?;
     let mut at_head = Graph::from_revision(&repo, head)?;
     let imported = match imported_records(&repo, target_tip, head_tip, &at_head) {
@@ -5119,7 +5156,7 @@ pub fn pull_request_findings_into(
         &run,
         (branch, receiving_line(branch, into), sync_tip),
         &stacked,
-        scope.branch_prefixes,
+        (scope.branch_prefixes, scope.member),
     )?);
     Ok(found)
 }

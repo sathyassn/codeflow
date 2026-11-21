@@ -358,6 +358,33 @@ pub fn reference_tip(root: &Path, name: &str) -> Result<Option<String>, String> 
     tip
 }
 
+/// The first-parent history of `head`, nearest first, at most `depth`
+/// commits, as full ids. A shallow boundary or a missing object refuses.
+///
+/// # Errors
+/// Returns an error when the repository or a commit cannot be read.
+pub fn first_parent_history(root: &Path, head: &str, depth: usize) -> Result<Vec<String>, String> {
+    let repo = Repository::discover(root).map_err(|e| e.to_string())?;
+    let mut at = repo
+        .revparse_single(head)
+        .and_then(|object| object.peel_to_commit())
+        .map(|commit| commit.id())
+        .map_err(|e| format!("{head}: {e}"))?;
+    let mut walked = Vec::new();
+    while walked.len() < depth {
+        walked.push(at.to_string());
+        let commit = repo.find_commit(at).map_err(|e| format!("{at}: {e}"))?;
+        match history::parents(&repo, &commit)
+            .map_err(|e| format!("{at}: {e}"))?
+            .first()
+        {
+            Some(first) => at = *first,
+            None => break,
+        }
+    }
+    Ok(walked)
+}
+
 /// The epic lines (`integration/EPC-*`) whose fetched tip is exactly
 /// `commit`, sorted.
 ///
