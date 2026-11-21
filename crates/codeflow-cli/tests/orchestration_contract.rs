@@ -85,6 +85,50 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// A count as the docs write it in prose, for 0 to 99.
+fn number_word(n: usize) -> String {
+    const ONES: [&str; 20] = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    const TENS: [&str; 8] = [
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    assert!(n < 100, "number_word covers 0 to 99, not {n}");
+    match (n / 10, n % 10) {
+        (0 | 1, _) => ONES[n].to_string(),
+        (tens, 0) => TENS[tens - 2].to_string(),
+        (tens, ones) => format!("{}-{}", TENS[tens - 2], ONES[ones]),
+    }
+}
+
+#[test]
+fn number_word_writes_counts_as_the_docs_do() {
+    assert_eq!(number_word(9), "nine");
+    assert_eq!(number_word(19), "nineteen");
+    assert_eq!(number_word(20), "twenty");
+    assert_eq!(number_word(27), "twenty-seven");
+    assert_eq!(number_word(99), "ninety-nine");
+}
+
 #[path = "../../codeflow-core/tests/support/catalog_fixture.rs"]
 mod fixture_data;
 
@@ -937,21 +981,27 @@ fn independent_discovery_precedes_the_one_challenged_plan() {
         ),
         "the orchestrator skill must expose independent discovery in its description"
     );
+    // TSK-1448: the count and the list follow doctor's own check list, so a
+    // new check cannot leave these statements behind.
+    let checks = codeflow_core::doctor::check_names();
+    let count = checks.len();
+    let names = checks.join(", ");
+    let in_words = format!("{} health checks", number_word(count));
     assert!(
-        normalize_whitespace(&capabilities).contains("twenty-six health checks"),
-        "CAP-008 must count the policy-source doctor check"
+        normalize_whitespace(&capabilities).contains(&in_words),
+        "CAP-008 must count every doctor check: \"{in_words}\""
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
+    let readme_list = format!("Health checks ({count}): {names} |");
     assert!(
-        readme.contains("Health checks (26): hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config"),
-        "README must list the grok doctor check"
+        readme.contains(&readme_list),
+        "README must list every doctor check in order: \"{readme_list}\""
     );
+    let architecture_list = format!("({count} checks: {names})");
     assert!(
-        architecture.contains(
-            "26 checks: hooks, claude, codex, grok, guard-timeouts, startup-files, sandbox, git-config-includes, config"
-        ),
-        "architecture must list the grok doctor check"
+        architecture.contains(&architecture_list),
+        "architecture must list every doctor check in order: \"{architecture_list}\""
     );
     let cap_010 = normalize_whitespace(&read(
         "docs/capabilities/CAP-010-duo-model-orchestration.md",
