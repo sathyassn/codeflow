@@ -284,9 +284,9 @@ Example, from CodeFlow's `assets/base/AGENTS.md.tmpl`:
 A caption is one sentence that states the takeaway. It does not repeat the
 title or explain the legend.
 
-Example, from CodeFlow's `docs/verification/evidence/tsk-006/prototype.html`:
+Example, from CodeFlow's `assets/base/agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md`:
 
-> Only dependency-free nodes share a time window; branch tips follow predecessor landings.
+> Both landing paths end at a human merge behind green checks.
 
 ### Summaries
 
@@ -329,8 +329,9 @@ one-line answer stays one line. A longer reply leads with the outcome in
 words, follows the summary rule, carries a figure when a relationship carries
 the point, puts tabular facts in a table, and gives the exact link a tool
 printed. Never add a sentence about the reply's own format. The example is
-a recorded chat reply's opening line, which leads into its table.
+a one-line answer to whether a gate passed, the passing control of an
+evaluation case.
 
-Example, from CodeFlow's `docs/verification/tsk-014-w3/baselines/p3/chat.md`:
+Example, from CodeFlow's `evals/model-artifacts/copy-controls/gate-answer-one-line.json`:
 
-> Eight rounds of exact review over the qualification harness produced seven findings:
+> Yes. The essential gate passed on 4f2c9a1: 412 tests, 0 failed, 0 skipped.

@@ -148,6 +148,16 @@ rules states; any other change gets a new whole-unit review at the new head. Lin
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
 
+## Where evidence lives
+
+Required evidence lives in this body or in the task record: pasted summary
+lines, one table rather than one file per run, and a gate run cited from its
+durable home. Run output, logs and review verdict files are never
+committed to carry it. An evidence file joins the repository only when a
+live record cites it and the body cannot carry it, and then in summary
+form; there is no per-task evidence folder. The discipline rules' "Write
+only what earns its keep" states what the repository holds.
+
 ## After opening
 
 No polling by default. The PR already carries its cited evidence; the

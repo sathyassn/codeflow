@@ -673,7 +673,7 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
         "grok-host.md must keep the unqualified-binding limit"
     );
     assert!(
-        grok_host.contains("Consuming scaffolds do not ship that file"),
+        grok_host.contains("are not shipped to consuming scaffolds"),
         "grok-host.md must not require a CodeFlow-only verification path"
     );
     let canary = repo_root().join("docs/verification/grok-host-duo-canary-2026-09-07.md");

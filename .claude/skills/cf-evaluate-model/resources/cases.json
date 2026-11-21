@@ -8903,6 +8903,214 @@
       }
     },
     {
+      "id": "review-flags-untyped-new-code",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-untyped-function",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-021, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "untyped_function_flagged_with_file_line",
+          "typed_neighbour_code_not_flagged"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "pyproject.toml"
+        ],
+        "must_not": [
+          "untyped_function_approved",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-unexplained-escape-type",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "notify-branch-unexplained-any",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-022, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "unexplained_any_flagged_with_file_line",
+          "reasoned_escape_accepted",
+          "partial_type_suggested"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "tsconfig.json"
+        ],
+        "must_not": [
+          "unexplained_any_approved",
+          "reasoned_escape_flagged_as_major",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-unvalidated-boundary-data",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-dataclass-config",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-023, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "dataclass_load_flagged_as_unvalidated_with_file_line",
+          "validating_model_requested",
+          "malformed_file_test_requested"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "src/orders/models.py"
+        ],
+        "must_not": [
+          "dataclass_accepted_as_validation",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "review-flags-hand-written-validator",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "orders-branch-hand-validator",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Review the current branch against main for TSK-024, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "changes_requested_verdict",
+          "hand_written_validator_flagged_with_file_line",
+          "schema_generated_model_named",
+          "existing_tests_kept_as_evidence"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "schemas/refund-request.schema.json",
+          "Makefile"
+        ],
+        "must_not": [
+          "hand_written_validator_approved",
+          "typeddict_accepted_as_validation",
+          "typing_finding_graded_minor",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "builder-adds-type-checker-and-config-model",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "retry-client-without-type-checker",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Do TSK-031 from CHANGE.md: make the change with its tests and commit it on this branch.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "type_checker_added_to_project",
+          "retry_json_parsed_into_validating_model",
+          "range_and_missing_field_tests_added",
+          "new_code_fully_typed",
+          "change_committed"
+        ],
+        "references": [
+          "CHANGE.md",
+          "README.md",
+          "config/retry.json",
+          "src/fetchkit/client.py"
+        ],
+        "must_not": [
+          "raw_dict_used_after_json_load",
+          "plain_dataclass_or_typeddict_as_validation",
+          "hand_written_isinstance_validator",
+          "type_checker_declined_as_out_of_scope"
+        ]
+      }
+    },
+    {
+      "id": "builder-narrows-unknown-without-any",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "notify-forward-vendor-events",
+      "requirements": [
+        "CF-QA-018"
+      ],
+      "prompt": "Do TSK-032 from CHANGE.md: make the change with its tests and commit it on this branch.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "payload_parsed_with_zod_schema",
+          "documented_payload_accepted_with_any_string_order_id",
+          "mismatched_payload_logged_as_warn",
+          "mismatch_test_added",
+          "typecheck_run_and_cited",
+          "change_committed"
+        ],
+        "references": [
+          "CHANGE.md",
+          "README.md",
+          "vendor/events/index.d.ts",
+          "src/schemas.ts"
+        ],
+        "must_not": [
+          "any_added_without_reason",
+          "ts_suppression_without_reason",
+          "unchecked_cast_of_payload",
+          "unexplained_escape_in_changed_code_or_tests",
+          "documented_payload_rejected_by_a_stricter_local_format"
+        ]
+      }
+    },
+    {
       "id": "ready-pull-requests-share-one-landing-candidate",
       "kind": "regression",
       "category": "project-management",
@@ -8977,6 +9185,182 @@
           "temporary_edit_then_restore",
           "ownership_silently_reassigned",
           "defect_only_mentioned_without_owner_notification"
+        ]
+      }
+    },
+    {
+      "id": "run-output-goes-in-the-pr-body",
+      "kind": "capability",
+      "category": "verification",
+      "canary": false,
+      "fixture": "sweep-evidence-for-review",
+      "requirements": [
+        "CF-QA-017",
+        "CF-QA-015"
+      ],
+      "prompt": "Finish TSK-005 from CHANGE.md: make the change, run what proves it, commit the work on this branch and write the pull request body to PR_BODY.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "source_and_test_committed",
+          "sweep_summarised_in_pr_body",
+          "earlier_evidence_folder_not_taken_as_precedent"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/units.py",
+          "tools/sweep.py"
+        ],
+        "must_not": [
+          "run_output_committed",
+          "per_task_evidence_folder_added",
+          "evidence_missing_from_pr_body"
+        ]
+      }
+    },
+    {
+      "id": "review-weighs-each-added-file",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "action-branch-added-files",
+      "requirements": [
+        "CF-QA-017"
+      ],
+      "prompt": "Review the current branch against main for TSK-012, using ACCEPTANCE.md, and write your verdict to REVIEW.md. Do not change any other file.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "run_log_flagged_as_material_finding",
+          "round_verdict_file_flagged_as_material_finding",
+          "bundled_dist_kept_as_shipped_product",
+          "lockfile_and_test_fixture_kept",
+          "verdict_reports_added_files_checked"
+        ],
+        "references": [
+          "ACCEPTANCE.md",
+          "README.md",
+          "action.yml"
+        ],
+        "must_not": [
+          "bundled_dist_refused_as_build_output",
+          "lockfile_or_fixture_refused",
+          "unneeded_files_approved",
+          "code_changed"
+        ]
+      }
+    },
+    {
+      "id": "builder-reads-the-existing-constant",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-existing-constant",
+      "requirements": [
+        "CF-QA-019",
+        "CF-QA-003"
+      ],
+      "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "retry_limit_read_from_existing_constant",
+          "support_queue_built_by_existing_helper",
+          "no_new_copy_of_team_or_queue_literal",
+          "test_expected_values_stay_independent"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/config.ts",
+          "src/retry.ts",
+          "src/notify.ts"
+        ],
+        "must_not": [
+          "retry_limit_literal_repeated",
+          "team_slug_or_queue_prefix_literal_repeated",
+          "duplicate_constant_declared",
+          "speculative_escalation_framework"
+        ]
+      }
+    },
+    {
+      "id": "builder-adds-an-enum-for-a-closed-set",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-closed-set",
+      "requirements": [
+        "CF-QA-019",
+        "CF-QA-003"
+      ],
+      "prompt": "Make the change in CHANGE.md with its tests, then say which files you changed.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "channel_declared_once_as_enum_or_literal_type",
+          "every_channel_comparison_uses_or_is_checked_against_the_declared_set",
+          "invalid_channel_rejected_at_parse_with_existing_error",
+          "existing_surcharge_constant_reused",
+          "tests_cover_each_member_and_an_invalid_value"
+        ],
+        "references": [
+          "CHANGE.md",
+          "src/orders.py",
+          "src/shipping.py"
+        ],
+        "must_not": [
+          "raw_channel_strings_compared_in_several_places",
+          "channel_stored_as_unchecked_str",
+          "surcharge_literal_repeated",
+          "speculative_channel_registry_or_plugin_framework"
+        ]
+      }
+    },
+    {
+      "id": "review-refuses-a-new-unchecked-copy",
+      "kind": "capability",
+      "category": "code_quality",
+      "canary": false,
+      "fixture": "declare-once-review-copy",
+      "requirements": [
+        "CF-QA-019",
+        "CF-QA-005"
+      ],
+      "prompt": "Review the change described in CHANGE.md against ACCEPTANCE.md. Return the final verdict and findings.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "copied_team_and_channel_literals_found",
+          "copy_and_home_named_at_file_line",
+          "major_finding_for_unchecked_copy",
+          "changes_requested_for_unchecked_copy",
+          "test_expected_literals_accepted_as_independent_oracle"
+        ],
+        "references": [
+          "CHANGE.md",
+          "ACCEPTANCE.md",
+          "src/alerts.ts",
+          "src/ownership.ts"
+        ],
+        "must_not": [
+          "approved_with_copy_as_minor",
+          "test_oracle_literals_flagged",
+          "new_window_constant_flagged_as_copy",
+          "new_gate_or_lint_required_in_this_review"
         ]
       }
     }

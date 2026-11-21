@@ -28,11 +28,18 @@ and decide; `codeflow` verifies the result deterministically.
 3. Author lint configuration tailored to the project (clippy workspace lints,
    eslint + config, ruff, ...). Respect existing config: tighten or extend,
    never silently replace. Wire the lint command into the test config's `full`
-   mode if the project gates on it. Where the existing stack supports a
-   compiler or type checker, discover and reuse its accepted command and wire
-   it into the appropriate mode. Do not mandate TypeScript, a validator
-   library, redundant tooling, stricter compiler migration, or a language/stack
-   change; dynamic stacks keep their native checks.
+   mode if the project gates on it. Set up typed code and typed boundary
+   data by default, as the quality contract's rule in
+   `cf-model-orchestrator/resources/quality/design-implementation.md`
+   states: reuse the project's compiler or type checker and its accepted
+   command, or add the language's standard one, and wire it into the
+   appropriate mode; add the typed-model library that parses and validates
+   data at boundaries (for example Pydantic, zod, serde). For shell, wire
+   ShellCheck. A new project or new file that would otherwise be
+   JavaScript is TypeScript; an existing JavaScript codebase is checked in
+   place with `checkJs` and JSDoc types, not rewritten. A project that
+   opts out states its reason in its Stack standards (step 6). Add no
+   redundant tooling.
 4. Read the orchestrator's `resources/verification-selection.md`. Configure a
    project-owned property/generative, mutation, or architecture fitness command
    only when repository evidence activates its trigger. Put routine checks in
@@ -50,8 +57,9 @@ and decide; `codeflow` verifies the result deterministically.
    or claim SCA/Clippy is source-to-sink taint analysis.
 6. Append a `## Stack standards` section to `AGENTS.md` OUTSIDE the
    codeflow:managed markers (the managed block is replaced on update): the
-   chosen stack, test/lint/security commands, and any conventions agreed with
-   the user. Keep it under ~15 lines.
+   chosen stack, test/lint/security commands, any opt-out from typed code or
+   typed boundary data with its scope and reason, and any conventions agreed
+   with the user. Keep it under ~15 lines.
 7. Verify deterministically and show the evidence: `codeflow test` (targets
    resolve and run), `codeflow doctor` (wiring healthy). Fix what fails before
    reporting done; say what was not verified. Commit the config in small units;

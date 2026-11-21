@@ -8,7 +8,7 @@
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs"],
-  "exclude": ["docs/verification"],
+  "exclude": [],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/overview.md"] },
     { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/architecture"] },
