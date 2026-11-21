@@ -198,6 +198,13 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--timings` | Print how long each check took, on stderr after the verdict, one line per check and then the total. The times only report; they change no verdict. |
 | `codeflow policy explain` | | Print the complete policy.json key schema: every key's type, default, valid values, and purpose |
 | `codeflow policy show` | | Print the effective policy: each key's current value, its source (project file or built-in default), and any invalid values |
+| `codeflow policy baseline show` | | Print this repository's policy baseline and how it bears on the policy read |
+| `codeflow policy baseline init` | | Record the baseline from a fresh read of the authority remote. Without --confirm it prints the commit and digest and writes nothing |
+| | `--confirm <COMMIT>` | The commit printed by a run without --confirm. |
+| `codeflow policy baseline refresh` | | Move the baseline to the authority's current commit: a descendant whose policy is no weaker, or anything with --reset |
+| | `--confirm <COMMIT>` | The commit printed by a run without --confirm. |
+| | `--reset` | Accept a commit the refresh rule refuses; the reason is recorded. |
+| | `--reason <TEXT>` | Why the operator resets the baseline. |
 | `codeflow remote protect` | | Write the rulesets codeflow owns: "codeflow authority updates" and "codeflow authority checks" on the default branch, "codeflow line checks" on the integration lines, and `codeflow protect <pattern>` for each other protected branch in policy.json |
 | | `--provider <PROVIDER>` | Remote provider (only `github` has an adapter; others print the manual checklist). Default `github`. |
 | | `--dry-run` | Read the host and print the exact requests a run would send, writing nothing. |

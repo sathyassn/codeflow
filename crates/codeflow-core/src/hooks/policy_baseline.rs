@@ -339,6 +339,11 @@ const UNION_LISTS: &[&str] = &[
     // A range touching a product path needs a journey criterion, so more
     // paths refuse more.
     "git.product_paths",
+    // A record lacking a listed section is refused, so more sections refuse
+    // more records (TSK-1421).
+    "git.task_required_sections",
+    "git.epic_required_sections",
+    "git.spec_required_sections",
 ];
 
 /// Lists where more entries allow more: the intersection is the stricter
@@ -404,10 +409,15 @@ pub fn weaker(candidate: &Policy, baseline: &Policy) -> Result<bool, String> {
 /// The enforced keys that serialization leaves out at their default. A key
 /// one side omits must merge as its default: otherwise the other side's
 /// relaxed text rule or allowance list would survive the merge unchanged.
+/// The required record sections leave out an empty list, so a side that
+/// lists none must still merge with the other side's sections (TSK-1421).
 const OMITTED_DEFAULTS: &[(&str, &str)] = &[
     ("security", "text_guard"),
     ("security", "trusted_client_configs"),
     ("git", "ignored_files"),
+    ("git", "task_required_sections"),
+    ("git", "epic_required_sections"),
+    ("git", "spec_required_sections"),
 ];
 
 /// `policy` with each [`OMITTED_DEFAULTS`] key written out at its default.
@@ -421,7 +431,10 @@ fn explicit(mut policy: Value) -> Value {
         }
         let default = match *key {
             "text_guard" => Value::String("strict".into()),
-            "trusted_client_configs" => Value::Array(Vec::new()),
+            "trusted_client_configs"
+            | "task_required_sections"
+            | "epic_required_sections"
+            | "spec_required_sections" => Value::Array(Vec::new()),
             // Absent means level warn and no allowance (TSK-323).
             _ => serde_json::json!({"level": "warn", "allow": []}),
         };

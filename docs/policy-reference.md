@@ -1795,7 +1795,8 @@ checked, so a symlink does not remove the target owner's protection.
     guard does not read, refuses when the landing place holds enforcement
     files. A destination filled in at run time refuses when the source
     holds `.git`, `.codeflow`, `.claude`, `.github`, `.codex` or `.grok`
-    at any depth, read within 4096 directories, or cannot be read. The
+    at any depth, read through its symbolic links within 4096 directories,
+    or cannot be read; a link that cannot be read or a link cycle refuses. The
     search for hidden checkouts under a configured worktree location keeps
     its 4096-directory bound, and past it the copy refuses.
   - A dry run (`rsync -n`, `--dry-run`) passes when the guard reads every
