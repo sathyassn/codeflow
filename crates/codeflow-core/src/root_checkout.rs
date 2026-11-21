@@ -232,7 +232,9 @@ pub fn default_branch(repo: &git2::Repository, policy: &GitPolicy) -> Result<Roo
         Err(error) if error.code() == git2::ErrorCode::NotFound => {}
         Err(error) => return Err(format!("cannot read origin/HEAD: {error}")),
     }
-    for pattern in &policy.protected_branches {
+    // The default branch is an identity the checkout cannot choose, so only
+    // the landed list answers when a policy has been composed with one.
+    for pattern in policy.trusted_protected_branches() {
         if !is_valid_branch_name(pattern) {
             continue;
         }

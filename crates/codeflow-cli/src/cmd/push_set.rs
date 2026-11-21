@@ -840,7 +840,7 @@ fn ci_target(
         root,
         branch,
         &pushed.local_sha,
-        &policy.protected_branches,
+        policy.trusted_protected_branches(),
         prefixes,
     )? {
         Some(Declared::Eligible(target)) if declared_bounds(root, destination, &target) => {
@@ -2082,7 +2082,9 @@ fn range_base(
         return Ok(None);
     };
     let mut known: Vec<String> = Vec::new();
-    for branch in &destination.policy.protected_branches {
+    // The tips that bound the range: only the landed list, never a branch the
+    // checkout adds, which would shrink the range judged.
+    for branch in destination.policy.trusted_protected_branches() {
         let reference = format!("{ns}{branch}");
         if branch.contains(['*', '?', '[']) {
             let any = git(
@@ -2147,7 +2149,10 @@ fn target_base(
     };
     let policy = destination.policy;
     let shown_branch = display_text(branch);
-    let line = policy.branch_is_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
+    // A branch is a line, which bounds its own range, only under the landed
+    // classification.
+    let line =
+        policy.branch_is_landed_protected(branch) || branch.starts_with(INTEGRATION_BRANCH_PREFIX);
     let (base, target) = if line {
         let Some(old) = existing_tip(root, r)? else {
             return Ok(None);
@@ -2161,7 +2166,7 @@ fn target_base(
             root,
             branch,
             &r.local_sha,
-            &policy.protected_branches,
+            policy.trusted_protected_branches(),
             prefixes,
         )?;
         let Some(declared) = declared else {

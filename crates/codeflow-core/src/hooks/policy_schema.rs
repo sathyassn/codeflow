@@ -912,9 +912,9 @@ pub const SCHEMA: [KeySpec; 90] = [
         path: "git.secret_scan",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Pre-commit scan for staged secrets and .env files.",
-        notes: "Never suspended by bootstrap grace, but off/allow HERE does \
-                disable the scan (it is policy, not hardcoded); leave at block. \
+        purpose: "Pre-commit and pre-merge-commit scans for staged secrets and .env files.",
+        notes: "Never suspended by bootstrap grace. The scan is inactive only \
+                when both landed and checked-out levels are off/allow; leave at block. \
                 A merge Git concludes itself runs no pre-commit, so commit-msg \
                 scans it when Git passes MERGE_MSG; a commit-msg message file \
                 other than MERGE_MSG or COMMIT_EDITMSG is refused at this level.",
@@ -951,7 +951,7 @@ pub const SCHEMA: [KeySpec; 90] = [
         path: "git.conflict_markers",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in the pre-commit hook and `codeflow ci` (TSK-170).",
+        purpose: "Unresolved conflict markers on the lines a change adds to a text file, in pre-commit, pre-merge-commit and `codeflow ci` (TSK-170).",
         notes: "Defaults to block. Only added lines are judged. A separator \
                 line counts only between an opening and a closing marker, so \
                 a Markdown heading underline passes. A file that must hold \

@@ -475,6 +475,8 @@ fn publish_sources(root: &Path, home: &str) {
     );
     git(root, &["remote", "add", "origin", remote.to_str().unwrap()]);
     git(root, &["push", "origin", "main", LINE]);
+    // As a clone records it: the hooks read the landed policy there.
+    git(root, &["remote", "set-head", "origin", "main"]);
     if home != "main" {
         git(root, &["push", "origin", home]);
     }

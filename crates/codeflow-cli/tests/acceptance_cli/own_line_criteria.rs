@@ -215,6 +215,8 @@ fn with_destination(repo: &Repo) {
             LINE,
         ],
     );
+    // As a clone records it: the hooks read the landed policy there.
+    git(root, &["remote", "set-head", "origin", "main"]);
     let seed = codeflow()
         .args(["ids", "seed"])
         .current_dir(root)

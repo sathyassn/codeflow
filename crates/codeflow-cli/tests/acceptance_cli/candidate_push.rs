@@ -348,6 +348,8 @@ fn fixture() -> Fixture {
     record_forge(root, &remote);
     git(root, &["remote", "add", "origin", ORIGIN]);
     seed_push(root, &["main", LINE]);
+    // As a clone records it: the hooks read the landed policy there.
+    git(root, &["remote", "set-head", "origin", "main"]);
 
     for (id, branch, path) in [
         ("TSK-001", MEMBERS[0], "src/one.rs"),

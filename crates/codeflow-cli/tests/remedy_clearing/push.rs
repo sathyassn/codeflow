@@ -334,14 +334,12 @@ fn clears_push_over_budget_builtin() {
     assert!(printed.contains("over its 60s budget"), "{printed}");
     assert_prints_row(&printed, "PUSH_OVER_BUDGET_BUILTIN");
     assert!(printed.contains("built-in `release preflight"), "{printed}");
-    let policy = read(&root, ".codeflow/policy.json");
-    let mut value: serde_json::Value = serde_json::from_str(&policy).unwrap();
-    value["git"]["test_gate_on_push"] = serde_json::json!("off");
-    write(
-        &root,
-        ".codeflow/policy.json",
-        &serde_json::to_string_pretty(&value).unwrap(),
-    );
+    // Follow the printed remedy: land the policy change on the default
+    // branch first, then apply it to the checkout before pushing again.
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("test_gate_on_push", "off".into())]);
+    });
+    set_policy(&root, &[("test_gate_on_push", "off".into())]);
     commit_all(&root, "chore: drop the push set");
     let after = pushed(&root);
     assert!(!after.contains("release preflight"), "{after}");
@@ -1586,12 +1584,25 @@ fn loosen(root: &Path) {
     );
 }
 
-/// Commit a four-bullet change, which the working copy's policy lets in.
+/// Seed a historical four-bullet commit for the push check. The landed
+/// floor now refuses it at commit time too; this fixture deliberately
+/// creates the bad history without invoking the commit hooks.
 fn four_bullets(root: &Path) {
     write(root, "y.txt", "y\n");
-    let said = commit_all(root, FOUR_BULLETS);
+    git(root, &["add", "-A"]);
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            FOUR_BULLETS,
+        ],
+    );
     let subject = text(&run("git", root, &["log", "-1", "--format=%s"]));
-    assert_eq!(subject.trim(), "feat: add y", "{said}");
+    assert_eq!(subject.trim(), "feat: add y");
 }
 
 /// The destination's default branch name.
@@ -1724,8 +1735,8 @@ fn head_sha(root: &Path) -> String {
         .to_string()
 }
 
-/// A branch that loosens its own commit-body rules commits under them, but
-/// its first push is judged by the policy at its target.
+/// A branch with looser commit-body rules has a four-bullet commit seeded
+/// without hooks; its first push is judged by the policy at its target.
 #[test]
 fn a_push_is_judged_by_the_policy_the_destination_holds() {
     let dir = scaffolded("--standard");
@@ -1841,6 +1852,11 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
+    // Permit protected pushes at the authority so this fixture reaches
+    // the body check after the checkout protects its own branch.
+    land_on_default(&root, &dest, |root| {
+        set_policy(root, &[("push_to_protected", "off".into())]);
+    });
     write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
     loosen(&root);
     commit_all(&root, "chore: loosen the commit body rules");
@@ -1849,7 +1865,7 @@ fn a_branch_cannot_protect_itself_into_its_own_authority() {
     assert_eq!(there.trim(), head_sha(&root), "{first}");
     protect(&root, "feat/x");
     unguard(&root);
-    commit_all(&root, "chore: protect the branch");
+    // The unchecked history fixture includes this policy change too.
     four_bullets(&root);
     let out = pushed(&root);
     refused(&dest, &out, &head_sha(&root));
@@ -2035,7 +2051,12 @@ fn a_protected_wildcard_does_not_make_a_branch_its_own_authority() {
     let dir = scaffolded("--standard");
     let root = project(&dir);
     let dest = with_destination(&root);
-    land_on_default(&root, &dest, |root| protect(root, "integration/*"));
+    land_on_default(&root, &dest, |root| {
+        protect(root, "integration/*");
+        // Allow this fixture's line pushes at the authority, so the push
+        // reaches the commit-body judgment whose source it tests.
+        set_policy(root, &[("push_to_protected", "off".into())]);
+    });
     // The landed policy keeps a protected name from being made here, so
     // the line is pushed to it from a branch of another name.
     let target = default_branch(&dest);
@@ -2198,7 +2219,8 @@ fn a_default_policy_that_is_not_utf8_refuses_the_push() {
         std::fs::write(root.join(POLICY), bytes).unwrap();
     });
     let out = pushed(&root);
-    assert!(out.contains("cannot be read by this codeflow"), "{out}");
+    assert!(out.contains("cannot read policy"), "{out}");
+    assert!(out.contains("invalid utf-8"), "{out}");
     not_landed(&dest, &out, "feat/x", &head_sha(&root));
 }
 

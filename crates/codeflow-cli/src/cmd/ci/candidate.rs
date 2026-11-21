@@ -170,9 +170,10 @@ pub(super) fn check(
 /// `--pushed-ref` but no line with `--into`, made before the run resolves
 /// its target, so the cause is named however the base resolves (a base
 /// that several branches name would otherwise stop the run first). The
-/// candidate name is read under the working copy's policy: this only
-/// refuses sooner and never admits anything; [`check`] still binds under
-/// the default branch's policy and refuses a missing `--into` there too.
+/// candidate name is read under the unchanged range-policy floor. This
+/// only refuses sooner and never admits anything; [`check`] still binds
+/// under the judging policy, including the destination's default-branch
+/// policy on that path, and refuses a missing `--into` there too.
 pub(super) fn unnamed_line(
     pushed_ref: Option<&str>,
     git: &GitPolicy,

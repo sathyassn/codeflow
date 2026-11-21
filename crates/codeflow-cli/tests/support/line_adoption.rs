@@ -70,6 +70,7 @@ impl Line {
         f.write(".codeflow/policy.json", policy);
         f.commit("docs: keep records on the line");
         f.git(&["push", "-q", "origin", "main"]);
+        f.track_origin_main();
         f.git(&["switch", "-q", LINE]);
         f.write(".codeflow/policy.json", policy);
         f.commit("chore: enable push checks");
@@ -98,6 +99,14 @@ impl Line {
 
     pub fn root(&self) -> &Path {
         self.dir.path()
+    }
+    /// Record the destination's `main` as origin's default branch, as a
+    /// fetch with `git remote set-head` leaves a clone. The classic hooks
+    /// read the landed policy there and refuse when it is unset
+    /// (TSK-1078 AC-3, AC-7).
+    pub fn track_origin_main(&self) {
+        self.git(&["fetch", "-q", "origin", "main"]);
+        self.git(&["remote", "set-head", "origin", "main"]);
     }
     pub fn command(&self, program: &str) -> Command {
         let mut c = Command::new(program);

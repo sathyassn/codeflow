@@ -108,7 +108,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
         }
     }
 
-    let (policy, _armed) = match Policy::load_effective(&root) {
+    let (policy, _armed) = match codeflow_core::hooks::landed_policy::load_for_hooks(&root) {
         Ok(value) => value,
         Err(error) => return policy_unreadable(&root, &error),
     };

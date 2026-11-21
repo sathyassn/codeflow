@@ -383,6 +383,73 @@ fn ci_environment(
     Ok(values)
 }
 
+/// The working policy with the protected list and work prefixes composed
+/// over a floor (TSK-1078): the policy at the commit this run already pins
+/// ([`pinned_floor`]), else the landed policy at the remote's default
+/// branch, which refuses when that is unset or unreadable.
+/// Returns the unchanged floor's git policy beside the working policy, so
+/// candidate classification before range resolution uses one authority.
+fn range_policy(
+    root: &Path,
+    args: &CiArgs,
+    environment: &BTreeMap<String, String>,
+) -> Result<(Policy, GitPolicy), String> {
+    let (mut working, _) = Policy::load_effective(root)?;
+    let floor = match pinned_floor(root, args, environment)? {
+        Some(sha) => codeflow_core::hooks::landed_policy::checked_policy_at_sha(root, &sha)?,
+        None => codeflow_core::hooks::landed_policy::load_local(root)?.policy,
+    };
+    (working.git.protected_branches, working.git.branch_prefixes) =
+        codeflow_core::hooks::landed_policy::compose_branches(&floor.git, &working.git);
+    // The union only adds prohibitions. The range base and the declared
+    // target's eligibility read the floor's list alone, so a protected branch
+    // the checkout adds cannot grant authority (TSK-1078 review F1).
+    working.git.landed_protected_branches = Some(floor.git.trusted_protected_branches().to_vec());
+    Ok((working, floor.git))
+}
+
+/// The commit the run already pins its judgment to, which range selection
+/// takes its floor from: `--policy-from`, else `--base`, else `--into` (read
+/// by exact ref, see [`base_refs`]), else the base the CI event names.
+/// `None` when nothing is pinned or no pin resolves here; the policy
+/// fallback (`ProtectedBranches`) is not a pin. A hosted checkout with
+/// fetch-depth 0 has no remote default branch, and this pin is what it
+/// judges by (TSK-1078 Option A).
+fn pinned_floor(
+    root: &Path,
+    args: &CiArgs,
+    environment: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    let env = |key: &str| environment.get(key).cloned().filter(|v| !v.is_empty());
+    let mut pins: Vec<Vec<String>> = Vec::new();
+    pins.extend(args.policy_from.iter().map(|rev| vec![rev.clone()]));
+    pins.extend(args.base.iter().map(|rev| vec![rev.clone()]));
+    pins.extend(args.into.iter().map(|name| base_refs(name)));
+    let detected = detect_range(env, &[]);
+    if !matches!(detected.source, RangeSource::ProtectedBranches) {
+        pins.push(detected.base_candidates);
+    }
+    for candidates in pins {
+        // This read now precedes range judgment. Keep the base-refusal
+        // remedy when Git refuses the pin, and still refuse the run.
+        let resolved = resolve_base(root, &candidates).map_err(|cause| {
+            format!(
+                "git refused it while resolving the policy pin: {}\n  clear it: {}",
+                cause.trim_end(),
+                codeflow_core::remedy::CI_BASE_REFUSED.remedy()
+            )
+        })?;
+        if let Some(sha) = resolved {
+            return Ok(Some(sha));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(test)]
+#[path = "ci/range_floor_tests.rs"]
+mod range_floor_tests;
+
 pub fn run(args: &CiArgs) -> i32 {
     if let Some(left) = args.deadline_ms {
         // The pre-push hook ends this run at its deadline; every bounded
@@ -432,12 +499,12 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     if !policy_verifiable(&root, args.blocking_rules_out.as_deref()) {
         return 2;
     }
-    // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is
-    // moot here: the pre-first-commit window cannot occur in CI, which always
-    // has history — CI is the authoritative, always-armed perimeter. The
-    // working copy's policy only finds the range; the range is judged with
-    // the policy at its base (see `judging_policy`).
-    let (working, _armed) = match Policy::load_effective(&root) {
+    // Range selection keeps the protected list at the pinned commit, else the
+    // landed one, as a floor and its prefixes as a ceiling (see
+    // `range_policy`). The range itself is judged with the policy at
+    // its base (see `judging_policy`). Bootstrap grace cannot occur here:
+    // CI always has history.
+    let (working, floor) = match range_policy(&root, args, &environment) {
         Ok(value) => value,
         Err(error) => {
             let age = crate::cmd::binary_age(&root);
@@ -456,11 +523,10 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
 
     // A landing candidate's hand-off without `--into` is refused before the
     // target is resolved, so its cause is named first (TSK-1351 AC-3).
-    if let Some(refusal) = candidate::unnamed_line(
-        args.pushed_ref.as_deref(),
-        &working.git,
-        args.into.as_deref(),
-    ) {
+    // All classification inputs come from the floor, before composition.
+    if let Some(refusal) =
+        candidate::unnamed_line(args.pushed_ref.as_deref(), &floor, args.into.as_deref())
+    {
         let tagged = vec![refusal];
         if let Some(out) = &args.blocking_rules_out {
             write_blocking_rules(out, &tagged);
@@ -469,8 +535,8 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
     }
 
     // Resolve names and pin revisions once before any range rule runs.
-    // The working copy's policy finds the range, its work prefixes as its
-    // protected branches (see `judging_policy`): the judging policy is read at
+    // The landed protected list is the floor and its work prefixes the ceiling
+    // when the checkout finds the range. The judging policy is read at
     // the base, which the declared target picks. The pre-push hook picks the
     // base and target under the judging policy's prefixes and passes them as
     // `--base` and `--into` (TSK-1257).
@@ -478,7 +544,7 @@ fn run_timed(args: &CiArgs, timings: &mut timing::Timings) -> i32 {
         &root,
         args,
         &environment,
-        &working.git.protected_branches,
+        working.git.trusted_protected_branches(),
         &working.git.branch_prefixes,
     ) {
         Ok(context) => context,

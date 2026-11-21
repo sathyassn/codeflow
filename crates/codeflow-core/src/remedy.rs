@@ -658,7 +658,7 @@ catalog! {
         "push without the rewrite (`git pull --rebase` onto the destination's branch first), or let CI check the whole range";
     /// A push set over its time budget, slowest at a built-in check.
     PUSH_OVER_BUDGET_BUILTIN = Step::Edit(".codeflow/policy.json"),
-        "run the slowest step alone to see what makes it slow, or set `git.test_gate_on_push` to off in .codeflow/policy.json to drop the push set";
+        "run the slowest step alone to see what makes it slow, or set `git.test_gate_on_push` to off in .codeflow/policy.json and land that change on the default branch first; the push set follows the landed policy";
     /// Pending id reservations not published by this push.
     IDS_PENDING_LOCAL = Step::Codeflow("codeflow ids sync"),
         "publish them to the authority with `codeflow ids sync`, or push to the authority remote";

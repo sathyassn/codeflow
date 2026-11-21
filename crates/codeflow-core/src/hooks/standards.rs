@@ -344,7 +344,8 @@ pub fn check_commit_body(
 ///   token via
 ///   [`GitPolicy::allowed_footer_tokens`](super::policy::GitPolicy::allowed_footer_tokens));
 /// - when `required` is `warn`/`block`, at least one *matching* ticket trailer
-///   must be present — else a violation at the `required` level;
+///   must be present — else a violation at the `required` level (at `Block`
+///   when a ticket trailer is present but malformed, whatever `required` is);
 /// - when `pattern` is non-empty, a present ticket trailer whose value does not
 ///   match is a malformed reference and blocks (level `Block`) even when a ticket
 ///   is not required — a botched reference is unambiguously wrong.
@@ -409,8 +410,15 @@ pub fn check_ticket_trailers(
         }
     }
     // Required, but no *matching* ticket trailer present (none at all, or every
-    // present one is malformed): report at the configured `required` level.
+    // present one is malformed): report at the configured `required` level. A
+    // malformed present reference blocks at every `required` level, so raising
+    // the level never turns that block into a warning.
     if required.is_active() && !present_matching {
+        let level = if present_any {
+            PolicyLevel::Block
+        } else {
+            required
+        };
         let reason = if present_any {
             format!(
                 "commit requires a ticket reference matching /{pattern}/ — the present one does not \
@@ -424,7 +432,7 @@ pub fn check_ticket_trailers(
                 ticket_keys.join(", ")
             )
         };
-        return Some((required, reason));
+        return Some((level, reason));
     }
     // Optional-but-present: a present ticket whose value fails the pattern is a
     // malformed reference and blocks regardless of the (off) requirement.
@@ -1133,6 +1141,38 @@ mod tests {
         .unwrap();
         assert_eq!(level, PolicyLevel::Block);
         assert!(reason.contains("PROJ"), "{reason}");
+    }
+
+    #[test]
+    fn test_ticket_malformed_present_blocks_at_every_required_level() {
+        // A malformed present reference blocks whatever the missing-ticket
+        // level is, so the level can be raised without lowering this block
+        // (TSK-1078 review F3). A missing ticket still reports at its level.
+        for required in [
+            PolicyLevel::Off,
+            PolicyLevel::Allow,
+            PolicyLevel::Warn,
+            PolicyLevel::Block,
+        ] {
+            let (level, reason) = check_commit_ticket(
+                "feat: x",
+                "feat: x\n\nRefs: nope",
+                &keys(),
+                required,
+                r"^PROJ-\d+$",
+            )
+            .unwrap();
+            assert_eq!(level, PolicyLevel::Block, "required={required}: {reason}");
+        }
+        let (level, _) = check_commit_ticket(
+            "feat: x",
+            "feat: x",
+            &keys(),
+            PolicyLevel::Warn,
+            r"^PROJ-\d+$",
+        )
+        .unwrap();
+        assert_eq!(level, PolicyLevel::Warn);
     }
 
     #[test]

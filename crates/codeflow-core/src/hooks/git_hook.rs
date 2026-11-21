@@ -173,18 +173,29 @@ fn pre_commit_engine(
             .push(unverified_staged_paths(root, &error)),
     }
 
+    scan_staged_content(&repo, root, policy, engine, &mut report);
+
+    Ok(report)
+}
+
+/// Staged content checks for pre-commit and pre-merge-commit.
+fn scan_staged_content(
+    repo: &Repository,
+    root: &Path,
+    policy: &GitPolicy,
+    engine: &Engine,
+    report: &mut StageReport,
+) {
     if policy.secret_scan.is_active() {
-        secret_scan(&repo, root, policy, engine, &mut report);
+        secret_scan(repo, root, policy, engine, report);
     }
 
     if policy.conflict_markers.is_active() {
         report.violations.extend(super::conflict_markers::staged(
-            &repo,
+            repo,
             policy.conflict_markers,
         ));
     }
-
-    Ok(report)
 }
 
 /// The refusal when the staged paths cannot be judged. A landed policy this
@@ -648,31 +659,9 @@ pub fn commit_msg_from(
         }
     }
 
-    // Ticket allow-and-require (ADR-0020). Active only when the project has
-    // configured ticket keys; the returned level distinguishes a required-but-
-    // missing ticket (`commit_ticket_required`) from a malformed present one
-    // (block).
-    if is_merge && policy.commit_ticket_merges.is_active() {
-        report
-            .violations
-            .extend(merge_ticket_violation(policy, &cleaned));
-    } else if !policy.commit_ticket_keys.is_empty() {
-        if let Some((level, reason)) = standards::check_commit_ticket(
-            subject,
-            &cleaned,
-            &policy.commit_ticket_keys,
-            policy.commit_ticket_required,
-            &policy.commit_ticket_pattern,
-        ) {
-            report.violations.push(Violation::new(
-                "git.commit_ticket",
-                level,
-                reason,
-                crate::remedy::COMMIT_TICKET
-                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
-            ));
-        }
-    }
+    report
+        .violations
+        .extend(ticket_finding(policy, subject, &cleaned, is_merge));
 
     if policy.ai_attribution.is_active() {
         if let Some(which) = standards::find_attribution(&cleaned) {
@@ -697,6 +686,56 @@ pub fn commit_msg_from(
     }
 
     report
+}
+
+/// The ticket finding for a commit message past the `Merge ` subject
+/// exemption (ADR-0020). It is active only when the project has configured
+/// ticket keys; the level distinguishes a required-but-missing ticket
+/// (`commit_ticket_required`) from a malformed present one (block).
+///
+/// A merge whose subject is not git's own is also an ordinary commit, so the
+/// merge rule and the ordinary rule both judge it and the stricter finding
+/// stands: turning the merge rule on can never lower the level the ordinary
+/// rule already applies. With the merge rule on, an ordinary finding alone is
+/// not reported, as before.
+fn ticket_finding(
+    policy: &GitPolicy,
+    subject: &str,
+    cleaned: &str,
+    is_merge: bool,
+) -> Option<Violation> {
+    let merge_rule = is_merge && policy.commit_ticket_merges.is_active();
+    let merge_finding = merge_rule
+        .then(|| merge_ticket_violation(policy, cleaned))
+        .flatten();
+    let ordinary_finding = if policy.commit_ticket_keys.is_empty() {
+        None
+    } else {
+        standards::check_commit_ticket(
+            subject,
+            cleaned,
+            &policy.commit_ticket_keys,
+            policy.commit_ticket_required,
+            &policy.commit_ticket_pattern,
+        )
+        .map(|(level, reason)| {
+            Violation::new(
+                "git.commit_ticket",
+                level,
+                reason,
+                crate::remedy::COMMIT_TICKET
+                    .with(&[("keys", &policy.commit_ticket_keys.join(", "))]),
+            )
+        })
+    };
+    match (merge_finding, ordinary_finding) {
+        (Some(merge), Some(ordinary)) if ordinary.level.stricter(merge.level) != merge.level => {
+            Some(ordinary)
+        }
+        (Some(merge), _) => Some(merge),
+        (None, ordinary) if !merge_rule => ordinary,
+        (None, _) => None,
+    }
 }
 
 /// The merge ticket rule (`git.commit_ticket_merges`, TSK-1350) over one
@@ -943,11 +982,14 @@ fn commit_msg_secret_scan_engine(
 /// [`HUMAN_OVERRIDE_ENV`](super::HUMAN_OVERRIDE_ENV) is
 /// present (both sanctioned paths, ADR-0007).
 ///
+/// Also scan staged secrets and conflict markers at the supplied policy's
+/// levels. The CLI supplies the composed landed policy floor.
+///
 /// HONEST BOUNDARY: git fires **no** client hook for a fast-forward merge
 /// (no merge commit is created), so a ff-merge onto a protected branch cannot
 /// be caught here — the Claude-layer `git-guard` catches it in-session, and the
 /// push gate + remote protection remain the perimeter for other harnesses
-/// (charter D19). See `tests::ff_merge_fires_no_client_hook` and ADR-0007.
+/// (charter D19). See `tests::reference_transaction_closes_the_ff_merge_gap` and ADR-0007.
 ///
 /// # Errors
 ///
@@ -985,6 +1027,8 @@ pub fn pre_merge_commit(
             policy,
             &crate::root_checkout::process_env,
         ));
+
+    scan_staged_content(&repo, root, policy, &Engine::from_env(), &mut report);
 
     Ok(report)
 }
@@ -1478,25 +1522,38 @@ pub fn pre_push(
             ));
         }
 
-        let (force_level, force_rule, remedy) = if protected {
-            (
-                policy.force_push_protected,
-                "git.force_push_protected",
-                crate::remedy::PROTECTED_BRANCH.remedy(),
-            )
+        // Protection is a classification, so the rule that applies is chosen
+        // under the landed classification and under the composed one, and the
+        // stricter level stands: adding a branch to the protected list can
+        // never remove a landed block.
+        let landed_protected = policy.branch_is_landed_protected(branch);
+        let force_rule_for = |is_protected: bool| {
+            if is_protected {
+                (policy.force_push_protected, "git.force_push_protected")
+            } else {
+                (policy.force_push_unprotected, "git.force_push_unprotected")
+            }
+        };
+        let (landed_level, landed_rule) = force_rule_for(landed_protected);
+        let (composed_level, composed_rule) = force_rule_for(protected);
+        let landed_is_stricter =
+            landed_level != composed_level && landed_level.stricter(composed_level) == landed_level;
+        let (force_level, force_rule, force_protected) = if landed_is_stricter {
+            (landed_level, landed_rule, landed_protected)
         } else {
-            (
-                policy.force_push_unprotected,
-                "git.force_push_unprotected",
-                crate::remedy::FORCE_PUSH.remedy(),
-            )
+            (composed_level, composed_rule, protected)
+        };
+        let remedy = if force_protected {
+            crate::remedy::PROTECTED_BRANCH.remedy()
+        } else {
+            crate::remedy::FORCE_PUSH.remedy()
         };
         if force_level.is_active() {
             match is_force_update(&repo, r) {
                 Ok(false) => {},
                 Ok(true) => report.violations.push(Violation::new(
                     force_rule, force_level,
-                    format!("non-fast-forward (force) push to {}branch '{}'", if protected { "protected " } else { "" }, crate::git::display_text(branch)),
+                    format!("non-fast-forward (force) push to {}branch '{}'", if force_protected { "protected " } else { "" }, crate::git::display_text(branch)),
                     remedy,
                 )),
                 Err(reason) => report.violations.push(Violation::always_blocking(
@@ -1511,7 +1568,8 @@ pub fn pre_push(
             epic_line_push(root, &repo, r, branch, &mut report);
         }
 
-        if !protected && policy.branch_naming.is_active() && !policy.branch_name_ok(branch) {
+        // Only the landed classification exempts a branch from naming.
+        if !landed_protected && policy.branch_naming.is_active() && !policy.branch_name_ok(branch) {
             report.violations.push(Violation::new(
                 "git.branch_naming",
                 policy.branch_naming,

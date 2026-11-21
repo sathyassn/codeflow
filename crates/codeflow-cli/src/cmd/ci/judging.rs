@@ -107,9 +107,12 @@ pub(super) struct Judging {
 /// The policy judges the commit, branch, PR-body and work checks and their
 /// levels. Some inputs stay elsewhere, by design: the auto-detected range's
 /// protected branches, and the work prefixes that find a declared target,
-/// come from the working copy (the range is found before any authority is
-/// known; the pre-push hook finds the declared target under the authority's
-/// prefixes and passes it), the change class widens the authority's product
+/// are composed by `range_policy` in `ci.rs` before the range is resolved,
+/// from the policy at the commit the run pins (else the landed policy at the
+/// local tracking ref) and the working copy
+/// (protected names unioned, prefixes intersected, so the checkout can only
+/// tighten them; the pre-push hook finds the declared target under the
+/// authority's prefixes and passes it), the change class widens the authority's product
 /// and watched paths with the working copy's (neither side can narrow them),
 /// and the work-record baseline has its own source (`--baseline-from`).
 pub(super) fn judging_policy(
