@@ -846,11 +846,7 @@ fn run_owed_target(
     if !target.outputs.is_empty() && result.exit_code == 0 {
         let mut failures = Vec::new();
         let after = super::delivery::tracked(root)?;
-        let changed: Vec<_> = after
-            .iter()
-            .filter(|(p, hash)| baseline.get(*p) != Some(*hash))
-            .map(|(p, _)| p.as_str())
-            .collect();
+        let changed = super::delivery::changed(baseline, &after);
         if !changed.is_empty() {
             failures.push(format!(
                 "generation changed the candidate: {}",

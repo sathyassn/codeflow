@@ -234,7 +234,128 @@ fn link_target_bytes(target: &Path) -> Vec<u8> {
     target.as_os_str().as_encoded_bytes().to_vec()
 }
 
-/// Snapshot the bytes and modes of every tracked path, including dirty edits.
+/// The mode Git records for a work-tree path, read from its metadata
+/// (TSK-1554): 0o120000 for a link, 0o100755 for a regular file with the
+/// owner executable bit, 0o100644 for any other regular file, and 0 for a
+/// path that is absent. Git keeps no other permission bit, so a rewrite under
+/// another umask (0644 to 0600, 0755 to 0700) is no change, while a change of
+/// kind or of the executable bit is. Where the platform has no executable bit,
+/// the index entry's `indexed` mode supplies it. Any other kind keeps its own
+/// type bits, so it never equals a regular file or a link.
+///
+/// The kind is read from the metadata already fetched, as type bits compared
+/// with constants, so it is never an existence check. On a platform that is
+/// neither Unix nor Windows the kind of a path that is not a link cannot be
+/// established, so this refuses it (`unclassifiable_kind`) rather than guess.
+fn git_mode(
+    metadata: Option<&std::fs::Metadata>,
+    indexed: u32,
+    path: &Path,
+) -> Result<u32, TestingError> {
+    let Some(metadata) = metadata else {
+        return Ok(0);
+    };
+    if metadata.file_type().is_symlink() {
+        return Ok(0o120_000);
+    }
+    Ok(match kind_and_execute(metadata, indexed, path)? {
+        (REGULAR_FILE, true) => 0o100_755,
+        (REGULAR_FILE, false) => 0o100_644,
+        (other, _) => other,
+    })
+}
+
+/// The type bits of a regular file and of a folder, as Git and Unix spell
+/// them, and the mask that selects type bits from a Unix mode.
+#[cfg(unix)]
+const KIND_MASK: u32 = 0o170_000;
+const REGULAR_FILE: u32 = 0o100_000;
+#[cfg(windows)]
+const FOLDER: u32 = 0o040_000;
+
+/// The type bits of a path that is not a link, and whether its owner execute
+/// bit is set, from Unix metadata.
+#[cfg(unix)]
+#[allow(clippy::unnecessary_wraps)] // The shared signature lets other platforms refuse.
+fn kind_and_execute(
+    metadata: &std::fs::Metadata,
+    _indexed: u32,
+    _path: &Path,
+) -> Result<(u32, bool), TestingError> {
+    use std::os::unix::fs::MetadataExt;
+    let raw = metadata.mode();
+    Ok((raw & KIND_MASK, raw & 0o100 != 0))
+}
+
+/// Windows has no execute bit, so the index entry supplies it; a folder is
+/// marked by its attribute, and anything else that is not a link is a file,
+/// as `std` reads it.
+#[cfg(windows)]
+#[allow(clippy::unnecessary_wraps)] // The shared signature lets other platforms refuse.
+fn kind_and_execute(
+    metadata: &std::fs::Metadata,
+    indexed: u32,
+    _path: &Path,
+) -> Result<(u32, bool), TestingError> {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    let kind = if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        REGULAR_FILE
+    } else {
+        FOLDER
+    };
+    Ok((kind, indexed & 0o100 != 0))
+}
+
+/// Other platforms expose no kind bits, and reading a path proves nothing
+/// about its kind: `std::fs::read` opens and reads a device or a socket as
+/// it does a file. So a path that is not a link is refused here, before its
+/// bytes are read.
+#[cfg(not(any(unix, windows)))]
+fn kind_and_execute(
+    _metadata: &std::fs::Metadata,
+    _indexed: u32,
+    path: &Path,
+) -> Result<(u32, bool), TestingError> {
+    Err(unclassifiable_kind(path))
+}
+
+/// The refusal for a tracked path whose file kind this platform cannot
+/// classify (TSK-1554), naming the path as the snapshot's other read errors
+/// do.
+#[cfg(any(test, not(any(unix, windows))))]
+fn unclassifiable_kind(path: &Path) -> TestingError {
+    TestingError::Io(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        format!(
+            "cannot snapshot {}: file kinds cannot be classified on this platform, so the generation check refuses it; run the gate on Unix or Windows",
+            path.display()
+        ),
+    ))
+}
+
+/// The paths whose snapshot differs between `before` and `after`, in either
+/// direction and in order: a changed path, a path added to the index and a
+/// path that left it are each named once (TSK-1554).
+#[must_use]
+pub fn changed<'a>(
+    before: &'a BTreeMap<String, String>,
+    after: &'a BTreeMap<String, String>,
+) -> Vec<&'a str> {
+    before
+        .keys()
+        .chain(after.keys())
+        .filter(|path| before.get(*path) != after.get(*path))
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Snapshot every tracked path as Git sees it, including dirty edits: its
+/// bytes (a link's target bytes) and its Git mode (`git_mode`), so content,
+/// kind and the executable bit are compared and other permission bits are
+/// not.
 pub fn tracked(root: &Path) -> Result<BTreeMap<String, String>, TestingError> {
     let repo = match git2::Repository::discover(root) {
         Ok(repo) => repo,
@@ -289,6 +410,9 @@ fn tracked_repository(
         } else {
             Some(std::fs::symlink_metadata(&path).map_err(unreadable)?)
         };
+        // The mode comes first, so a platform that cannot classify the kind
+        // refuses the path before reading it.
+        let mode = git_mode(metadata.as_ref(), entry.mode, &path)?;
         let bytes = if metadata
             .as_ref()
             .is_some_and(|m| m.file_type().is_symlink())
@@ -301,13 +425,6 @@ fn tracked_repository(
         } else {
             b"<deleted>".to_vec()
         };
-        #[cfg(unix)]
-        let mode = {
-            use std::os::unix::fs::PermissionsExt;
-            metadata.map_or(0, |m| m.permissions().mode())
-        };
-        #[cfg(not(unix))]
-        let mode = entry.mode;
         result.insert(
             name,
             digest(&[mode.to_le_bytes().as_slice(), &bytes].concat()),
@@ -932,6 +1049,190 @@ mod tests {
         let first = tracked(dir.path()).unwrap();
         target(b"caf\xfe").unwrap();
         assert_ne!(first, tracked(dir.path()).unwrap());
+    }
+}
+
+/// TSK-1554: the snapshot holds what Git tracks for a path (its content, its
+/// kind and the executable bit), so a permission change Git does not record
+/// is no generation change, and every change Git does record still is.
+#[cfg(all(test, unix))]
+mod git_mode_snapshot {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A repository whose index tracks each `(name, bytes, mode)` file.
+    fn repository_tracking(files: &[(&str, &[u8], u32)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        for (name, bytes, mode) in files {
+            let path = dir.path().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(*mode)).unwrap();
+            index.add_path(Path::new(name)).unwrap();
+        }
+        index.write().unwrap();
+        dir
+    }
+
+    /// Replace `name` with a new file of `bytes` at `mode`, as a generator
+    /// that renames its output into place under another umask does.
+    fn rewrite(root: &Path, name: &str, bytes: &[u8], mode: u32) {
+        let path = root.join(name);
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// AC-1: identical bytes rewritten at 0600 from 0644, at 0644 from 0600,
+    /// at 0700 from 0755 and at 0755 from 0700 keep the snapshot, as they keep
+    /// Git's own record of each file.
+    #[test]
+    fn a_permission_change_git_does_not_track_keeps_the_snapshot() {
+        let dir = repository_tracking(&[
+            ("public.js", b"same", 0o644),
+            ("private.txt", b"same", 0o600),
+            ("tool.sh", b"#!/bin/sh\n", 0o755),
+            ("own.sh", b"#!/bin/sh\n", 0o700),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        assert_eq!(before.len(), 4, "{before:?}");
+        rewrite(dir.path(), "public.js", b"same", 0o600);
+        rewrite(dir.path(), "private.txt", b"same", 0o644);
+        rewrite(dir.path(), "tool.sh", b"#!/bin/sh\n", 0o700);
+        rewrite(dir.path(), "own.sh", b"#!/bin/sh\n", 0o755);
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(
+            changed(&before, &after),
+            Vec::<&str>::new(),
+            "a permission change alone read as a generation change"
+        );
+    }
+
+    /// AC-2: the executable bit is tracked, so gaining it (0644 to 0755) or
+    /// losing it (0755 to 0644) with identical bytes is a change.
+    #[test]
+    fn an_executable_bit_change_changes_the_snapshot() {
+        let dir = repository_tracking(&[
+            ("gains.sh", b"#!/bin/sh\n", 0o644),
+            ("loses.sh", b"#!/bin/sh\n", 0o755),
+            ("kept.txt", b"same", 0o644),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        rewrite(dir.path(), "gains.sh", b"#!/bin/sh\n", 0o755);
+        std::fs::set_permissions(
+            dir.path().join("loses.sh"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["gains.sh", "loses.sh"]);
+    }
+
+    /// AC-2: the file kind is tracked, so a regular file replaced by a link
+    /// whose target spells the file's bytes is a change, and so is the
+    /// reverse.
+    #[test]
+    fn a_file_replaced_by_a_link_with_the_same_bytes_changes_the_snapshot() {
+        let dir = repository_tracking(&[("file", b"target.txt", 0o644)]);
+        std::os::unix::fs::symlink("target.txt", dir.path().join("link")).unwrap();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("link")).unwrap();
+        index.write().unwrap();
+        let before = tracked(dir.path()).unwrap();
+        std::fs::remove_file(dir.path().join("file")).unwrap();
+        std::os::unix::fs::symlink("target.txt", dir.path().join("file")).unwrap();
+        std::fs::remove_file(dir.path().join("link")).unwrap();
+        std::fs::write(dir.path().join("link"), b"target.txt").unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["file", "link"]);
+    }
+
+    /// AC-2: a content change at the same mode is a change, a deleted
+    /// tracked file is a change, and an unreadable tracked file is refused.
+    #[test]
+    fn a_content_change_or_deletion_changes_the_snapshot_and_unreadable_refuses() {
+        let dir = repository_tracking(&[
+            ("edited.txt", b"one", 0o644),
+            ("deleted.txt", b"gone", 0o644),
+            ("locked.txt", b"same", 0o644),
+        ]);
+        let before = tracked(dir.path()).unwrap();
+        rewrite(dir.path(), "edited.txt", b"two", 0o644);
+        std::fs::remove_file(dir.path().join("deleted.txt")).unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert_eq!(changed(&before, &after), ["deleted.txt", "edited.txt"]);
+        let locked = dir.path().join("locked.txt");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let unreadable = tracked(dir.path());
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let error = unreadable
+            .expect_err("an unreadable tracked file was snapshotted")
+            .to_string();
+        assert!(error.contains("locked.txt"), "{error}");
+    }
+
+    /// AC-2: a path added to the index and a path that left it are both
+    /// named, so the per-target check sees a removal as the whole-run check
+    /// does.
+    #[test]
+    fn a_path_added_to_or_removed_from_the_index_is_named() {
+        let dir = repository_tracking(&[("kept.txt", b"same", 0o644), ("leaves.txt", b"x", 0o644)]);
+        let before = tracked(dir.path()).unwrap();
+        std::fs::write(dir.path().join("joins.txt"), b"new").unwrap();
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("joins.txt")).unwrap();
+        index.remove_path(Path::new("leaves.txt")).unwrap();
+        index.write().unwrap();
+        let after = tracked(dir.path()).unwrap();
+        assert!(!after.contains_key("leaves.txt"));
+        assert_eq!(changed(&before, &after), ["joins.txt", "leaves.txt"]);
+    }
+}
+
+/// TSK-1554: where the platform cannot classify a file's kind, the snapshot
+/// refuses the path instead of reading it as a regular file.
+#[cfg(test)]
+mod unclassifiable_kind_refusal {
+    use super::*;
+
+    /// The refusal names the path and says why, as an unsupported operation.
+    #[test]
+    fn the_refusal_names_the_path_and_the_reason() {
+        let error = unclassifiable_kind(Path::new("repo/tool.sh"));
+        let TestingError::Io(io) = &error else {
+            panic!("the refusal is not an I/O error: {error}");
+        };
+        assert_eq!(io.kind(), std::io::ErrorKind::Unsupported);
+        let message = error.to_string();
+        assert!(message.contains("repo/tool.sh"), "{message}");
+        assert!(
+            message.contains("file kinds cannot be classified on this platform"),
+            "{message}"
+        );
+    }
+
+    /// On a platform that is neither Unix nor Windows, a tracked regular
+    /// file is refused with that error. Only such a target compiles this.
+    #[cfg(not(any(unix, windows)))]
+    #[test]
+    fn a_tracked_file_is_refused_where_kinds_cannot_be_classified() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(dir.path().join("tool.sh"), b"#!/bin/sh\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("tool.sh")).unwrap();
+        index.write().unwrap();
+        let message = tracked(dir.path())
+            .expect_err("a file of unknown kind was snapshotted")
+            .to_string();
+        assert!(message.contains("tool.sh"), "{message}");
+        assert!(
+            message.contains("file kinds cannot be classified on this platform"),
+            "{message}"
+        );
     }
 }
 
