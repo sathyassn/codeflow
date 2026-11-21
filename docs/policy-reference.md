@@ -2412,9 +2412,6 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   workspace sandbox were not probed there.
 - **Sourced files.** The guards do not follow what a startup file sources.
 
-<!-- No table here: the portal's row count for this page expects every table
-to be generated from the schema or checked against the hook dispatcher. -->
-
 ## Prose the exec-guard certifies
 
 The exec-guard's privilege, headless-peer and dangerous-command checks match
@@ -2522,6 +2519,8 @@ query that the shims use to check the binary. Each shim in
 names are checked against the binary's dispatcher, and the descriptions are
 written by hand.
 
+<!-- codeflow-hook-stages begin -->
+
 | Stage | What it checks | Detail |
 |---|---|---|
 | `pre-commit` | A commit on a protected branch, or in the root checkout while it is off its root branch; staged secrets or `.env` files; staged conflict markers | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
@@ -2529,6 +2528,8 @@ written by hand.
 | `pre-merge-commit` | A merge commit onto a protected branch that is not a fast forward | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `reference-transaction` | A fast-forward merge, hard reset or branch delete on a protected branch | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `pre-push` | A push, force-push or delete to a protected branch, and branch naming | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
+
+<!-- codeflow-hook-stages end -->
 
 ## Read-only git while the policy authority is unresolved
 

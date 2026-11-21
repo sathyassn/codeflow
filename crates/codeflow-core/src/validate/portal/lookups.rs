@@ -19,8 +19,9 @@ use crate::scaffold::manifest::{ScaffoldManifest, Tier};
 pub const SKILL_CATALOG: &str = "skill-catalog";
 /// The derivation name of the policy reference.
 pub const POLICY_REFERENCE: &str = "policy-reference";
-/// The heading of the authored hook stage section of the policy reference.
-pub const HOOK_STAGES_HEADING: &str = "## Git hook stages";
+/// The markers selecting the authored hook stage table.
+pub const HOOK_STAGES_BEGIN: &str = "<!-- codeflow-hook-stages begin -->";
+pub const HOOK_STAGES_END: &str = "<!-- codeflow-hook-stages end -->";
 
 /// What the binary supplies so a derived lookup can be regenerated: its
 /// scaffold assets and the stage names its git hook dispatcher accepts.
@@ -201,13 +202,25 @@ pub fn policy_reference() -> Generated {
     }
 }
 
-/// The stage names in the first column of the table under
-/// [`HOOK_STAGES_HEADING`], backticks removed, or `None` when the section or
-/// its table is missing.
+/// The stage names in the marked table's first column, backticks removed,
+/// or `None` when the marker pair or its table is missing or ambiguous.
 #[must_use]
 pub fn hook_stage_names(page: &str) -> Option<Vec<String>> {
-    let (_, section) = page.split_once(&format!("\n{HOOK_STAGES_HEADING}\n"))?;
-    let section = section.split("\n## ").next().unwrap_or(section);
+    let lines: Vec<&str> = page.lines().collect();
+    let starts: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (*line == HOOK_STAGES_BEGIN).then_some(index))
+        .collect();
+    let ends: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| (*line == HOOK_STAGES_END).then_some(index))
+        .collect();
+    if starts.len() != 1 || ends.len() != 1 || starts[0] >= ends[0] {
+        return None;
+    }
+    let section = lines[starts[0] + 1..ends[0]].join("\n");
     let rows: Vec<&str> = section
         .lines()
         .filter(|line| line.starts_with('|'))
@@ -386,7 +399,7 @@ mod tests {
             assets: &dir,
             hook_stages: &stage_names,
         };
-        let stage_table = "\n## Git hook stages\n\nWritten here.\n\n| Stage | What it checks |\n|---|---|\n| `pre-commit` | a |\n| `commit-msg` | b |\n| `pre-merge-commit` | c |\n| `reference-transaction` | d |\n| `pre-push` | e |\n";
+        let stage_table = "\n## Renamed stage heading\n\nWritten here.\n\n<!-- codeflow-hook-stages begin -->\n\n| Stage | What it checks |\n|---|---|\n| `pre-commit` | a |\n| `commit-msg` | b |\n| `pre-merge-commit` | c |\n| `reference-transaction` | d |\n| `pre-push` | e |\n\n<!-- codeflow-hook-stages end -->\n";
         let reference = page_with_title("Policy and hook reference", &policy_reference());
         let page = format!("{reference}{stage_table}");
         assert_eq!(
@@ -398,8 +411,25 @@ mod tests {
         assert!(verify_lookup_page(POLICY_REFERENCE, &missing, &inputs)
             .unwrap_err()
             .contains("the dispatcher accepts"));
-        let extra = format!("{page}| `post-merge` | f |\n");
+        let extra = page.replace(
+            HOOK_STAGES_END,
+            &format!("| `post-merge` | f |\n{HOOK_STAGES_END}"),
+        );
         assert!(verify_lookup_page(POLICY_REFERENCE, &extra, &inputs).is_err());
+        let prose = format!("{page}\n| Prose | Detail |\n|---|---|\n| example | text |\n");
+        assert_eq!(
+            verify_lookup_page(POLICY_REFERENCE, &prose, &inputs),
+            Ok(schema().len() + 5)
+        );
+        for invalid in [
+            page.replace(HOOK_STAGES_BEGIN, ""),
+            page.replace(HOOK_STAGES_END, ""),
+            format!("{page}\n{HOOK_STAGES_BEGIN}\n"),
+            format!("{page}\n{HOOK_STAGES_END}\n"),
+            format!("{HOOK_STAGES_END}\n{HOOK_STAGES_BEGIN}"),
+        ] {
+            assert!(hook_stage_names(&invalid).is_none());
+        }
         // An edit inside the generated region is refused.
         let edited = page.replacen("Branches every", "Branches some", 1);
         assert!(verify_lookup_page(POLICY_REFERENCE, &edited, &inputs)
