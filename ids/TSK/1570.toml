@@ -1,0 +1,11 @@
+id = "TSK-1570"
+uid = "e4c998af-99a5-405f-a169-ee0009be6cc5"
+kind = "TSK"
+title = "Judge refused unreadable -c and -e forms on data programs"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-21T04:09:49Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
