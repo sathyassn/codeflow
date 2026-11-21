@@ -10,12 +10,23 @@ const HALF_COVERED: &str = "SF:src/lib.rs\nDA:1,1\nDA:2,0\nend_of_record\n";
 const FULLY_COVERED: &str = "SF:src/lib.rs\nDA:1,1\nDA:2,1\nend_of_record\n";
 
 /// A floor written only in `defaults.coverage`, and one target whose
-/// coverage block names its artifact and no rules of its own.
-const FLOOR_IN_DEFAULTS: &str = r#"{"schema_version":"1.0",
-  "defaults":{"coverage":[{"scope":"global","minimum":90}]},
-  "targets":[{"name":"app","runner":"custom",
-    "modes":{"full":{"command":"exit 0"}},
-    "coverage":{"format":"lcov","path":"cov.lcov"}}]}"#;
+/// coverage block names its artifact and no rules of its own. The gate
+/// removes an earlier artifact before the target runs (TSK-369), so the
+/// full command writes this run's artifact from `cov.src`.
+fn floor_in_defaults() -> String {
+    let copy = if cfg!(windows) {
+        "copy /Y cov.src cov.lcov >NUL"
+    } else {
+        "cp cov.src cov.lcov"
+    };
+    format!(
+        r#"{{"schema_version":"1.0",
+  "defaults":{{"coverage":[{{"scope":"global","minimum":90}}]}},
+  "targets":[{{"name":"app","runner":"custom",
+    "modes":{{"full":{{"command":"{copy}"}}}},
+    "coverage":{{"format":"lcov","path":"cov.lcov"}}}}]}}"#
+    )
+}
 
 fn stdout(output: &std::process::Output) -> String {
     String::from_utf8_lossy(&output.stdout).to_string()
@@ -23,9 +34,9 @@ fn stdout(output: &std::process::Output) -> String {
 
 #[test]
 fn a_floor_written_only_in_defaults_fails_a_full_gate_below_it() {
-    let dir = repo(FLOOR_IN_DEFAULTS);
+    let dir = repo(&floor_in_defaults());
     let home = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("cov.lcov"), HALF_COVERED).unwrap();
+    std::fs::write(dir.path().join("cov.src"), HALF_COVERED).unwrap();
     let below = run(dir.path(), home.path(), &["test", "--mode", "full"]);
     let text = format!("{}{}", stdout(&below), stderr(&below));
     assert!(
@@ -42,7 +53,7 @@ fn a_floor_written_only_in_defaults_fails_a_full_gate_below_it() {
     );
     assert!(text.contains("test gate: FAILED"), "{text}");
 
-    std::fs::write(dir.path().join("cov.lcov"), FULLY_COVERED).unwrap();
+    std::fs::write(dir.path().join("cov.src"), FULLY_COVERED).unwrap();
     let above = run(dir.path(), home.path(), &["test", "--mode", "full"]);
     let text = format!("{}{}", stdout(&above), stderr(&above));
     assert!(

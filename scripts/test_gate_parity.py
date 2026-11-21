@@ -111,7 +111,9 @@ class GateParityControls(unittest.TestCase):
     def test_a_changed_line_threshold_keeps_parity(self):
         def threshold(c):
             target(c, coverage_name())["modes"]["full"]["command"] = (
-                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80 --profile codeflow")
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80"
+                f"{parity.COVERAGE_REPORT_FLAGS} --profile codeflow")
+            target(c, coverage_name())["coverage"]["rules"][0]["minimum"] = 80
         self.assert_parity(mutated(threshold))
 
     def test_any_disabled_rust_check_is_drift(self):
@@ -881,8 +883,29 @@ class CoverageShardControls(unittest.TestCase):
         self.assert_problem("the rust-coverage target must run", cfg=mutated(narrowed))
         def threshold(c):
             target(c, "rust-coverage")["modes"]["full"]["command"] = (
-                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80 --profile codeflow")
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80"
+                f"{parity.COVERAGE_REPORT_FLAGS} --profile codeflow")
+            target(c, "rust-coverage")["coverage"]["rules"][0]["minimum"] = 80
         self.assertEqual(self.problems(cfg=mutated(threshold)), [])
+        # TSK-369: the recorded coverage block reads the summary the command
+        # writes, and its floor is the command's; any other block is refused.
+        def command_floor_only(c):
+            target(c, "rust-coverage")["modes"]["full"]["command"] = (
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 80"
+                f"{parity.COVERAGE_REPORT_FLAGS} --profile codeflow")
+        def no_block(c):
+            del target(c, "rust-coverage")["coverage"]
+        def other_path(c):
+            target(c, "rust-coverage")["coverage"]["path"] = "target/other.json"
+        def other_format(c):
+            target(c, "rust-coverage")["coverage"]["format"] = "lcov"
+        def no_summary(c):
+            target(c, "rust-coverage")["modes"]["full"]["command"] = (
+                "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow")
+        for change in (command_floor_only, no_block, other_path, other_format):
+            with self.subTest(change=change.__name__):
+                self.assert_problem("coverage block must be exactly", cfg=mutated(change))
+        self.assert_problem("the rust-coverage target must run", cfg=mutated(no_summary))
         def web(c):
             target(c, "present-web-build")["modes"]["full"]["command"] += " && true"
         self.assert_problem(self.EXACT, cfg=mutated(web))

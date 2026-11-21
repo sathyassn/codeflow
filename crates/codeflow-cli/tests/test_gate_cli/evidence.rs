@@ -691,14 +691,20 @@ fn repair_non_secret_values_leave_reports_and_output_intact() {
         let mut config: Value =
             serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
         let t = &mut config["targets"][0];
-        t["modes"]["full"]["command"] = json!("echo Summary 11");
+        // The gate removes a coverage artifact before the run, so the
+        // command writes this run's own (TSK-369).
+        t["modes"]["full"]["command"] = json!(if cfg!(windows) {
+            "echo Summary 11 && copy /Y target\\cov.src target\\cov.lcov >NUL"
+        } else {
+            "echo Summary 11 && cp target/cov.src target/cov.lcov"
+        });
         t["report"] = json!({"format":"junit","path":"target/junit.xml"});
         t["coverage"] = json!({"format":"lcov","path":"target/cov.lcov","rules":[{"scope":"per_file","minimum":90}]});
         std::fs::write(config_path, serde_json::to_vec(&config).unwrap()).unwrap();
         let junit = "<testsuites><testsuite tests=\"1\"><testcase name=\"test1\"/></testsuite></testsuites>";
         let coverage = "SF:src/input\nDA:1,1\nend_of_record\n";
         std::fs::write(root.join("target/junit.xml"), junit).unwrap();
-        std::fs::write(root.join("target/cov.lcov"), coverage).unwrap();
+        std::fs::write(root.join("target/cov.src"), coverage).unwrap();
         let output = fixture.full(&["test", "--all"]);
         assert!(output.status.success(), "{}", stderr(&output));
         let text = stderr(&output);
@@ -734,6 +740,79 @@ fn repair_non_secret_values_leave_reports_and_output_intact() {
             "non-secret progress suppressed: {text}"
         );
     }
+}
+
+/// TSK-369: a coverage artifact an earlier run left is never this run's
+/// coverage. The gate removes it before the target runs, so a target that
+/// writes none reports its enforced coverage as missing and the gate fails,
+/// and the run record carries no totals for it. A run that writes its own
+/// artifact records that artifact's totals and the global rule's floor.
+#[test]
+fn stale_coverage_is_never_recorded_for_this_run() {
+    let fixture = Fixture::new(|_| {});
+    let root = fixture.root.path();
+    let config_path = root.join(".codeflow/test-config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&config_path).unwrap()).unwrap();
+    let t = &mut config["targets"][0];
+    t["modes"]["full"]["command"] = json!("echo no coverage written");
+    t["coverage"] =
+        json!({"format":"lcov","path":"target/cov.lcov","rules":[{"scope":"global","minimum":90}]});
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    std::fs::write(
+        root.join("target/cov.lcov"),
+        "SF:src/input\nDA:1,1\nend_of_record\n",
+    )
+    .unwrap();
+    let output = fixture.full(&["test", "--all"]);
+    assert!(
+        !output.status.success(),
+        "a stale artifact passed: {}",
+        stderr(&output)
+    );
+    assert!(
+        !root.join("target/cov.lcov").exists(),
+        "the stale artifact was kept"
+    );
+    let text = stderr(&output);
+    let run = PathBuf::from(
+        text.lines()
+            .find_map(|l| l.strip_prefix("[codeflow test] artifact: "))
+            .unwrap(),
+    );
+    let artifact: Value = serde_json::from_slice(&std::fs::read(&run).unwrap()).unwrap();
+    assert_eq!(artifact["passed"], false);
+    assert_eq!(artifact["coverage"][0]["data_missing"], true);
+    assert_eq!(artifact["coverage"][0]["totals"], Value::Null);
+    assert_eq!(artifact["coverage"][0]["floor"], 90);
+
+    let t = &mut config["targets"][0];
+    t["modes"]["full"]["command"] = json!(if cfg!(windows) {
+        "copy /Y target\\cov.src target\\cov.lcov >NUL"
+    } else {
+        "cp target/cov.src target/cov.lcov"
+    });
+    std::fs::write(&config_path, serde_json::to_vec(&config).unwrap()).unwrap();
+    std::fs::write(
+        root.join("target/cov.src"),
+        "SF:src/a\nDA:1,1\nDA:2,1\nend_of_record\nSF:src/b\nDA:1,1\nDA:2,0\nend_of_record\n",
+    )
+    .unwrap();
+    let output = fixture.full(&["test", "--all"]);
+    let text = stderr(&output);
+    let run = PathBuf::from(
+        text.lines()
+            .find_map(|l| l.strip_prefix("[codeflow test] artifact: "))
+            .unwrap(),
+    );
+    let artifact: Value = serde_json::from_slice(&std::fs::read(&run).unwrap()).unwrap();
+    let coverage = &artifact["coverage"][0];
+    assert_eq!(coverage["totals"]["lines"]["count"], 4, "{coverage}");
+    assert_eq!(coverage["totals"]["lines"]["covered"], 3, "{coverage}");
+    assert_eq!(coverage["totals"]["functions"], Value::Null, "{coverage}");
+    assert_eq!(coverage["floor"], 90);
+    // 75 percent is under the floor of 90: the gate fails on it.
+    assert_eq!(coverage["thresholds_failed"], 1, "{coverage}");
+    assert!(!output.status.success());
 }
 
 #[test]
