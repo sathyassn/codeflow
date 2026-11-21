@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Discover daily Windows sources, and judge their runs from what GitHub records.
+"""Discover daily Windows and Linux coverage sources, and judge their runs from
+what GitHub records.
 
 Each line's run is started at that line's own ref (windows-daily.yml), so no line
 code runs under main's ref and nothing it writes to a cache reaches main's scope.
@@ -12,34 +13,44 @@ remote on every run and nothing stores them, so a new line joins and a deleted
 one leaves on the next run. A line is active when its own tree at discovery has
 what the runner calls and its copy of windows-daily-run.yml is byte-identical to
 main's: every script named in that file, each with the subcommands and flags it
-passes, and the partition measurements. The test reads those files and runs nothing
-from the line. A line that fails it stays out, and the run's summary names it and the
-reason. A line left out has no daily evidence: its row in the verdict says so, the
+passes. The test reads those files and runs nothing from the line. A line that
+fails it stays out, and the run's summary names it and the reason. A line left out has no daily evidence: its row in the verdict says so, the
 overall verdict can pass without it, and that pass says nothing about it. main is always selected. A selected line that fails fails visibly. If the
 listing or a read fails, the run fails and offers no lines. Other branches are not
 covered.
 
-What a run skips: no Windows job. A selected line gets no new run when its exact tip
+What a run skips: no job of the full Linux and Windows suites. A selected line gets
+no new run when its exact tip
 already has a passing daily run recorded, younger than the age windows-daily.yml
 declares, which keeps image drift covered at a known interval. A failed, missing,
 unfinished or unreadable run, or an age that is absent or not a positive whole
-number, means no skip. It runs Windows only: Linux gates and coverage are not part
-of it. A commit that was never a line's tip at discovery is not tested, and a later
-tip gets no credit.
+number, means no skip. A green full run of the exact tip counts the same way: a
+codeflow-ci.yml run of that tip, on a push or a pull request, recorded on that
+branch and within the age, whose every Linux and Windows job succeeded, with its
+workflow file byte-identical to main's. A run that reused a verdict skipped those
+jobs, and a line push ran no Windows job, so neither counts. A run runs the Linux build and gates parts, the Linux coverage
+shards with their report and every Windows job (ADR-0097); the release gates are
+not part of it. A commit that was never a
+line's tip at discovery is not tested, and a later tip gets no credit.
 
 What is credited: a requested line's run, started after the request, whose recorded
 workflow path, event, branch and exact head SHA all match, which GitHub records as
 completed with success, with every expected job successful, at a commit whose copy
 of windows-daily-run.yml is byte-identical to main's at the request, whose hash the
-request records. Anything else is no credit,
+request records, and whose recorded Linux coverage total is for that commit and at
+or above the floor in main's .codeflow/test-config.json. The verdict reports each
+line's total and the commit measured. Anything else is no credit,
 and a run that is missing or has not finished is no evidence, never a pass. A line
-that was skipped is judged the same way, against its recorded run.
+that was skipped is judged the same way, against its recorded run, or against its
+full run, whose coverage report job applied the floor. A daily coverage result is
+never merge evidence.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -55,29 +66,50 @@ WINDOWS_JOBS = frozenset({
     "windows-build", "windows-tests", "windows", "windows-release-journey",
     "windows-journeys",
 })
+# The runner's Linux coverage jobs, with the ids and commands of codeflow-ci.yml's.
+COVERAGE_JOBS = frozenset({"gates-coverage", "gates-coverage-report"})
+# The runner's Linux build and gates parts, with the ids and commands of codeflow-ci.yml's.
+LINUX_GATE_JOBS = frozenset({"gates-build", "gates"})
+GATE_PARTS = ("present", "checks")
+COVERAGE_SHARDS = 3
 SHA = re.compile(r"[0-9a-f]{40}")
 REF = re.compile(r"refs/heads/(?:main|integration/[A-Za-z0-9_./-]+)")
 MAIN = "refs/heads/main"
 RUNNER_PATH = ".github/workflows/windows-daily-run.yml"
 RUNNER = Path(__file__).resolve().parents[1] / RUNNER_PATH
 DISPATCHER_PATH = ".github/workflows/windows-daily.yml"
-PARTITIONS = 12
+PARTITIONS = 16
 # Each job's name in the runner; a test compares these with the file.
 RUN_JOB_NAMES = frozenset({
     "windows test build", "windows checks (doc, clippy, Node)", "windows release journey", "windows journeys",
     *(f"windows tests ({n} of {PARTITIONS})" for n in range(1, PARTITIONS + 1)),
+    "linux coverage report", *(f"linux coverage ({n} of {COVERAGE_SHARDS})" for n in range(1, COVERAGE_SHARDS + 1)),
+    "linux build", *(f"linux gates ({part})" for part in GATE_PARTS),
 })
 RUN_EVENT = "workflow_dispatch"
+# A full run of a tip: codeflow-ci.yml with every Linux and Windows job green. A
+# skipped job, as in a run that reused a verdict, is not green.
+FULL_PATH = ".github/workflows/codeflow-ci.yml"
+FULL_EVENTS = frozenset({"push", "pull_request"})
+FULL_JOB_NAMES = frozenset({
+    "codeflow build", "codeflow gates", "codeflow gates (coverage report)", "windows",
+    *(f"codeflow gates ({part})" for part in GATE_PARTS),
+    *(f"codeflow gates (coverage {n} of {COVERAGE_SHARDS})" for n in range(1, COVERAGE_SHARDS + 1)),
+    "windows test build", "windows checks (doc, clippy, Node)", "windows release journey", "windows journeys",
+    *(f"windows tests ({n} of {PARTITIONS})" for n in range(1, PARTITIONS + 1)),
+})
 DISPATCHER_EVENTS = frozenset({"schedule", "workflow_dispatch"})
 # The request is read six hours after it is made; a day-old one means a daily run was missed.
 MAX_REQUEST_AGE = timedelta(hours=30)
 REQUESTED_FILE = "daily-windows-requested.json"
 RESULT_FILE = "daily-windows-result.json"
-LEFT_OUT = "left out, no daily evidence"
+LEFT_OUT = "left out, no daily evidence and no daily coverage"
+# The coverage report job keeps the total and the commit it measured here.
+COVERAGE_ARTIFACT = "daily-coverage-total"
+COVERAGE_FILE = "daily-coverage-total.json"
+CONFIG = Path(__file__).resolve().parents[1] / ".codeflow/test-config.json"
 # Declared once, in windows-daily.yml; the dispatcher records it for the reader.
 MAX_AGE_VARIABLE = "DAILY_PROOF_MAX_AGE_DAYS"
-# What the partition script reads, which no command names.
-RUNNER_DATA = "scripts/windows-test-times.json"
 COMMAND = re.compile(r"\bpython3? (?:-\w+ )*(scripts/[\w.-]+\.py)([^&\n\"]*)")
 
 
@@ -114,14 +146,15 @@ def sources(remote_refs: str) -> dict:
 
 def runner_needs(workflow: str) -> dict[str, set[str]]:
     """Each script the runner calls in the line's tree, with what it passes it."""
-    needs: dict[str, set[str]] = {RUNNER_DATA: set()}
+    needs: dict[str, set[str]] = {}
     for script, arguments in COMMAND.findall(workflow):
         words = arguments.split()
         wanted = needs.setdefault(script, set())
-        if words and not words[0].startswith(("-", "$")):
+        # A first word that is a name is a subcommand; a path or a quoted command is not.
+        if words and re.fullmatch(r"[a-z][a-z0-9-]*", words[0]):
             wanted.add(words[0])
         wanted.update(word for word in words if word.startswith("--"))
-    if len(needs) == 1:
+    if not needs:
         raise ValueError("the runner workflow names no script, so no line can be proven active")
     return needs
 
@@ -232,9 +265,40 @@ def requested_runner_hash(request: dict) -> str:
     return recorded
 
 
-def judge(row: dict, requested_at: datetime, runs: list, jobs_of, read_runner, main_runner: str) -> dict:
+def main_floor() -> float:
+    """The line floor of main's rust-coverage target, read by coverage-merge.py from
+    main's checkout, so a line that lowers its own floor is still held to main's."""
+    spec = importlib.util.spec_from_file_location("coverage_merge", Path(__file__).resolve().parent / "coverage-merge.py")
+    merge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(merge)
+    try:
+        return float(merge.floor_from(CONFIG))
+    except merge.Problem as problem:
+        raise ValueError(f"main's coverage floor cannot be read: {problem}") from problem
+
+
+def coverage_record(coverage_of, run_id, sha: str) -> tuple[dict | None, str | None]:
+    """The run's Linux coverage total for `sha`, or why there is none. The file comes
+    from the line's run, so only its counts and commit are read, and checked."""
+    try:
+        record = coverage_of(run_id) if coverage_of else None
+    except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError) as error:
+        return None, f"no Linux coverage total could be read: {error}"
+    if not isinstance(record, dict):
+        return None, "the run recorded no Linux coverage total"
+    lines, covered, measured = record.get("lines"), record.get("covered"), record.get("sha")
+    if not (type(lines) is int and type(covered) is int and 0 < lines and 0 <= covered <= lines):
+        return None, "the run's Linux coverage total is malformed"
+    if measured != sha:
+        return None, f"the run's Linux coverage total is for {measured!r}, not {sha}"
+    return {"lines": lines, "covered": covered, "percent": round(covered * 100.0 / lines, 2), "sha": sha}, None
+
+
+def judge(row: dict, requested_at: datetime, runs: list, jobs_of, read_runner, main_runner: str,
+          coverage_of=None, floor: float | None = None) -> dict:
     """Credit a requested line only from GitHub's record of its run. Every path but
-    one, including any mismatch, a missing run and a late one, is not credited."""
+    one, including any mismatch, a missing run, a late one and a coverage total that
+    is missing, for another commit or under main's floor, is not credited."""
     ref, sha = row["ref"], row["sha"]
     branch = ref.removeprefix("refs/heads/")
     result = {"ref": ref, "requested_sha": sha, "tested_sha": None, "run_id": None}
@@ -254,6 +318,8 @@ def judge(row: dict, requested_at: datetime, runs: list, jobs_of, read_runner, m
         return {**result, "result": "no-credit", "reasons": wrong}
     if run.get("status") != "completed":
         return uncredited("no-evidence", f"the run has not finished: {run.get('status')!r}")
+    coverage, missing = coverage_record(coverage_of, run["id"], sha)
+    result["coverage"] = coverage
     if run.get("conclusion") != "success":
         return uncredited("failure", f"the run concluded {run.get('conclusion')!r}")
     if runner_hash(read_runner(sha)) != main_runner:
@@ -264,6 +330,13 @@ def judge(row: dict, requested_at: datetime, runs: list, jobs_of, read_runner, m
     wrong += [f"unexpected job {name!r}" for name in sorted(set(jobs) - RUN_JOB_NAMES)]
     if wrong:
         return {**result, "result": "no-credit", "reasons": wrong}
+    if missing:
+        return uncredited("no-credit", missing)
+    floor = main_floor() if floor is None else floor
+    result["floor"] = floor
+    if coverage["covered"] * 100.0 < floor * coverage["lines"]:
+        return uncredited("failure", f"Linux line coverage {coverage['percent']:.2f} percent is under main's "
+                                     f"{floor:g} percent floor")
     return {**result, "tested_sha": sha, "result": "credited", "reasons": []}
 
 
@@ -272,7 +345,7 @@ def max_age_days(value) -> int:
     return int(value) if re.fullmatch(r"[1-9][0-9]{0,3}", str(value)) else 0
 
 
-def judge_line(row: dict, since: datetime, api, read_at, main_runner: str) -> dict:
+def judge_line(row: dict, since: datetime, api, read_at, main_runner: str, coverage_of=None) -> dict:
     """Read GitHub's record of a line's runs and judge the newest one since `since`."""
     repo = os.environ["GITHUB_REPOSITORY"]
     branch = quote(row["ref"].removeprefix("refs/heads/"), safe="")
@@ -280,22 +353,49 @@ def judge_line(row: dict, since: datetime, api, read_at, main_runner: str) -> di
                f"?branch={branch}&event={RUN_EVENT}&per_page=30")["workflow_runs"]
     return judge(row, since, runs,
                  lambda run: api(f"repos/{repo}/actions/runs/{run}/jobs?filter=latest&per_page=100")["jobs"],
-                 lambda sha: read_at(sha, RUNNER_PATH), main_runner)
+                 lambda sha: read_at(sha, RUNNER_PATH), main_runner, coverage_of or download_coverage)
 
 
-def skip_proven(matrix: dict, age: int, api, read_at, main_runner: str, now: datetime) -> tuple[dict, list]:
-    """Move out each line whose exact tip has a passing run within the age. Anything
-    that stops the check, a read included, leaves the line to run: it fails closed."""
+def full_run_credit(row: dict, since: datetime, api, read_at, main_full: str | None) -> dict | None:
+    """The credit of a green full run of this exact tip since `since`, or None. The
+    workflow file must be main's, since a line's own copy decides what its run reports."""
+    ref, sha = row["ref"], row["sha"]
+    if not main_full or runner_hash(read_at(sha, FULL_PATH)) != main_full:
+        return None
+    repo = os.environ["GITHUB_REPOSITORY"]
+    runs = api(f"repos/{repo}/actions/workflows/codeflow-ci.yml/runs?head_sha={sha}&per_page=30")["workflow_runs"]
+    wanted = {"path": FULL_PATH, "head_sha": sha, "head_branch": ref.removeprefix("refs/heads/"),
+              "status": "completed", "conclusion": "success"}
+    for run in sorted(runs, key=lambda candidate: when(candidate["created_at"]), reverse=True):
+        if (when(run["created_at"]) < since or run.get("event") not in FULL_EVENTS
+                or any(run.get(name) != want for name, want in wanted.items())):
+            continue
+        rows = api(f"repos/{repo}/actions/runs/{run['id']}/jobs?filter=latest&per_page=100")["jobs"]
+        conclusions = {job.get("name"): job.get("conclusion") for job in rows}
+        if all(conclusions.get(name) == "success" for name in FULL_JOB_NAMES):
+            return {"ref": ref, "requested_sha": sha, "tested_sha": sha, "run_id": run["id"],
+                    "result": "credited", "reasons": [], "full_run": True}
+    return None
+
+
+def skip_proven(matrix: dict, age: int, api, read_at, main_runner: str, now: datetime,
+                coverage_of=None, main_full: str | None = None) -> tuple[dict, list]:
+    """Move out each line whose exact tip has a passing daily run or a green full run
+    within the age. Anything that stops the check, a read included, leaves the line
+    to run: it fails closed."""
     to_run, skipped = [], []
     for row in matrix["include"]:
         proof = None
         if age:
             try:
-                proof = judge_line(row, now - timedelta(days=age), api, read_at, main_runner)
+                since = now - timedelta(days=age)
+                proof = judge_line(row, since, api, read_at, main_runner, coverage_of)
+                if proof["result"] != "credited":
+                    proof = full_run_credit(row, since, api, read_at, main_full) or proof
             except (ValueError, KeyError, TypeError, AttributeError, OSError, subprocess.SubprocessError):
                 proof = None
         if proof and proof["result"] == "credited":
-            skipped.append({**row, "run_id": proof["run_id"]})
+            skipped.append({**row, "run_id": proof["run_id"], **({"full_run": True} if proof.get("full_run") else {})})
         else:
             to_run.append(row)
     return {"include": to_run}, skipped
@@ -307,7 +407,7 @@ def left_out_line(row: dict) -> dict:
             "result": "no-evidence", "left_out": True, "reasons": row["missing"]}
 
 
-def read_evidence(api, download, read_at, now: datetime) -> dict:
+def read_evidence(api, download, read_at, now: datetime, coverage_of=None) -> dict:
     """Judge every requested line. The result passes when each line started or skipped
     is credited. A line left out does not decide it, and that pass says nothing about it."""
     repo = os.environ["GITHUB_REPOSITORY"]
@@ -317,11 +417,18 @@ def read_evidence(api, download, read_at, now: datetime) -> dict:
     rows, skipped, left_out = requested_rows(request)
     main_runner = requested_runner_hash(request)
     requested_at = when(request_run["created_at"])
-    judged = [judge_line(row, requested_at, api, read_at, main_runner) for row in rows]
+    judged = [judge_line(row, requested_at, api, read_at, main_runner, coverage_of) for row in rows]
     age = timedelta(days=max_age_days(request.get("max_age_days")))
     # A skipped line has no new run, so it stands on its recorded one, within the same age.
     for row in skipped:
-        judged.append({**judge_line(row, requested_at - age, api, read_at, main_runner), "skipped": True})
+        since = requested_at - age
+        if row.get("full_run"):
+            line = full_run_credit(row, since, api, read_at, request.get("full_sha256")) or {
+                "ref": row["ref"], "requested_sha": row["sha"], "tested_sha": None, "run_id": row.get("run_id"),
+                "result": "no-credit", "reasons": ["the full run that skipped this line no longer stands"]}
+        else:
+            line = judge_line(row, since, api, read_at, main_runner, coverage_of)
+        judged.append({**line, "skipped": True})
     passed = bool(judged) and all(line["result"] == "credited" for line in judged)
     return {"result": "success" if passed else "failure", "request_run": request_run["id"],
             "requested_at": request_run["created_at"], "lines": judged + [left_out_line(row) for row in left_out]}
@@ -338,15 +445,36 @@ def download_request(run_id: int) -> dict:
         return json.loads((Path(folder) / REQUESTED_FILE).read_text(encoding="utf-8"))
 
 
+def download_coverage(run_id: int) -> dict:
+    with tempfile.TemporaryDirectory() as folder:
+        subprocess.check_output(["gh", "run", "download", str(run_id), "--repo", os.environ["GITHUB_REPOSITORY"],
+                                 "--name", COVERAGE_ARTIFACT, "--dir", folder], text=True, timeout=120)
+        return json.loads((Path(folder) / COVERAGE_FILE).read_text(encoding="utf-8"))
+
+
+def coverage_line(line: dict) -> str:
+    """What the verdict says about a judged line's Linux coverage."""
+    coverage = line.get("coverage")
+    if line.get("full_run"):
+        return "\n  - Linux coverage passed main's floor in that run's coverage report job"
+    if not coverage:
+        return "\n  - no Linux coverage total recorded"
+    floor = f"; main's floor is {line['floor']:g} percent" if "floor" in line else ""
+    return (f"\n  - Linux line coverage {coverage['percent']:.2f} percent ({coverage['covered']} of "
+            f"{coverage['lines']} lines) measured at `{coverage['sha']}`{floor}")
+
+
 def verdict_report(result: dict) -> str:
-    text = f"## Daily Windows verdict: {result['result']}\n\n"
-    text += "This result gives no evidence for a newer branch tip or a pull request.\n"
+    text = f"## Daily Windows and Linux coverage verdict: {result['result']}\n\n"
+    text += "This result gives no evidence for a newer branch tip or a pull request, and is never merge evidence.\n"
     text += "It covers only the lines credited below.\n"
     for line in result.get("lines", []):
         carried = f", skipped: stands on run {line['run_id']}" if line.get("skipped") else ""
         state = LEFT_OUT if line.get("left_out") else line["result"]
         text += f"\n- `{line['ref']}` at `{line['requested_sha']}`: {state}{carried}"
         text += "".join(f"\n  - {reason}" for reason in line["reasons"])
+        if not line.get("left_out"):
+            text += coverage_line(line)
     for reason in result.get("reasons", []):
         text += f"\n- {reason}"
     return text
@@ -385,12 +513,14 @@ def main() -> int:
             matrix, left_out = select_active(sources(refs), runner_needs(runner_text), read_at, runner_text)
             age = max_age_days(os.environ.get(MAX_AGE_VARIABLE))
             main_runner = runner_hash(runner_text)
-            matrix, skipped = skip_proven(matrix, age, gh_api, read_at, main_runner, datetime.now(timezone.utc))
+            main_full = runner_hash((Path(__file__).resolve().parents[1] / FULL_PATH).read_text(encoding="utf-8"))
+            matrix, skipped = skip_proven(matrix, age, gh_api, read_at, main_runner, datetime.now(timezone.utc),
+                                          main_full=main_full)
             report = "## Daily Windows source commits\n\n" + "\n".join(
                 f"- `{row['ref']}` at `{row['sha']}`" for row in matrix["include"]
             )
             if skipped:
-                report += f"\n\n## Skipped: a passing run within {age} days at this exact tip\n\n" + "\n".join(
+                report += f"\n\n## Skipped: a passing daily or full run within {age} days at this exact tip\n\n" + "\n".join(
                     f"- `{row['ref']}` at `{row['sha']}`: run {row['run_id']}" for row in skipped
                 )
             if left_out:
@@ -399,7 +529,7 @@ def main() -> int:
                 )
             Path(REQUESTED_FILE).write_text(json.dumps(
                 {**matrix, "skipped": skipped, "left_out": left_out, "max_age_days": age,
-                 "runner_sha256": main_runner}, indent=2) + "\n",
+                 "runner_sha256": main_runner, "full_sha256": main_full}, indent=2) + "\n",
                 encoding="utf-8")
             output("matrix", json.dumps(matrix, separators=(",", ":")))
             output("runs", "true" if matrix["include"] else "false")
