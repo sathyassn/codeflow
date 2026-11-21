@@ -5,6 +5,8 @@
 //! requires the task, parent epic, applicable specs, and completed
 //! dependencies to exist in that anchored snapshot. It never creates or
 //! updates files, refs, branches, worktrees, or record status.
+//! Explicit pinned starts read the graph at the target tip and may add
+//! only their own committed head-record edges for those pins.
 
 use crate::workgraph::history;
 
@@ -1741,6 +1743,28 @@ fn visible_task_ids(
     )
 }
 
+/// Inventory committed filenames without parsing unrelated record contents.
+fn task_ids_in_tree(
+    repo: &Repository,
+    tree: &git2::Tree<'_>,
+) -> Result<std::collections::BTreeSet<String>, WorkStartError> {
+    let ids = std::cell::RefCell::new(std::collections::BTreeSet::new());
+    records_from_tree_matching(repo, tree, |path, kind| {
+        if kind == RecordKind::Task {
+            if let Some(id) = path
+                .rsplit('/')
+                .next()
+                .and_then(markdown_stem)
+                .filter(|id| is_valid_task_format_id(id))
+            {
+                ids.borrow_mut().insert(id.to_owned());
+            }
+        }
+        false
+    })?;
+    Ok(ids.into_inner())
+}
+
 /// The longest of `ids` that `suffix` starts with, followed by `-`.
 fn carried_task_id(suffix: &str, ids: &std::collections::BTreeSet<String>) -> Option<String> {
     suffix
@@ -1755,10 +1779,22 @@ fn carried_task_id(suffix: &str, ids: &std::collections::BTreeSet<String>) -> Op
 /// graph cannot be read.
 type TaskPaths = Result<BTreeMap<String, String>, String>;
 
+fn task_paths_at(repo: &Repository, revision: Oid) -> TaskPaths {
+    super::lifecycle::Graph::from_revision(repo, &revision.to_string()).map(|graph| {
+        graph
+            .records
+            .into_iter()
+            .filter(|(_, record)| record.kind == RecordKind::Task)
+            .map(|(id, record)| (id, record.path))
+            .collect()
+    })
+}
+
 /// The visible work branches, local and remote-tracking, grouped by the task
 /// id each carries: read once, so a caller judging many pins or tasks never
 /// walks the refs and the record files again per branch.
 pub(crate) struct PinBranches {
+    target: Oid,
     /// Task id, then branch name without its remote, then the tips it has.
     tips: BTreeMap<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>,
     /// A branch of the task whose tip could not be read.
@@ -1770,14 +1806,19 @@ pub(crate) struct PinBranches {
 }
 
 impl PinBranches {
-    /// Read every branch of `repo`, resolving task ids from `root`'s policy
-    /// and record files.
+    /// Read task identities at the target tip, falling back to each
+    /// candidate pin's tree only for ids absent from that target.
     ///
     /// # Errors
     /// Returns the reason the branches cannot be listed.
-    pub(crate) fn read(repo: &Repository, root: &Path) -> Result<Self, String> {
+    pub(crate) fn read(repo: &Repository, root: &Path, target: Oid) -> Result<Self, String> {
         let prefixes = work_prefixes(root).map_err(|error| error.to_string())?;
-        let ids = visible_task_ids(root).map_err(|error| error.to_string())?;
+        let target_tree = repo
+            .find_commit(target)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?;
+        let ids = task_ids_in_tree(repo, &target_tree).map_err(|error| error.to_string())?;
+        let mut fallback_ids = std::collections::HashMap::new();
         let mut tips =
             BTreeMap::<String, BTreeMap<GitName, std::collections::BTreeSet<Oid>>>::new();
         let mut unreadable = BTreeMap::new();
@@ -1796,13 +1837,25 @@ impl PinBranches {
             } else {
                 name
             };
-            let Some(task_id) = work_suffix_name(&prefixes, &name)
-                .and_then(|suffix| carried_task_id_name(&suffix, &ids))
-            else {
+            let Some(suffix) = work_suffix_name(&prefixes, &name) else {
                 continue;
             };
             match branch.get().peel_to_commit() {
                 Ok(commit) => {
+                    let task_id = if let Some(id) = carried_task_id_name(&suffix, &ids) {
+                        id
+                    } else {
+                        let fallback = fallback_ids.entry(commit.id()).or_insert_with(|| {
+                            let tree = commit.tree().map_err(|error| error.to_string())?;
+                            task_ids_in_tree(repo, &tree).map_err(|error| error.to_string())
+                        });
+                        let Some(id) =
+                            carried_task_id_name(&suffix, fallback.as_ref().map_err(Clone::clone)?)
+                        else {
+                            continue;
+                        };
+                        id
+                    };
                     tips.entry(task_id)
                         .or_default()
                         .entry(name)
@@ -1810,6 +1863,12 @@ impl PinBranches {
                         .insert(commit.id());
                 }
                 Err(error) => {
+                    let Some(task_id) = carried_task_id_name(&suffix, &ids) else {
+                        return Err(format!(
+                            "cannot read predecessor branch {}: {error}",
+                            name.display()
+                        ));
+                    };
                     unreadable
                         .entry(task_id)
                         .or_insert_with(|| error.to_string());
@@ -1817,25 +1876,30 @@ impl PinBranches {
             }
         }
         Ok(Self {
+            target,
             tips,
             unreadable,
             task_paths: std::cell::RefCell::default(),
         })
     }
 
-    /// The branches in `slot`, read from `repo`'s working tree on first use.
+    /// The branches in `slot`, read from committed trees once per target tip.
     ///
     /// # Errors
     /// Returns the reason the working tree or its branches cannot be read.
     pub(crate) fn once<'s>(
         slot: &'s mut Option<Self>,
         repo: &Repository,
+        target: Oid,
     ) -> Result<&'s Self, String> {
-        if slot.is_none() {
+        if slot
+            .as_ref()
+            .is_none_or(|branches| branches.target != target)
+        {
             let root = repo
                 .workdir()
                 .ok_or_else(|| "no working tree".to_string())?;
-            *slot = Some(Self::read(repo, root)?);
+            *slot = Some(Self::read(repo, root, target)?);
         }
         slot.as_ref().ok_or_else(|| "no working tree".to_string())
     }
@@ -1873,6 +1937,9 @@ impl PinBranches {
             })
             .collect::<Vec<_>>()
             .join(", ");
+        if visible.len() != 1 {
+            return Err(format!("{} pin is not the unique predecessor branch tip; visible heads: {heads}; keep one reviewed predecessor branch and recheck", pin.task_id));
+        }
         let matching: Vec<_> = visible
             .into_iter()
             .filter(|(_, tips)| tips.contains(&pin.revision))
@@ -1922,18 +1989,7 @@ impl PinBranches {
         self.task_paths
             .borrow_mut()
             .entry(pin.revision)
-            .or_insert_with(|| {
-                super::lifecycle::Graph::from_revision(repo, &pin.revision.to_string()).map(
-                    |graph| {
-                        graph
-                            .records
-                            .into_iter()
-                            .filter(|(_, record)| record.kind == RecordKind::Task)
-                            .map(|(id, record)| (id, record.path))
-                            .collect()
-                    },
-                )
-            })
+            .or_insert_with(|| task_paths_at(repo, pin.revision))
             .as_ref()
             .map_err(Clone::clone)
             .map(|paths| paths.get(&pin.task_id).cloned())
@@ -2011,21 +2067,7 @@ fn task_id_in_head(
     // The task record files at `head`, by name as the checkout lookup reads
     // them: no record is parsed, so another record that does not parse
     // keeps the refusal that names it rather than this lookup's.
-    let ids = std::cell::RefCell::new(std::collections::BTreeSet::new());
-    records_from_tree_matching(&repo, &tree, |path, kind| {
-        if kind == RecordKind::Task {
-            if let Some(id) = path
-                .rsplit('/')
-                .next()
-                .and_then(markdown_stem)
-                .filter(|id| is_valid_task_format_id(id))
-            {
-                ids.borrow_mut().insert(id.to_owned());
-            }
-        }
-        false
-    })?;
-    Ok(carried_task_id(suffix, &ids.into_inner()))
+    Ok(carried_task_id(suffix, &task_ids_in_tree(&repo, &tree)?))
 }
 
 /// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
@@ -2092,7 +2134,8 @@ impl ReviewedPin {
 
 /// Whether a revision an approving review row names covers a pin: the pin
 /// itself, or an ancestor the pin follows only by changes to the pinned
-/// record's status and Closeout. A lookup calls it only once it has found the
+/// record's status and Closeout or clean re-merges of its own target.
+/// A lookup calls it only once it has found the
 /// pull request with the pin as its head, so a lookup that finds none
 /// never reads the predecessor's history.
 pub type ReviewCovers<'a> = dyn Fn(&str) -> Result<bool, String> + 'a;
@@ -2102,6 +2145,59 @@ pub type ReviewCovers<'a> = dyn Fn(&str) -> Result<bool, String> + 'a;
 /// request of that branch has the pin as its head and an approving review
 /// row naming a revision that covers it.
 pub type ReviewLookup<'a> = dyn Fn(&str, &str, &ReviewCovers<'_>) -> Result<bool, String> + 'a;
+
+fn pin_target(repo: &Repository, pin: &ReviewedPin) -> Result<Oid, String> {
+    let tree = repo
+        .find_commit(pin.revision)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+    let task = records
+        .get(&pin.task_id)
+        .filter(|record| record.kind == RecordKind::Task)
+        .ok_or_else(|| format!("{} pin does not hold that task's record", pin.task_id))?;
+    let target = task
+        .integration_target
+        .as_deref()
+        .ok_or_else(|| format!("{} pin has no integration_target", pin.task_id))?;
+    let root = repo
+        .workdir()
+        .ok_or("predecessor repository has no working directory")?;
+    let resolved = resolve_work_target_checked(root, Some(target))
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "{} predecessor target '{target}' is unavailable",
+                pin.task_id
+            )
+        })?;
+    let (_, tip_id) = tracking_reference(repo, &resolved.target)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "{} predecessor target '{target}' has no fetched landing ref",
+                pin.task_id
+            )
+        })?;
+    let tip = repo
+        .find_commit(tip_id)
+        .map_err(|error| error.to_string())?;
+    let anchored = records_from_tree(repo, &tip.tree().map_err(|error| error.to_string())?)
+        .map_err(|error| error.to_string())?;
+    let planned = anchored.get(&pin.task_id).ok_or_else(|| {
+        format!(
+            "{} predecessor target '{target}' does not hold its planning record",
+            pin.task_id
+        )
+    })?;
+    if planned.integration_target.as_deref().map(logical_target) != Some(logical_target(target)) {
+        return Err(format!(
+            "{} pin changes its integration_target; use its target's reviewed planning record",
+            pin.task_id
+        ));
+    }
+    Ok(tip.id())
+}
 
 /// Resolve explicit pins against predecessor branches and review evidence.
 ///
@@ -2117,9 +2213,9 @@ pub fn reviewed_pins(
     reviewed_pins_in(&repo, &mut branches, values, lookup, false)
 }
 
-/// [`reviewed_pins`] over branches read at most once. `review_first` asks
-/// for review evidence before the pinned tree is read, for a caller that
-/// needs only whether every pin holds, not which refusal comes first.
+/// [`reviewed_pins`] over cached branch identities. `review_first` delays
+/// the explicit record-presence check until after review lookup; identity
+/// resolution itself may already need the pinned tree.
 pub(crate) fn reviewed_pins_in(
     repo: &Repository,
     branches: &mut Option<PinBranches>,
@@ -2146,7 +2242,8 @@ pub(crate) fn reviewed_pins_in(
             task_id: task_id.into(),
             revision,
         };
-        let branches = PinBranches::once(branches, repo)?;
+        let target = pin_target(repo, &pin)?;
+        let branches = PinBranches::once(branches, repo, target)?;
         let branch = branches.pin_name(&pin)?;
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
@@ -2161,7 +2258,7 @@ pub(crate) fn reviewed_pins_in(
         };
         if !lookup(branch_text, &revision.to_string(), &covers)? {
             return Err(format!(
-                "no review names {task_id}@{sha}, or a commit it follows only by {task_id}'s status and Closeout; cannot verify review for this pin"
+                "no review names {task_id}@{sha}, or a commit it follows only by {task_id}'s status and Closeout or a clean re-merge of its own target; cannot verify review for this pin"
             ));
         }
         if review_first {
@@ -2169,7 +2266,41 @@ pub(crate) fn reviewed_pins_in(
         }
         pins.push(pin);
     }
+    for pin in &pins {
+        refuse_unlanded_chain(repo, pin)?;
+    }
     Ok(pins)
+}
+
+fn refuse_unlanded_chain(repo: &Repository, pin: &ReviewedPin) -> Result<(), String> {
+    let target = pin_target(repo, pin)?;
+    let read = |revision| -> Result<BTreeMap<String, Record>, String> {
+        let tree = repo
+            .find_commit(revision)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())?;
+        records_from_tree(repo, &tree).map_err(|error| error.to_string())
+    };
+    let anchored = read(target)?;
+    let at_pin = read(pin.revision)?;
+    let task = at_pin
+        .get(&pin.task_id)
+        .ok_or("predecessor record unavailable")?;
+    let dependencies = task.depends_on.iter().chain(
+        anchored
+            .get(&pin.task_id)
+            .into_iter()
+            .flat_map(|record| &record.depends_on),
+    );
+    for dependency in dependencies.filter(|dependency| dependency.kind == DependencyKind::Code) {
+        if anchored
+            .get(&dependency.id)
+            .is_none_or(|record| record.status != "complete")
+        {
+            return Err(format!("{} has an unsupported unlanded predecessor {}; land {} on '{}' first, then retry with {}'s current reviewed head", pin.task_id, dependency.id, dependency.id, task.integration_target.as_deref().unwrap_or_default(), pin.task_id));
+        }
+    }
+    Ok(())
 }
 
 /// The commit a review row names by `reviewed`, a full revision or a
@@ -2191,11 +2322,11 @@ fn resolve_reviewed(repo: &Repository, reviewed: &str) -> Option<Oid> {
 /// Closeout. A completion recorded after the review, as cf-ship asks, so
 /// needs no second review before a successor stacks on it. Each commit in
 /// the span is judged against its parent, so a change followed by its
-/// revert still refuses. A merge in the span carries no review: the
-/// predecessor's own acceptance binding (R-60) accepts a merge after its
-/// reviewed commit only as a clean re-merge of its target, which changes
-/// other files and so never passes this check either, and a pin that
-/// binding refuses would pass `work claim` and then fail its own push. A
+/// revert still refuses. A merge in the span carries review only as the
+/// predecessor's own acceptance binding (R-60) permits: a clean automatic
+/// re-merge of its own target's first-parent history. The predecessor's
+/// record must be unchanged from the first parent. This walk follows only
+/// first parents, so target-side commits are not blamed on the predecessor. A
 /// root commit in the span refuses, since the record appears in it
 /// unreviewed. A history overlay (grafts or replace refs) could fake the
 /// parents walked, and a shallow boundary cuts the walk, so either stops
@@ -2221,11 +2352,8 @@ pub(crate) fn review_covers_pin(
     if !history::descendant_of(repo, pin.revision, review).map_err(|e| e.to_string())? {
         return Ok(false);
     }
-    let mut walk = history::revwalk(repo).map_err(|e| e.to_string())?;
-    walk.push(pin.revision).map_err(|e| e.to_string())?;
-    walk.hide(review).map_err(|e| e.to_string())?;
-    for revision in walk {
-        let revision = revision.map_err(|e| e.to_string())?;
+    let mut revision = pin.revision;
+    while revision != review {
         let commit = repo.find_commit(revision).map_err(|e| e.to_string())?;
         // An unreadable record is an error, never a covered revision.
         let Some(content) = super::acceptance::blob_at(repo, revision, path)? else {
@@ -2234,20 +2362,57 @@ pub(crate) fn review_covers_pin(
         let Ok(parent) = history::parent_id(repo, &commit, 0) else {
             return Ok(false);
         };
-        if history::parents(repo, &commit)
-            .map_err(|error| error.to_string())?
-            .len()
-            != 1
-            || super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
+        if parent != review
+            && !history::descendant_of(repo, parent, review).map_err(|error| error.to_string())?
         {
             return Ok(false);
         }
+        let parents = history::parents(repo, &commit).map_err(|error| error.to_string())?;
+        match parents.as_slice() {
+            [_] => {
+                if super::acceptance::later_change(repo, path, &content, parent, revision).is_some()
+                {
+                    return Ok(false);
+                }
+            }
+            [_, side] => {
+                let refuse = |cause: &str| {
+                    format!("no review names {} pin at {} after review {reviewed}: merge {revision} {cause}; review the merged head again", pin.task_id, pin.revision)
+                };
+                if super::acceptance::blob_at(repo, parent, path)?.as_deref()
+                    != Some(content.as_str())
+                {
+                    return Err(refuse("changes the predecessor's record"));
+                }
+                let mut target = pin_target(repo, pin)?;
+                while target != *side {
+                    let commit = repo
+                        .find_commit(target)
+                        .map_err(|error| error.to_string())?;
+                    let parents =
+                        history::parents(repo, &commit).map_err(|error| error.to_string())?;
+                    let Some(first) = parents.first() else {
+                        return Err(refuse(
+                            "does not merge its own integration target's first-parent history",
+                        ));
+                    };
+                    target = *first;
+                }
+                if !super::acceptance::is_clean_remerge(repo, &commit)
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err(refuse("is not the clean automatic re-merge of its parents"));
+                }
+            }
+            _ => return Ok(false),
+        }
+        revision = parent;
     }
     Ok(true)
 }
 
 fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
-    PinBranches::once(&mut None, repo)?.pin_branch(repo, pin)
+    PinBranches::once(&mut None, repo, pin_target(repo, pin)?)?.pin_branch(repo, pin)
 }
 
 /// The prospective base is the reviewed pin that contains all other pins.
@@ -2267,7 +2432,7 @@ pub(crate) fn stack_base_in(
 ) -> Result<Option<git2::Oid>, String> {
     history::check(repo).map_err(|error| error.to_string())?;
     for pin in pins {
-        PinBranches::once(branches, repo)?.pin_branch(repo, pin)?;
+        PinBranches::once(branches, repo, pin_target(repo, pin)?)?.pin_branch(repo, pin)?;
     }
     if pins.is_empty() {
         return Ok(None);
@@ -2522,24 +2687,28 @@ pub fn stacked_pins(
     let (merge_base, mut records) =
         anchored_records(&repo, target, head_id).map_err(|error| error.to_string())?;
     let merge_base = Oid::from_str(&merge_base).map_err(|error| error.to_string())?;
-    if !records.contains_key(task_id) {
-        // A standalone record new on this branch carries its edges at head.
-        let tree = repo
-            .find_commit(head_id)
-            .and_then(|commit| commit.tree())
-            .map_err(|error| error.to_string())?;
-        if let Some(task) = records_from_tree(&repo, &tree)
-            .map_err(|error| error.to_string())?
-            .remove(task_id)
-        {
-            records.insert(task_id.to_string(), task);
-        }
+    let tree = repo
+        .find_commit(head_id)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| error.to_string())?;
+    if let Some(own) = records_from_tree(&repo, &tree)
+        .map_err(|error| error.to_string())?
+        .remove(task_id)
+    {
+        let task = records
+            .entry(task_id.to_string())
+            .or_insert_with(|| own.clone());
+        merge_head_code_edges(task, &own, None);
     }
     let Some(task) = records.get(task_id) else {
         return Ok(Vec::new());
     };
     let mut branches = None;
     let mut values = Vec::new();
+    let target_tip = target_reference(&repo, target)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("target '{target}' is unavailable"))?
+        .id();
     for dependency in &task.depends_on {
         if dependency.kind != DependencyKind::Code
             || records
@@ -2556,7 +2725,7 @@ pub fn stacked_pins(
             })
         };
         let mut contained = std::collections::BTreeSet::new();
-        for tip in PinBranches::once(&mut branches, &repo)?.tips_of(&dependency.id)? {
+        for tip in PinBranches::once(&mut branches, &repo, target_tip)?.tips_of(&dependency.id)? {
             if (tip == head_id || descends(head_id, tip)?)
                 && tip != merge_base
                 && !descends(merge_base, tip)?
@@ -2621,6 +2790,66 @@ enum Admission {
     SecretScanExemption,
 }
 
+/// Only the claiming task's pinned code edges may come from its committed
+/// head. All other records and planning inputs are read at the target tip.
+fn project_start_pin_edges(
+    repo: &Repository,
+    records: &mut BTreeMap<String, Record>,
+    task_id: &str,
+    target: &str,
+    head_id: Oid,
+    pins: &[ReviewedPin],
+) -> Result<String, WorkStartError> {
+    let tip =
+        target_reference(repo, target)?.ok_or_else(|| WorkStartError::Target(target.into()))?;
+    let target_records = records_from_tree(
+        repo,
+        &tip.tree()
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?,
+    )?;
+    let own = records.remove(task_id);
+    *records = target_records;
+    if let Some(own) = own {
+        records.entry(task_id.to_string()).or_insert(own);
+    }
+    project_head_code_edges(repo, records, task_id, head_id, Some(pins))?;
+    Ok(tip.id().to_string())
+}
+
+/// Preserve planned constraints while reading the claiming task's own
+/// committed code edges. A pin filter limits start's explicit exception.
+fn merge_head_code_edges(task: &mut Record, own: &Record, pins: Option<&[ReviewedPin]>) {
+    for dependency in &own.depends_on {
+        if dependency.kind == DependencyKind::Code
+            && pins.is_none_or(|pins| pins.iter().any(|pin| pin.task_id == dependency.id))
+            && !task
+                .depends_on
+                .iter()
+                .any(|dep| dep.id == dependency.id && dep.kind == DependencyKind::Code)
+        {
+            task.depends_on.push(dependency.clone());
+        }
+    }
+}
+
+fn project_head_code_edges(
+    repo: &Repository,
+    records: &mut BTreeMap<String, Record>,
+    task_id: &str,
+    head_id: Oid,
+    pins: Option<&[ReviewedPin]>,
+) -> Result<(), WorkStartError> {
+    let tree = repo
+        .find_commit(head_id)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let head_records = records_from_tree(repo, &tree)?;
+    if let (Some(task), Some(own)) = (records.get_mut(task_id), head_records.get(task_id)) {
+        merge_head_code_edges(task, own, pins);
+    }
+    Ok(())
+}
+
 fn check_task_anchor(
     repo_root: &Path,
     task_id: &str,
@@ -2651,16 +2880,24 @@ fn check_task_anchor(
         admission != Admission::Start,
         head_id,
     )?;
+    let status_base = if admission == Admission::Start && !pins.is_empty() {
+        project_start_pin_edges(&repo, &mut records, task_id, target, head_id, pins)?
+    } else {
+        if admission == Admission::Work {
+            project_head_code_edges(&repo, &mut records, task_id, head_id, None)?;
+        }
+        merge_base.clone()
+    };
     // A named fix may reopen a complete task in this range (TSK-140). Only
-    // its status is projected onto the anchored readiness core; every
-    // planning input and dependency still comes from the merge-base. The
+    // its status is projected onto the planning snapshot: the target tip
+    // for a pinned start, otherwise the merge-base. The
     // reopened record is read where the check reads the change: at the
     // named head (CI admission), else in the checkout.
     if records
         .get(task_id)
         .is_some_and(|task| task.status == "complete")
     {
-        let base = super::lifecycle::Graph::from_revision(&repo, &merge_base)
+        let base = super::lifecycle::Graph::from_revision(&repo, &status_base)
             .map_err(WorkStartError::InvalidGraph)?;
         let current = match head {
             Some(_) => super::lifecycle::Graph::from_revision(&repo, &head_id.to_string())
@@ -2682,14 +2919,14 @@ fn check_task_anchor(
     }
     // A task blocked at the merge-base may be unblocked in its own range
     // (TSK-1036, issue #365): only its status is projected, as a reopen is,
-    // and only when the range proves the unblock step by step. Every other
-    // planning input and every dependency still comes from the merge-base,
-    // so an unblock never admits work the graph does not.
+    // and only when the range proves the unblock step by step from the
+    // same snapshot that supplied its blocked status. An earlier todo
+    // record cannot clear a block added later on the target.
     if at_base
         && records
             .get(task_id)
             .is_some_and(|task| task.status == "blocked" || task.blocker_reason.is_some())
-        && unblocked_in_range(&repo, repo_root, &merge_base, head, head_id, task_id)?
+        && unblocked_in_range(&repo, repo_root, &status_base, head, head_id, task_id)?
     {
         if let Some(task) = records.get_mut(task_id) {
             task.status = "todo".into();
@@ -2997,6 +3234,14 @@ fn unblocked_in_range(
     }
     let base_id = Oid::from_str(merge_base)
         .map_err(|error| WorkStartError::Repository(error.message().to_string()))?;
+    // A range on another side of the target cannot undo a block it has
+    // never contained, even when its own unchanged todo steps are legal.
+    if base_id != head_id
+        && !history::descendant_of(repo, head_id, base_id)
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?
+    {
+        return Ok(false);
+    }
     if !judge(repo, base_id, head_id, RecordKind::Task, &now.id).proven {
         return Ok(false);
     }
@@ -3275,7 +3520,7 @@ fn validate_task_structure(
             .any(|dep| dep.id == pin.task_id && dep.kind == DependencyKind::Code)
     }) {
         return Err(WorkStartError::InvalidGraph(
-            "--on pin does not name a code dependency of this task".into(),
+            "--on pin does not name a code dependency of this task; add its code depends_on edge to the target's planning record, or commit it in this task's head record for work start, then recheck".into(),
         ));
     }
     if dependencies_required {
@@ -3334,7 +3579,8 @@ fn validate_dependencies(
         match dependency.kind {
             DependencyKind::Code => {
                 if let Some(pin) = pins.iter().find(|pin| pin.task_id == dependency.id) {
-                    PinBranches::once(branches, repo)
+                    pin_target(repo, pin)
+                        .and_then(|target| PinBranches::once(branches, repo, target))
                         .and_then(|branches| branches.pin_branch(repo, pin))
                         .map_err(WorkStartError::InvalidGraph)?;
                 } else {
@@ -5410,7 +5656,12 @@ mod tests {
         git(dir.path(), &["branch", "task/TSK-001-work"]);
         let repo = Repository::open(dir.path()).unwrap();
         let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
-        let branches = PinBranches::read(&repo, dir.path()).unwrap();
+        let branches = PinBranches::read(
+            &repo,
+            dir.path(),
+            repo.head().unwrap().peel_to_commit().unwrap().id(),
+        )
+        .unwrap();
         for (task_id, branch) in [
             ("TSK-001", "task/TSK-001-work"),
             ("TSK-002", "task/TSK-002-work"),
@@ -5425,6 +5676,191 @@ mod tests {
             );
         }
         assert_eq!(branches.task_paths.borrow().len(), 1);
+    }
+
+    #[test]
+    fn tsk341_pin_lookup_ignores_checkout_and_untracked_records() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["branch", "task/TSK-001-work"]);
+        let repo = Repository::open(root).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision,
+        };
+        let expected = GitName::from_text("task/TSK-001-work");
+        assert_eq!(
+            PinBranches::read(&repo, root, revision)
+                .unwrap()
+                .pin_branch(&repo, &pin)
+                .unwrap(),
+            expected
+        );
+        let empty_tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        repo.commit(
+            Some("refs/heads/empty-checkout"),
+            &signature,
+            &signature,
+            "checkout without records",
+            &repo.find_tree(empty_tree).unwrap(),
+            &[&repo.find_commit(revision).unwrap()],
+        )
+        .unwrap();
+        git(root, &["switch", "empty-checkout"]);
+        fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        fs::write(
+            root.join("project-management/tasks/TSK-999.md"),
+            "untracked, invalid record\n",
+        )
+        .unwrap();
+        assert_eq!(
+            PinBranches::read(&repo, root, revision)
+                .unwrap()
+                .pin_branch(&repo, &pin)
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn tsk341_start_reads_only_its_own_committed_dependency_edge() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        let path = root.join("project-management/tasks/TSK-002.md");
+        let planned = fs::read_to_string(&path)
+            .unwrap()
+            .replace("depends_on: [TSK-001]", "depends_on: []");
+        fs::write(&path, &planned).unwrap();
+        git(root, &["commit", "-am", "plan without edge"]);
+        git(root, &["branch", "task/TSK-001-work"]);
+        git(root, &["switch", "-c", "task/TSK-002-head-edge"]);
+        let repo = Repository::open(root).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let pins =
+            reviewed_pins(root, &[format!("TSK-001@{revision}")], &|_, _, _| Ok(true)).unwrap();
+        fs::write(
+            &path,
+            planned.replace("depends_on: []", "depends_on: [TSK-001]"),
+        )
+        .unwrap();
+        let refused = check_work_start_on(root, "TSK-002", "main", &pins)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("does not name a code dependency"),
+            "{refused}"
+        );
+        git(root, &["commit", "-am", "add own edge"]);
+        check_work_start_on(root, "TSK-002", "main", &pins).unwrap();
+    }
+
+    #[test]
+    fn tsk341_pin_refuses_a_revision_other_than_the_unique_tip() {
+        let dir = fixture();
+        git(dir.path(), &["branch", "task/TSK-001-work"]);
+        let repo = Repository::open(dir.path()).unwrap();
+        let target = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let branches = PinBranches::read(&repo, dir.path(), target).unwrap();
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision: Oid::ZERO_SHA1,
+        };
+        assert!(branches
+            .pin_name(&pin)
+            .unwrap_err()
+            .contains("unique predecessor branch tip"));
+    }
+
+    #[test]
+    fn tsk341_two_branches_cannot_carry_one_pinned_task() {
+        let dir = fixture();
+        for branch in ["task/TSK-001-work", "fix/TSK-001-other"] {
+            git(dir.path(), &["branch", branch]);
+        }
+        let repo = Repository::open(dir.path()).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision,
+        };
+        assert!(PinBranches::read(&repo, dir.path(), revision)
+            .unwrap()
+            .pin_name(&pin)
+            .unwrap_err()
+            .contains("unique predecessor branch tip"));
+    }
+
+    #[test]
+    fn tsk341_unrelated_invalid_records_do_not_decide_pin_identity() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["branch", "task/TSK-001-work"]);
+        let repo = Repository::open(root).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        git(root, &["switch", "-c", "task/TSK-003-unrelated"]);
+        fs::write(
+            root.join("project-management/tasks/TSK-003.md"),
+            "invalid record\n",
+        )
+        .unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-m", "unrelated unfinished record"]);
+        let invalid = repo.head().unwrap().peel_to_commit().unwrap().id();
+        git(root, &["switch", "task/TSK-002-work"]);
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision,
+        };
+        assert_eq!(
+            PinBranches::read(&repo, root, revision)
+                .unwrap()
+                .pin_branch(&repo, &pin)
+                .unwrap(),
+            GitName::from_text("task/TSK-001-work")
+        );
+        assert!(reviewed_pins(root, &[format!("TSK-003@{invalid}")], &|_, _, _| Ok(true)).is_err());
+    }
+
+    #[test]
+    fn tsk341_a_task_absent_from_committed_trees_cannot_be_pinned() {
+        let dir = fixture();
+        git(dir.path(), &["branch", "task/TSK-999-work"]);
+        fs::write(
+            dir.path().join("project-management/tasks/TSK-999.md"),
+            "untracked\n",
+        )
+        .unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        let revision = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let error = reviewed_pins(dir.path(), &[format!("TSK-999@{revision}")], &|_, _, _| {
+            Ok(true)
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("does not hold that task's record"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn tsk341_a_pin_at_an_unreviewed_code_commit_is_refused() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["switch", "-c", "task/TSK-001-work"]);
+        let repo = Repository::open(root).unwrap();
+        let reviewed = repo.head().unwrap().peel_to_commit().unwrap().id();
+        fs::write(root.join("changed.txt"), "unreviewed code\n").unwrap();
+        git(root, &["add", "changed.txt"]);
+        git(root, &["commit", "-m", "change after review"]);
+        let tip = repo.head().unwrap().peel_to_commit().unwrap().id();
+        let error = reviewed_pins(root, &[format!("TSK-001@{tip}")], &|_, _, covers| {
+            covers(&reviewed.to_string())
+        })
+        .unwrap_err();
+        assert!(error.contains("no review names"), "{error}");
     }
 
     fn replace_on_main(
@@ -6315,7 +6751,12 @@ permission_preset = "strict"
             dir.path(),
             &[b"refs/heads/task/TSK-001-caf\xe9", b"refs/heads/other\xff"],
         );
-        assert!(PinBranches::read(&repo, dir.path()).is_ok());
+        assert!(PinBranches::read(
+            &repo,
+            dir.path(),
+            repo.head().unwrap().peel_to_commit().unwrap().id()
+        )
+        .is_ok());
     }
     #[test]
     fn r16_unreadable_local_target_cannot_fall_back_to_origin() {

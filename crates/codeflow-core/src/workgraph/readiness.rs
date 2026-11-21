@@ -1737,8 +1737,8 @@ impl StackHints {
             {
                 continue;
             }
-            let tips =
-                PinBranches::once(&mut self.branches, &self.repo)?.tips_of(&dependency.id)?;
+            let tips = PinBranches::once(&mut self.branches, &self.repo, target_tip)?
+                .tips_of(&dependency.id)?;
             if tips.len() != 1 {
                 return Err("predecessor has no unique visible tip".into());
             }

@@ -42,7 +42,10 @@ pub enum WorkCommand {
     Claim {
         /// Stable task id.
         task_id: String,
-        /// Reviewed predecessor pin, repeat once per code dependency.
+        /// Reviewed predecessor pin, repeat once per code dependency. A
+        /// predecessor with its own unlanded code dependency is refused before
+        /// work is created; land that earlier dependency on the predecessor's
+        /// target first.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
@@ -53,7 +56,9 @@ pub enum WorkCommand {
         /// Non-task branch/ref this task will merge into.
         #[arg(long = "into", value_name = "REF")]
         target: Option<String>,
-        /// Reviewed predecessor pin already contained in HEAD.
+        /// Reviewed predecessor pin already contained in HEAD. The task's own
+        /// committed head record may supply its dependency edge; an
+        /// uncommitted edge grants nothing.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },

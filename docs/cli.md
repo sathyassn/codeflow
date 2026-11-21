@@ -252,11 +252,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
 | `codeflow work claim <TASK_ID>` | | Fetch, choose the live target tip or the single line holding a completed predecessor the target has not received, then create and push `task/<id>-<slug>` from that base. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. A predecessor with its own unlanded code dependency is refused before work is created; land that earlier dependency on the predecessor's target first. |
 | `codeflow work start <TASK_ID>` | | Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. The task's own committed head record may supply its dependency edge; an uncommitted edge grants nothing. |
 | `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
 | `codeflow work remove-candidate <BRANCH>` | | Remove a local landing candidate branch whose tree landed on its line by another commit: fetch the line from origin, find a commit on its first-parent history with the same tree, check no worktree uses the branch and no pull request is open from it, delete it and record the proof in the ledger |
 | | `<BRANCH>` | The candidate branch, named with `git.candidate_prefix`. |
@@ -625,17 +625,30 @@ primary handles the remote landing through the project's PR flow.
 | Fixed claim evidence | Local annotated Git object at `refs/codeflow/claims/<task branch>`, shared by linked worktrees; records the base, source and reviewed pins independently of the ledger and shared Git configuration. |
 | Source advances after claim | Start retains the recorded base and reports the new tip. |
 | Metadata absent or corrupt | Absent metadata uses the current selected base, including in a fresh clone; corrupt metadata refuses admission. |
-| Unlanded reviewed stack | Supply current reviewed `--on TSK@SHA` pins. After rebasing, explicit replacement pins renew only a reviewed claim once current review, ancestry and planning checks pass and Git records the new base. Once the predecessor lands, ordinary completion checks replace the pin requirement. |
+| Unlanded reviewed stack | Supply current reviewed `--on TSK@SHA` pins. Each predecessor's own code dependencies must already be complete on its target; deeper unlanded chains refuse at claim time, naming the earlier predecessor to land first. After rebasing, explicit replacement pins renew only a reviewed claim once current review, ancestry and planning checks pass and Git records the new base. Once the predecessor lands, ordinary completion checks replace the pin requirement. |
 | Source fetch fails | Claim and start refuse, naming the remote and last fetch time, or unknown; missing live evidence blocks even at `git.work_planning: warn`. |
 | Head lacks the current target | Before review, merge the target into the task branch. CI's `work.target_tip` warns, or reports an unreadable tip as unverified; existing planning and record checks still apply. |
 
 A `work start --on` pin names the predecessor branch tip. Its Reviews section
-must approve that tip or an ancestor whose later commits touch only the
-predecessor's own task record, and in it only its status and Closeout.
-Every intervening commit is checked, so a
-change followed by a revert still requires review, and a merge after the
-review is refused. The repository owner,
+must approve that tip or a covered ancestor. A single-parent commit after
+that ancestor may change only the predecessor's own task record, and in it
+only its status and Closeout.
+Every intervening commit is checked, so a change followed by a revert still
+requires review. A later merge is accepted only when its second parent is on
+the first-parent history of the predecessor's own fetched integration target, its
+tree equals the automatic conflict-free merge of its parents, and the
+predecessor's record is unchanged from the first parent. Any other merge after
+that reviewed ancestor refuses, naming the cause. The repository owner,
 name and branch must match; cross-repository pull requests are refused.
+
+Predecessor identities come from committed records at the target tip. Only
+records absent from that target may come from the candidate pin's tree.
+The current checkout and untracked records do not supply pin identities.
+In a clone with remotes, predecessor completeness and merge ancestry use
+the target's remote-tracking tip. A stale local target cannot supply landed
+evidence, and a target missing the predecessor's planning record refuses.
+Push admission also reads the task's committed code-dependency edge. Landing
+still requires the predecessor to be complete at the merge-base.
 
 ### Remember notes
 
