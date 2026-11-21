@@ -4151,7 +4151,9 @@ fn git_guard_ignores_non_shell_tools_and_refuses_garbage() {
 fn pre_commit_blocks_secret_and_protected_branch() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
-    std::fs::write(dir.path().join("leak.txt"), "AKIAIOSFODNN7EXAMPLF\n").unwrap();
+    // Built at run time so this source line never matches the scanner itself.
+    let key = format!("AKIA{}", "IOSFODNN7EXAMPLF");
+    std::fs::write(dir.path().join("leak.txt"), format!("{key}\n")).unwrap();
     git(dir.path(), &["add", "leak.txt"]);
 
     let out = run_with_stdin(
@@ -4164,6 +4166,10 @@ fn pre_commit_blocks_secret_and_protected_branch() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.commit_to_protected"), "{stderr}");
     assert!(stderr.contains("git.secret_scan"), "{stderr}");
+    assert!(
+        stderr.contains("possible secret (AWS access key id) staged at leak.txt:1"),
+        "{stderr}"
+    );
 }
 
 #[test]
