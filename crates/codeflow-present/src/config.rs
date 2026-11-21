@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{error::PresentError, limits, platform::is_link_like, Result};
 
-const MAX_CONFIG_BYTES: u64 = 64 * 1024;
-const MAX_TOKEN_BYTES: u64 = 256 * 1024;
-const MAX_IDENTITY_BYTES: usize = 128 * 1024;
+const MAX_CONFIG_BYTES: u64 = codeflow_limits::PRESENT_CONFIG_BYTES.default;
+const MAX_TOKEN_BYTES: u64 = codeflow_limits::PRESENT_TOKEN_BYTES.default;
+const MAX_IDENTITY_BYTES: usize = codeflow_limits::PRESENT_IDENTITY_BYTES.default_count();
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

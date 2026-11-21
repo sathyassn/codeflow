@@ -88,8 +88,9 @@ pub struct ExecutionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_jobs: Option<usize>,
 
-    /// Workers one run shares among its concurrent heavy targets, capped at
-    /// the host job budget. Omitted, a run uses the host budget.
+    /// Workers one run shares among its concurrent heavy targets, used as set
+    /// unless the project also sets `host_jobs`, which bounds it. Omitted, a
+    /// run uses the host budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_budget: Option<usize>,
 
@@ -817,9 +818,6 @@ pub fn load_test_config(path: &Path) -> Result<TestConfig, TestingError> {
     parse_test_config(path, &content)
 }
 
-/// The largest named test config `codeflow test --config` reads.
-const NAMED_CONFIG_MAX_BYTES: u64 = 4 * 1024 * 1024;
-
 /// Load the test config a caller names (`codeflow test --config`, TSK-1001
 /// and TSK-1020), with the exact bytes it was parsed from. The path itself
 /// must be a regular file: a missing path, a symbolic link (whatever it
@@ -852,8 +850,11 @@ pub fn load_named_test_config(path: &Path) -> Result<(TestConfig, Vec<u8>), Test
     if !metadata.is_file() {
         return Err(refuse("is not a regular file".to_string()));
     }
-    let bytes = crate::bounded_file::read_bounded_regular(path, NAMED_CONFIG_MAX_BYTES)
-        .map_err(|error| refuse(format!("cannot be read: {error}")))?;
+    let bytes = crate::bounded_file::read_bounded_regular(
+        path,
+        codeflow_limits::TEST_CONFIG_NAMED_CONFIG_MAX_BYTES.value(),
+    )
+    .map_err(|error| refuse(format!("cannot be read: {error}")))?;
     let content =
         String::from_utf8(bytes.clone()).map_err(|_| refuse("is not UTF-8 text".to_string()))?;
     Ok((parse_test_config(path, &content)?, bytes))

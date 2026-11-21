@@ -104,9 +104,9 @@ impl<R: Pipe> Output<R> {
 
     fn ingest(&mut self, bytes: &[u8], name: Option<&str>) {
         self.bytes.extend_from_slice(bytes);
-        if self.bytes.len() > super::OUTPUT_CAPTURE_LIMIT {
+        if self.bytes.len() > codeflow_limits::RUNNER_OUTPUT_CAPTURE_LIMIT.count() {
             self.bytes
-                .drain(..self.bytes.len() - super::OUTPUT_CAPTURE_LIMIT);
+                .drain(..self.bytes.len() - codeflow_limits::RUNNER_OUTPUT_CAPTURE_LIMIT.count());
             self.truncated = true;
         }
         for &byte in bytes {
@@ -138,7 +138,7 @@ impl<R: Pipe> Output<R> {
         if self.truncated {
             format!(
                 "[codeflow test] output truncated; retained last {} bytes\n{text}",
-                super::OUTPUT_CAPTURE_LIMIT
+                codeflow_limits::RUNNER_OUTPUT_CAPTURE_LIMIT.count()
             )
         } else {
             text.into_owned()

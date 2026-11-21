@@ -907,7 +907,9 @@ fn a_pull_request_a_follow_up_a_lane_and_a_time_make_the_item_due() {
     // A lane going stale: its seat's liveness is past the timeout.
     let stale = vec![store::Liveness {
         recorded_by: lane.clone(),
-        last_seen: coord::format_time(fake.now - coord::HEARTBEAT_TIMEOUT_SECS - 60),
+        last_seen: coord::format_time(
+            fake.now - codeflow_limits::COORD_HEARTBEAT_TIMEOUT.value() - 60,
+        ),
         sequence: 1,
     }];
     let found = due::due_reasons(
@@ -1087,7 +1089,7 @@ fn a_dependency_wait_is_rechecked_at_least_daily() {
     let far = fake.now + 30 * 86_400;
     assert_eq!(
         due::capped_next_check(&item, far, fake.now),
-        fake.now + coord::MAX_RECHECK_SECS
+        fake.now + codeflow_limits::COORD_MAX_RECHECK.value()
     );
 }
 

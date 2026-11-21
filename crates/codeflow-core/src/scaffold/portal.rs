@@ -28,12 +28,6 @@ const TRANSACTION_LOCK_PATH: &str = ".codeflow/.docs-portal.lock";
 const TRANSACTION_PATH: &str = ".codeflow/.docs-portal-transaction";
 const TRANSACTION_STAGE_PREFIX: &str = ".docs-portal-transaction-stage-";
 const TRANSACTION_CLEANUP_PREFIX: &str = ".docs-portal-transaction-cleanup-";
-const MAX_MANIFEST_BYTES: usize = 2 * 1024 * 1024;
-const MAX_BUNDLE_FILES: usize = 256;
-const MAX_STATE_BYTES: u64 = 64 * 1024;
-const MAX_BASELINE_ENTRIES: usize = 1_024;
-const MAX_MANAGED_FILE_BYTES: u64 = 4 * 1024 * 1024;
-const MAX_RECONCILIATION_READ_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct ReadBudget {
@@ -462,7 +456,8 @@ fn recover_portal_transaction(
     let journal = read_transaction_journal(root, TRANSACTION_PATH)?;
     validate_transaction_journal(&journal, &expected_portal_root, TRANSACTION_PATH)?;
     let mut paths = BTreeSet::new();
-    let mut bytes_remaining = MAX_RECONCILIATION_READ_BYTES;
+    let mut bytes_remaining =
+        codeflow_limits::SCAFFOLD_PORTAL_MAX_RECONCILIATION_READ_BYTES.value();
     for (index, mutation) in journal.mutations.iter().enumerate() {
         validate_journal_mutation(
             root,
@@ -916,7 +911,7 @@ fn authenticated_cleanup_outputs(
     completed: bool,
 ) -> Result<Vec<(String, Vec<u8>)>, ScaffoldError> {
     let mut paths = BTreeSet::new();
-    let mut remaining = MAX_RECONCILIATION_READ_BYTES;
+    let mut remaining = codeflow_limits::SCAFFOLD_PORTAL_MAX_RECONCILIATION_READ_BYTES.value();
     let mut allowed = BTreeMap::new();
     let mut all_before = true;
     let mut all_after = true;
@@ -1013,7 +1008,7 @@ fn authenticated_cleanup_outputs(
 
 impl ReadBudget {
     fn new() -> Self {
-        Self::with_limit(MAX_RECONCILIATION_READ_BYTES)
+        Self::with_limit(codeflow_limits::SCAFFOLD_PORTAL_MAX_RECONCILIATION_READ_BYTES.value())
     }
 
     fn with_limit(limit: u64) -> Self {
@@ -1039,7 +1034,7 @@ fn charge_bundle_asset(
     path: &str,
     asset: &[u8],
 ) -> Result<(), ScaffoldError> {
-    if asset.len() as u64 > MAX_MANAGED_FILE_BYTES {
+    if asset.len() as u64 > codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value() {
         return Err(ScaffoldError::ManifestInvalid(shown!(
             "{} exceeds the managed portal file byte limit",
             Shown::path(path)
@@ -1090,10 +1085,14 @@ where
         where
             A: SeqAccess<'de>,
         {
-            let mut files =
-                Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(MAX_BUNDLE_FILES));
+            let mut files = Vec::with_capacity(
+                sequence
+                    .size_hint()
+                    .unwrap_or(0)
+                    .min(codeflow_limits::SCAFFOLD_PORTAL_MAX_BUNDLE_FILES.count()),
+            );
             while let Some(file) = sequence.next_element()? {
-                if files.len() >= MAX_BUNDLE_FILES {
+                if files.len() >= codeflow_limits::SCAFFOLD_PORTAL_MAX_BUNDLE_FILES.count() {
                     return Err(serde::de::Error::custom(
                         "portal bundle contains too many files",
                     ));
@@ -1124,7 +1123,7 @@ where
         {
             let mut files = BTreeMap::new();
             while let Some((path, state)) = map.next_entry()? {
-                if files.len() >= MAX_BUNDLE_FILES {
+                if files.len() >= codeflow_limits::SCAFFOLD_PORTAL_MAX_BUNDLE_FILES.count() {
                     return Err(serde::de::Error::custom(
                         "portal state contains too many files",
                     ));
@@ -1205,7 +1204,7 @@ fn setup_portal_locked(
             )
         })?
         .ok_or_else(|| ScaffoldError::ManifestMissing(Shown::fixed(MANIFEST_ASSET)))?;
-    if manifest_bytes.len() > MAX_MANIFEST_BYTES {
+    if manifest_bytes.len() > codeflow_limits::SCAFFOLD_PORTAL_MAX_MANIFEST_BYTES.count() {
         return Err(ScaffoldError::ManifestInvalid(Shown::fixed(
             "docs portal manifest exceeds its byte limit",
         )));
@@ -1215,7 +1214,7 @@ fn setup_portal_locked(
         || manifest.version.is_empty()
         || manifest.version.len() > 128
         || manifest.files.is_empty()
-        || manifest.files.len() > MAX_BUNDLE_FILES
+        || manifest.files.len() > codeflow_limits::SCAFFOLD_PORTAL_MAX_BUNDLE_FILES.count()
     {
         return Err(ScaffoldError::ManifestInvalid(Shown::fixed(
             "docs portal manifest must use schema 1 and contain files",
@@ -1344,7 +1343,7 @@ fn setup_portal_locked(
                     repo_root,
                     &dest_text,
                     pristine.clone(),
-                    MAX_MANAGED_FILE_BYTES,
+                    codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value(),
                     "user-owned portal destination",
                 )?;
                 report.file(dest_text, Action::Created);
@@ -1407,7 +1406,7 @@ fn setup_portal_locked(
                 mutations.remove(
                     repo_root,
                     &dest_text,
-                    MAX_MANAGED_FILE_BYTES,
+                    codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value(),
                     "retired managed portal file",
                 )?;
                 report.file(dest_text, Action::Removed);
@@ -1511,7 +1510,7 @@ fn reconcile_managed(
         context.root,
         dest_text,
         pristine.to_vec(),
-        MAX_MANAGED_FILE_BYTES,
+        codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value(),
         "managed portal destination",
     )?;
     context.report.file(dest_text, action);
@@ -1524,7 +1523,9 @@ fn read_project_file(
     label: &'static str,
     budget: &mut ReadBudget,
 ) -> Result<Option<Vec<u8>>, ScaffoldError> {
-    let maximum = MAX_MANAGED_FILE_BYTES.min(budget.remaining);
+    let maximum = codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES
+        .value()
+        .min(budget.remaining);
     match root.read(relative, maximum) {
         Ok(bytes) => {
             budget.charge(bytes.len()).map_err(|error| {
@@ -1554,7 +1555,10 @@ fn read_project_file(
 
 fn read_state_bytes(root: &PortalIo) -> Result<Option<Vec<u8>>, ScaffoldError> {
     let path = guard_beneath_root(root, Path::new(STATE_PATH))?;
-    match root.read(STATE_PATH, MAX_STATE_BYTES) {
+    match root.read(
+        STATE_PATH,
+        codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value(),
+    ) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(ScaffoldError::io(&path, error)),
@@ -1623,13 +1627,16 @@ fn plan_legacy_baseline_removal(
         .map(|file| file.pristine_sha256.as_str())
         .collect();
     let directory = guard_beneath_root(root, Path::new(BASELINE_ROOT))?;
-    let entries = match root.entries(BASELINE_ROOT, MAX_BASELINE_ENTRIES) {
+    let entries = match root.entries(
+        BASELINE_ROOT,
+        codeflow_limits::SCAFFOLD_PORTAL_MAX_BASELINE_ENTRIES.count(),
+    ) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(ScaffoldError::io(&directory, error)),
     };
     for (index, entry) in entries.into_iter().enumerate() {
-        if index >= MAX_BASELINE_ENTRIES {
+        if index >= codeflow_limits::SCAFFOLD_PORTAL_MAX_BASELINE_ENTRIES.count() {
             return Err(ScaffoldError::invalid(
                 Shown::path(BASELINE_ROOT),
                 Shown::fixed("baseline directory contains too many entries"),
@@ -1664,7 +1671,7 @@ fn plan_legacy_baseline_removal(
         mutations.remove(
             root,
             &relative,
-            MAX_MANAGED_FILE_BYTES,
+            codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value(),
             "authenticated legacy baseline",
         )?;
         report.file_with_notes(
@@ -1684,7 +1691,7 @@ fn plan_state(
     state::validate(state)
         .map_err(|detail| ScaffoldError::invalid(Shown::path(STATE_PATH), detail))?;
     let bytes = serde_json::to_vec_pretty(state)?;
-    if bytes.len() as u64 > MAX_STATE_BYTES {
+    if bytes.len() as u64 > codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value() {
         return Err(ScaffoldError::invalid(
             Shown::path(STATE_PATH),
             Shown::fixed("portal adoption state exceeds its byte limit"),
@@ -1694,7 +1701,7 @@ fn plan_state(
         root,
         STATE_PATH,
         bytes,
-        MAX_STATE_BYTES,
+        codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value(),
         "portal adoption state",
     )
 }
@@ -2279,7 +2286,7 @@ mod tests {
                 &PortalIo::open(temp.path()).unwrap(),
                 STATE_PATH,
                 br#"{"schema_version":1}"#.to_vec(),
-                MAX_STATE_BYTES,
+                codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value(),
                 "fixture",
             )
             .unwrap();
@@ -2846,7 +2853,11 @@ mod tests {
 
         std::fs::write(
             temp.path().join(STATE_PATH),
-            vec![b'x'; usize::try_from(MAX_STATE_BYTES).unwrap() + 1],
+            vec![
+                b'x';
+                usize::try_from(codeflow_limits::SCAFFOLD_PORTAL_MAX_STATE_BYTES.value()).unwrap()
+                    + 1
+            ],
         )
         .unwrap();
         assert!(update_adopted_portal(&source("1.0.0", "one\n"), temp.path()).is_err());
@@ -2854,7 +2865,13 @@ mod tests {
 
     #[test]
     fn reconciliation_refuses_oversized_current_baseline_and_retired_files() {
-        let oversized = vec![b'x'; usize::try_from(MAX_MANAGED_FILE_BYTES).unwrap() + 1];
+        let oversized =
+            vec![
+                b'x';
+                usize::try_from(codeflow_limits::SCAFFOLD_PORTAL_MAX_MANAGED_FILE_BYTES.value())
+                    .unwrap()
+                    + 1
+            ];
 
         let current = initialized_root();
         setup_portal(

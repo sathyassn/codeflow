@@ -16,12 +16,6 @@ use sha2::{Digest, Sha256};
 mod continuation;
 
 const SCHEMA_VERSION: u8 = 2;
-/// Maximum exact prompt size accepted by the lifecycle protocol.
-pub const MAX_PROMPT_BYTES: usize = 1024 * 1024;
-const MAX_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
-const MAX_ERROR_BYTES: usize = 1024 * 1024;
-const POLL_INTERVAL: Duration = Duration::from_millis(25);
-const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// State requested by `delegate wait`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -343,9 +337,10 @@ pub fn arm(
     validate_id("turn", turn_id)?;
     validate_state_dir(state_dir)?;
     validate_outside_git_worktree(state_dir)?;
-    if prompt.len() > MAX_PROMPT_BYTES {
+    if prompt.len() > codeflow_limits::DELEGATE_MAX_PROMPT_BYTES.count() {
         return Err(DelegateError::invalid(format!(
-            "prompt exceeds the {MAX_PROMPT_BYTES}-byte limit"
+            "prompt exceeds the {delegate_max_prompt_bytes}-byte limit",
+            delegate_max_prompt_bytes = codeflow_limits::DELEGATE_MAX_PROMPT_BYTES.count()
         )));
     }
     validate_prompt_bytes(prompt)?;
@@ -510,7 +505,7 @@ pub fn wait(
                 message: format!("delegate wait timed out after {}s", timeout.as_secs()),
             });
         }
-        std::thread::sleep(POLL_INTERVAL);
+        std::thread::sleep(codeflow_limits::POLL_PROCESS_MILLIS.wait());
     }
 }
 
@@ -573,7 +568,7 @@ fn accept_prompt(
     let prompt = payload
         .prompt
         .ok_or_else(|| DelegateError::invalid("UserPromptSubmit payload omitted prompt"))?;
-    if prompt.len() > MAX_PROMPT_BYTES {
+    if prompt.len() > codeflow_limits::DELEGATE_MAX_PROMPT_BYTES.count() {
         return Err(DelegateError::invalid(
             "submitted prompt exceeds the size limit",
         ));
@@ -863,7 +858,7 @@ impl TerminalEvidence {
             let message = payload.last_assistant_message.ok_or_else(|| {
                 DelegateError::invalid("Stop payload omitted last_assistant_message")
             })?;
-            if message.len() > MAX_MESSAGE_BYTES {
+            if message.len() > codeflow_limits::DELEGATE_MAX_MESSAGE_BYTES.count() {
                 return Err(DelegateError::invalid(
                     "last_assistant_message exceeds the size limit",
                 ));
@@ -879,11 +874,15 @@ impl TerminalEvidence {
                 error_details: None,
             });
         }
-        ensure_json_bound("error", payload.error.as_ref(), MAX_ERROR_BYTES)?;
+        ensure_json_bound(
+            "error",
+            payload.error.as_ref(),
+            codeflow_limits::DELEGATE_MAX_ERROR_BYTES.count(),
+        )?;
         ensure_json_bound(
             "error_details",
             payload.error_details.as_ref(),
-            MAX_ERROR_BYTES,
+            codeflow_limits::DELEGATE_MAX_ERROR_BYTES.count(),
         )?;
         Ok(Self {
             event: payload.hook_event_name,
@@ -1539,9 +1538,10 @@ fn acquire_run_lock(state_dir: &Path) -> Result<File, DelegateError> {
             Ok(()) => break,
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
-                    && started.elapsed() < RUN_LOCK_TIMEOUT =>
+                    && started.elapsed()
+                        < codeflow_limits::DELEGATE_RUN_LOCK_TIMEOUT_SECONDS.wait() =>
             {
-                std::thread::sleep(POLL_INTERVAL);
+                std::thread::sleep(codeflow_limits::POLL_PROCESS_MILLIS.wait());
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                 return Err(DelegateError::unsafe_state(
@@ -3246,7 +3246,7 @@ mod tests {
     #[test]
     fn arm_enforces_size_and_one_outstanding_turn() {
         let (_temp, path) = state();
-        let large = vec![b'x'; MAX_PROMPT_BYTES + 1];
+        let large = vec![b'x'; codeflow_limits::DELEGATE_MAX_PROMPT_BYTES.count() + 1];
         assert!(arm("run-1", &path, "turn-1", &large)
             .unwrap_err()
             .message
@@ -3397,12 +3397,12 @@ mod tests {
         ready(&path);
         arm("run-1", &path, "turn-1", b"hello").unwrap();
         accept(&path, Some(PROMPT_ID));
-        let message = "x".repeat(MAX_MESSAGE_BYTES + 1);
+        let message = "x".repeat(codeflow_limits::DELEGATE_MAX_MESSAGE_BYTES.count() + 1);
         assert_eq!(
             stop(&path, PROMPT_ID, &message).unwrap_err().kind,
             ErrorKind::Invalid
         );
-        let error = "x".repeat(MAX_ERROR_BYTES + 1);
+        let error = "x".repeat(codeflow_limits::DELEGATE_MAX_ERROR_BYTES.count() + 1);
         let failure = serde_json::json!({
             "hook_event_name": "StopFailure",
             "session_id": "s1",
@@ -3632,7 +3632,7 @@ mod tests {
         let error = arm("run-1", &path, "turn-1", b"hello").unwrap_err();
         assert_eq!(error.kind, ErrorKind::Unsafe);
         assert!(error.message.contains("lock remained busy"));
-        assert!(started.elapsed() >= RUN_LOCK_TIMEOUT);
+        assert!(started.elapsed() >= codeflow_limits::DELEGATE_RUN_LOCK_TIMEOUT_SECONDS.wait());
         assert!(started.elapsed() < Duration::from_secs(2));
         assert!(!path.join("turns/turn-1/request.json").exists());
     }

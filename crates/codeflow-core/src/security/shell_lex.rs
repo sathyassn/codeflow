@@ -215,7 +215,7 @@ pub(crate) struct Lexed {
 
 /// How deep expansions nest before the lexer stops reading: past it the
 /// rest of the line is left unread and the line is opaque (TSK-1374).
-const MAX_EXPANSION_DEPTH: usize = 64;
+const MAX_EXPANSION_DEPTH: usize = codeflow_limits::SHELL_LEXER_EXPANSION_DEPTH.default_count();
 
 /// Lex `line` with the shell's lexical states.
 pub(crate) fn lex(line: &str) -> Lexed {

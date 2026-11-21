@@ -64,6 +64,12 @@ pub struct Authority {
 /// value from the remote, and the guards, orient and doctor print it
 /// (TSK-388).
 pub fn load(root: &Path) -> Result<LandedPolicy, String> {
+    let landed = load_authority(root)?;
+    landed.policy.install_limits();
+    Ok(landed)
+}
+
+fn load_authority(root: &Path) -> Result<LandedPolicy, String> {
     load_raw(root, true).map_err(|error| crate::git::display_message(&error))
 }
 

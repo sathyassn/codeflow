@@ -89,18 +89,19 @@ impl JsonlWriter {
                 LedgerError::Lock(format!("acquiring lock on {}: {e}", lock_path.display()))
             });
         };
-        let deadline = Instant::now() + wait;
+        let deadline = codeflow_limits::deadline_after(Instant::now(), wait);
         loop {
             match lock_file.try_lock_exclusive() {
                 Ok(()) => return Ok(()),
                 Err(e) if e.kind() == fs2::lock_contended_error().kind() => {
-                    if Instant::now() >= deadline {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
                         return Err(LedgerError::LockTimeout {
                             path: lock_path.to_path_buf(),
                             waited: wait,
                         });
                     }
-                    std::thread::sleep(Duration::from_millis(10));
+                    std::thread::sleep(codeflow_limits::POLL_LEDGER_LOCK_MILLIS.wait().min(left));
                 }
                 Err(e) => {
                     return Err(LedgerError::Lock(format!(
@@ -244,6 +245,19 @@ mod tests {
     /// Helper: resolve session fragment path in subdirectory layout.
     fn session_path(dir: &std::path::Path, type_name: &str, sid: &str) -> std::path::PathBuf {
         dir.join(type_name).join(format!("{type_name}-{sid}.jsonl"))
+    }
+
+    /// TSK-1299: the largest lock wait a writer can be given still appends;
+    /// working out its deadline must not overflow the clock.
+    #[test]
+    fn the_largest_ledger_lock_wait_still_appends() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = JsonlWriter::new(dir.path())
+            .unwrap()
+            .with_lock_wait(Duration::MAX);
+        writer.append_event(make_event("session_start")).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::SESSIONS)).unwrap();
+        assert!(content.contains("\"event\":\"session_start\""), "{content}");
     }
 
     #[test]

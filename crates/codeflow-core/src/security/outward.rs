@@ -750,7 +750,7 @@ fn visit_literal(command: &str, cwd: Option<&Path>, depth: usize, out: &mut Pars
                 directories.extend(next);
                 directories.sort();
                 directories.dedup();
-                if directories.len() > DIR_SET_LIMIT {
+                if directories.len() > codeflow_limits::GUARD_DIR_SET_LIMIT.count() {
                     // The literal action reader also visits whole lines. Once
                     // its alternatives exceed the shared bound, judge later
                     // actions with an unknown directory instead of multiplying
@@ -819,13 +819,28 @@ pub(crate) struct DirSet {
     pub(crate) unknown: bool,
 }
 
-/// The most directories a [`DirSet`] lists before it reads as unknown.
-const DIR_SET_LIMIT: usize = 64;
-
 impl DirSet {
+    /// Lists `dir` unless the set already holds `limit` directories or more,
+    /// when the set becomes unknown instead. Returns whether `dir` was
+    /// listed. `>=`, not `==`: the bound is a project value installed once
+    /// per process, so a set may have grown past it under the default.
+    fn admit(&mut self, dir: PathBuf, limit: usize) -> bool {
+        if self.dirs.len() >= limit {
+            self.unknown = true;
+            return false;
+        }
+        self.dirs.push(dir);
+        true
+    }
+
     /// Apply one change: a literal directory joins every listed one, a
     /// change the guard cannot resolve makes the set unknown.
     pub(crate) fn change(&mut self, change: &DirChange, strict: bool) {
+        self.change_within(change, strict, codeflow_limits::GUARD_DIR_SET_LIMIT.count());
+    }
+
+    /// [`DirSet::change`] with the directory bound given.
+    fn change_within(&mut self, change: &DirChange, strict: bool, limit: usize) {
         match change {
             DirChange::To(target) if !strict => {
                 let Some(next) = self
@@ -839,11 +854,7 @@ impl DirSet {
                 };
                 for dir in next {
                     if !self.dirs.contains(&dir) {
-                        if self.dirs.len() == DIR_SET_LIMIT {
-                            self.unknown = true;
-                        } else {
-                            self.dirs.push(dir);
-                        }
+                        self.admit(dir, limit);
                     }
                 }
             }
@@ -880,12 +891,8 @@ impl DirSet {
                     self.unknown = true;
                 }
                 for dir in next {
-                    if !self.dirs.contains(&dir) {
-                        if self.dirs.len() == DIR_SET_LIMIT {
-                            self.unknown = true;
-                            break;
-                        }
-                        self.dirs.push(dir);
+                    if !self.dirs.contains(&dir) && !self.admit(dir, limit) {
+                        break;
                     }
                 }
             }
@@ -1604,11 +1611,7 @@ pub(crate) fn line_directories(
         set.unknown |= local.unknown;
         for dir in local.dirs {
             if seen.insert(dir.clone()) {
-                if set.dirs.len() == DIR_SET_LIMIT {
-                    set.unknown = true;
-                } else {
-                    set.dirs.push(dir);
-                }
+                set.admit(dir, codeflow_limits::GUARD_DIR_SET_LIMIT.count());
             }
         }
     }
@@ -3808,6 +3811,28 @@ fn shell_inputs(command: &str, out: &mut Parsed) {
 
 #[cfg(test)]
 mod tests {
+    /// A set that already holds more directories than a bound lowered after
+    /// it grew (a project value installed mid-process) never lists another:
+    /// the change makes it unknown instead (TSK-1299 review, outward.rs).
+    #[test]
+    fn a_set_past_a_lowered_bound_lists_no_more_directories() {
+        use super::{DirChange, DirSet};
+        use std::path::PathBuf;
+        let seeded = || DirSet {
+            dirs: (0..10).map(|n| PathBuf::from(format!("/r/d{n}"))).collect(),
+            unknown: false,
+        };
+        let mut set = seeded();
+        assert!(!set.admit(PathBuf::from("/r/new"), 8));
+        assert_eq!((set.dirs.len(), set.unknown), (10, true));
+        for strict in [false, true] {
+            let mut set = seeded();
+            set.change_within(&DirChange::To(PathBuf::from("sub")), strict, 8);
+            assert_eq!(set.dirs.len(), 10, "strict {strict}: {:?}", set.dirs);
+            assert!(set.unknown, "strict {strict}");
+        }
+    }
+
     #[test]
     fn fd_hands_its_roots_to_the_command_it_runs() {
         let read = |line: &str| {

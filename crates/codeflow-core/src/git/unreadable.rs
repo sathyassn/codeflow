@@ -14,9 +14,6 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// How many names one report line lists before it counts the rest.
-const SHOWN_NAMES: usize = 5;
-
 /// What a repository scan found refused.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Unreadable {
@@ -80,11 +77,14 @@ fn is_local_branch(name: &str) -> bool {
 fn listed(names: &[String]) -> String {
     let shown = names
         .iter()
-        .take(SHOWN_NAMES)
+        .take(codeflow_limits::UNREADABLE_SHOWN_NAMES.count())
         .map(String::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    match names.len().saturating_sub(SHOWN_NAMES) {
+    match names
+        .len()
+        .saturating_sub(codeflow_limits::UNREADABLE_SHOWN_NAMES.count())
+    {
         0 => shown,
         more => format!("{shown} and {more} more"),
     }

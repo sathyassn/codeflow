@@ -54,7 +54,13 @@ fn findings(opts: &Options, policy: &Policy) -> Result<Vec<String>, String> {
     let nwo = super::origin_or_why(root)?;
     opts.do_look_path("gh")
         .map_err(|_| "`gh` is unavailable".to_string())?;
-    let gh = |args: &[&str]| opts.do_exec_bounded("gh", args, super::GH_TIMEOUT);
+    let gh = |args: &[&str]| {
+        opts.do_exec_bounded(
+            "gh",
+            args,
+            codeflow_limits::DOCTOR_GH_TIMEOUT_SECONDS.wait(),
+        )
+    };
     let branches = branches(&gh, &nwo)?;
     let mut gaps = Vec::new();
     // A ruleset may cover many branches; read each bypass list only once.

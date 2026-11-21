@@ -44,8 +44,10 @@ pub fn check_forecast(repo_root: &Path, forecast_path: &Path) -> ForecastReport 
         );
         return report;
     }
-    let Ok(bytes) = crate::bounded_file::read_bounded_regular(&input, model::MAX_INPUT_BYTES)
-    else {
+    let Ok(bytes) = crate::bounded_file::read_bounded_regular(
+        &input,
+        codeflow_limits::ESTIMATE_MAX_INPUT_BYTES.value(),
+    ) else {
         report.finding(
             "input_read",
             "input",

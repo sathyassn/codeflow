@@ -606,10 +606,10 @@ pub fn range_with(
 }
 
 /// A new or changed file larger than this is reported: 1 MiB.
-pub const WARN_BYTES: u64 = 1 << 20;
+pub const WARN_BYTES: u64 = codeflow_limits::PATH_WARN_BYTES.default;
 
 /// The size limit when the authority's policy names none: 10 MiB.
-pub const DEFAULT_LIMIT_BYTES: u64 = 10 << 20;
+pub const DEFAULT_LIMIT_BYTES: u64 = codeflow_limits::PATH_DEFAULT_LIMIT_BYTES.default;
 
 /// The project settings key a fresh `codeflow init` writes, so the default
 /// size limit refuses in a new scaffold; `update` never writes it.
@@ -678,7 +678,9 @@ impl MaxFileBytes {
     /// # Errors
     /// The limit is zero or a prefix is invalid.
     pub fn resolved(&self) -> Result<(u64, Vec<String>), String> {
-        let limit = self.limit.unwrap_or(DEFAULT_LIMIT_BYTES);
+        let limit = self
+            .limit
+            .unwrap_or_else(|| codeflow_limits::PATH_DEFAULT_LIMIT_BYTES.value());
         if limit == 0 {
             return Err("max_file_bytes limit must be at least 1".into());
         }
@@ -967,11 +969,11 @@ impl ContentRules {
                 bytes(self.limit)
             );
             (PolicyLevel::Block, text, format!("; {ROUTES}"))
-        } else if size > WARN_BYTES {
+        } else if size > codeflow_limits::PATH_WARN_BYTES.value() {
             let text = format!(
                 "large file: {shown} is {}, over {}; keep large binaries in Git LFS or a release asset",
                 bytes(size),
-                bytes(WARN_BYTES)
+                bytes(codeflow_limits::PATH_WARN_BYTES.value())
             );
             (PolicyLevel::Warn, text, String::new())
         } else {
