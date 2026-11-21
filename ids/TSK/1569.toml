@@ -1,0 +1,11 @@
+id = "TSK-1569"
+uid = "05400923-1182-40e9-8b5d-a535dcfb96d6"
+kind = "TSK"
+title = "The operator's next workflow apply carries the coverage patch and two comment fixes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-21T02:22:58Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
