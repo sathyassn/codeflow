@@ -29,6 +29,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.agent_remote_urls` | string list | `[]` | an array of remote URLs, each `https://` or a local absolute path, written exactly as `git remote get-url origin` prints it; an empty array admits none | The `origin` URLs for which the guards let an agent's fetch or push use the GitHub CLI credential helper. | Read only from the landed policy at the remote's default branch, so an uncommitted or branch-local edit, or a URL set by hand with `git remote set-url`, has no effect until a reviewed policy naming it lands there. `origin`'s configured URL must equal an entry byte for byte: a trailing slash, a missing `.git` or a change of case is a different URL. Unset or empty, agents' fetches and pushes that reach the helper keep the account finding. The guards read a value that is not an array of non-empty strings as empty, and validation reports a value that is not an array of strings. The git hooks do not read the key. |
 | `git.local_ref_protection` | Level | `block` | off \| warn \| allow \| block | Any local update of a protected ref that did not come from the remote. | The reference-transaction backstop (ADR-0007): catches fast-forward merges, reset --hard, and branch -D that classic client hooks miss. In session, git-guard also refuses a forced branch move aimed at a protected branch (`git branch -f`, `-M` or `-C`, `git checkout -B`, `git switch -C`, `git worktree add -B`, flag clusters and abbreviations included), resolving `@{-N}` and `@{upstream}` in the target repository and refusing one it cannot resolve or that an earlier git command on the line may change. |
 | `git.hook_integrity` | Level | `block` | off \| warn \| allow \| block | Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes). | Agent guards (ADR-0009). A write to Git's alternate object lists (`objects/info/alternates`, `objects/info/http-alternates`, in the common directory a linked worktree shares) refuses like a write to hooks, refs or config, since an alternate store adds objects Git reads as its own; reading them stays allowed. Local-edit relief never disables protection of remote-tracking refs, packed-refs or Git config authority metadata. git-guard refuses a `sed`, `find`, `xargs` or `parallel` that can change files when its command line names an enforcement path in any spelling the file system reads as one (a search pattern in the command an `xargs` or `find` runs names nothing), a recursive `rm` or a `chmod` or `chown` of a directory holding enforcement files, and a recursive `rm`, `trash`, `find -delete` or `git clean -ff` of a registered worktree, a directory holding one, or a target it cannot resolve where worktrees live. exec-guard refuses an interpreter (`python`, `python3`, `node`, `nodejs`, `perl`, `ruby`, a version suffix included) whose inline code or arguments name an enforcement path: a script's arguments, every word after inline code or stdin `-`, a `--name=value` option or an attached short value in a cluster (`-oFILE`, `-voFILE`), and string literals in its code. It judges every directory the line may run the interpreter in: the session directory and every one any directory change may reach, success or not. Within the modeled grammar (`cd`, `chdir`, `pushd`, `popd`; the launchers `command`, `builtin`, `exec`, `nohup`, `nice`, `timeout`, `stdbuf`, `time`, `env`, `xargs`, `caffeinate`, `xcrun` and `ionice` with their options, GNU-prefixed names such as `genv` and `gtimeout` and every `env -C` spelling included; the zsh precommands `noglob`, `nocorrect` and `-`; `git -C`; composed `ruby -C`; `find -execdir` from every directory in the set, a file start in its parent, `-path` against find's own spelling) the set is exact. Anything outside it (`source`, `.`, `sudo`, `env -S`, an option it does not list, or any other word followed by `cd`, `chdir`, `pushd`, `popd`, or `-C` or `--chdir` after an env-like word) makes the directory unknown, and so does an unknown program that launches a modeled launcher or an interpreter later in its words (after a `--` too), and a script string an unknown program is given, a `-c` or `-e` value or any quoted word (`expect -c`, `osascript -e`, `ssh host '...'`), which is read as a command line; `echo` and `printf` operands stay data. Resolved builtin output, shell here-strings and sourced process substitutions are also read as code. When an interpreter takes code from an external producer the guard cannot read, or a shell or interpreter takes its code from anything other than a literal argument or a heredoc body the guard reads (a pipe, a here-string, a descriptor such as `/dev/stdin` or `/dev/fd/N`, a process substitution, or a `-c`/`-e` value holding a substitution), every word on the line is judged by its trailing components. On a line where a shell (`source` and `.` included) or an interpreter runs, every quoted string anywhere on the line is judged as possible code the same way, so a line that mixes an interpreter with an unrelated quoted protected path refuses; unquoted operands of other programs stay data. Quoted strings are read as the shell builds them: `$'...'` decoded, adjacent quoted pieces joined, and a `printf` of `%s` pieces read as the value it joins. A composed text (a `printf` escape or `%b`/`%q`, an `echo -e` or `print` decode, or a join of on-line assignments) is resolved exactly where the guard can and judged by the tail rule, and on a running line a composing construct it cannot resolve refuses as cannot-verify, naming it. That reading is closed-world: a value is resolved only when every input is a literal read exactly through a construct the guard models and the result equals what bash and zsh produce; any other construct feeding it is unresolved, named by its family. The output of a program other than the modelled builtins is outside text, judged by its trailing components as an unassigned variable is, and also as if empty, the spelled pieces around it joined. A word is also read without one surrounding `{}` pair; every known word is then judged by its trailing components at the same levels: it never fails open on grammar it does not understand. The model is conservative, so an odd shape like `cd .claude && cd .. && python3 tool.py settings.json`, and a repo-root `find . -execdir python3 lint.py notes.txt`, which can really run in a hook directory, are refused. An operand naming policy authority metadata refuses in every form whatever the level. It reads an enforcement file passed as an argument as a possible write, so read one with `cat`, `jq` or `grep`, or redirect it into the interpreter's stdin. An argument it cannot read (a variable, a substitution, a directory after a `cd` it cannot follow) refuses when its spelled part could name an enforcement path or the line names one, as git-guard judges a writer's operands. Code in a file the guard does not read, and a path a script builds at run time, stay past the guard; the OS sandbox's write denies are the backstop. The guard stops at shell grammar, so a path built by interpreter code, such as Python adjacent string literals or a node `+` concatenation, is part of that residual. |
+| `git.admitted_helpers` | string list | `[]` | an array of helper programs, each written as the command Git runs, so that a remote helper and a credential helper each have one written form; an empty array admits none | Helper programs the guards admit when Git starts them for a command that contacts a remote: a remote helper the remote's address or configuration selects, and a credential helper. | Read only from the landed policy at the remote's default branch, so an uncommitted or branch-local edit, or a value a command line sets, admits nothing until a reviewed policy naming it lands there. A command that selects its repository with a location option or variable admits nothing. Default empty: the guards refuse a command whose remote selects a helper program, and exec-guard keeps the account finding on a credential helper the account rules match. A named remote helper is judged as a program word instead; a named credential helper's account finding is skipped on a command that contacts a remote, never on a command that reads the stored credential directly, and every other finding on it stands. An entry must equal the command byte for byte. The guards read a value that is not an array of non-empty strings without a control character as empty, and validation reports a value that is not an array of strings. The git hooks do not read the key. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.line_sync_interval` | uint | `0` | days; 0 disables reminders | Orient flags integration lines past this interval since their last sync or evidenced creation. | Unknown creation without a sync and lines with no own commits are never flagged. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.remote_query_timeout_seconds` | uint | `30` | a whole number of seconds, at least 1; no ceiling beyond what the number can hold | How long one `git ls-remote` attempt may take when the pre-push hook, `codeflow ci`, `task status` or the id sync asks a destination what it holds. | Default 30: GitHub answered the default-branch lookup in 11.3 s and 11.6 s, over the earlier fixed 10 s (TSK-1301). A destination that does not answer in time still refuses the push or run (ci.destination_unavailable), naming the limits and the measured time. The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. A very large value means effectively no limit: a silent destination is then waited on until something stops the run. The session guards never use it: they wait at most 10 s for each such lookup, their 20 s deadline bounds the whole command, and they refuse naming `git fetch <remote>`, after which they read local refs and need no network. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
 | `git.remote_query_attempts` | uint | `3` | a whole number of attempts, at least 1; no ceiling beyond what the number can hold | How many attempts a timed-out `git ls-remote` gets, the first included; any other failure is final at once. | Default 3. The worst wait is this times git.remote_query_timeout_seconds. The pre-push hook, `task status` and the id sync read it from the default branch's committed policy, never from a pushed head; `codeflow ci` reads it from the authority its caller or range selects, as it does every rule. A very large value means effectively no limit: a silent destination is then waited on until something stops the run. Zero, a negative or fractional number and a value over 18446744073709551615 refuse at load. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -638,6 +639,178 @@ the form refuses:
   tests) refuses, since the guard reads the checkouts before the line
   runs. A command the guard cannot read, such as an `ext::` remote or an
   unread `--config-env` value, refuses as cannot-verify.
+- When a Git command contacts a remote, both guards resolve the transport
+  Git selects, after the address rewrites Git applies for that direction,
+  and admit only these forms, which they read the way Git resolves them:
+  - an address the command names;
+  - a remote the command names that the configuration the call reads
+    defines with one clear reading: one address, at most one push address,
+    no helper setting and no remote group of the same name;
+  - the remote Git picks for a fetch or pull that names none, under the
+    same conditions;
+  - a command that names no remote in a repository whose configuration
+    names none, which contacts none unless an older definition file may
+    define one;
+  - the remotes any command may contact implicitly, such as the promisor
+    remotes of a partial clone, under the same conditions.
+
+  A transport that starts a remote helper program refuses under
+  `git.hook_integrity`, naming the program and the remote, unless the
+  landed policy's `git.admitted_helpers` names the program; an admitted one
+  is judged as a program word. Every other form refuses under the same rule
+  as one whose transport the guard cannot prove. The refused classes are:
+  - a command that names no remote where the guard does not resolve the
+    remote Git defaults to, or that selects every remote or a group of
+    remotes, by option or by configuration, unless every remote it selects
+    resolves;
+  - a remote whose configuration selects a helper, gives more than one
+    address or an empty one, sits under a section with an empty name, or
+    that an older definition file may define;
+  - a command that may reach remotes later or through another command,
+    such as one that sets up scheduled background runs, a maintenance run
+    that is not proven to stay local, and the commands that update, add or
+    clone nested repositories;
+  - a command that may recurse into nested repositories in a repository
+    that has or may have them, unless the command line provably turns that
+    off. The guards read the whole index of the repository the call
+    selects, from whichever directory it runs in and whichever way it
+    selects a directory or an index file, and the settings the probe does
+    not read may place nested repositories elsewhere, so they count. A
+    repository whose index or last commit holds the definition for nested
+    repositories counts too, even when the work tree lacks it, so such a
+    repository also refuses until the command line turns recursion off.
+    That definition is read from the top of the repository whichever
+    directory the command runs in, in a bare repository too. A last commit
+    that cannot be read, or a branch whose target is present but cannot be
+    resolved, refuses; only a branch proven to have no commit passes, and
+    that proof reads the place the repository keeps the branch, so a
+    repository that keeps its branches in a form the guard cannot read
+    there refuses even for a branch with no commit, until the command line
+    turns recursion off. A setting that changes which objects the last
+    commit is read through counts as a possible nested repository, since
+    the probe does not follow it. The guard collects possible index and
+    object inputs across the whole line, including repeated bodies and
+    carried commands. Each known input is judged with its recorded value,
+    explicitly absent and inherited, in every combination. A known removal
+    preserves the absent view alongside any recorded value. An input the
+    reader cannot resolve stays unread in every view and refuses when the
+    contact needs the probe. Unresolved inputs do not count toward the
+    alternate-value bound. More than 3 inputs with known alternate values
+    refuse before probing; up to 27 line environments are judged.
+    Every braced expansion form not known to be literal is a possible
+    evaluation and marks every probe input unresolved, regardless of export
+    or inheritance. Digits-only parameter offsets and subscripts remain
+    known. The shell segmenter retains evaluation evidence through carried
+    bodies and substitutions. It recognizes continued evaluation openers
+    before replacing substitution text, using the segmenter's own lexical
+    state and preserving the original segment boundaries.
+    The segmenter's quote, comment and heredoc rules distinguish executable
+    expressions from data. Recognized arithmetic command operands, setters
+    with an expanding destination and whole-shell export options add the
+    same uncertainty. This is a conservative reader, not a complete shell
+    evaluator; the recognized forms do not establish exhaustive coverage.
+    Arithmetic operand positions include the supported zsh builtin forms.
+    Unbraced parameter subscripts, continued forms included, retain evaluation
+    evidence for special and non-ASCII parameter names too.
+    Operand checks retain the unfilled reading in its shell context; filled
+    words add checks and never suppress that reading.
+    The supported formatted-output readers share option-value boundaries.
+    Nonliteral words in option or format positions retain arithmetic and
+    object-input uncertainty, including words after a literal format while
+    options remain open. This includes expansion into several words; quoted
+    literal characters keep their provenance. Configuration uncertainty has
+    its own reading of options that may conceal a destination. An option
+    value with an unsettled word count adds configuration uncertainty even
+    when its first character is literal. Quoted scalar formats retain their
+    single-word provenance for plain ASCII names and supported
+    single-character special parameters. Other quoted parameter forms retain word-count
+    uncertainty. Fully literal and literal-led data words do not
+    add configuration uncertainty.
+    Supported top-level writes, loops and sourced commands invalidate tracked
+    literals through leading assignments and recognized precommand modifiers
+    or launchers. Unresolved prefixes or programs and unread writer effects
+    invalidate all tracked values. Writes inside grouped bodies are not fully
+    tracked. Coverage remains conservative and does not establish a complete
+    shell evaluator.
+    Accepted refusals include a single expanding formatted-output word and
+    expanding options or formats after literal assignments. Their unread
+    object inputs refuse ordinary fetches and pulls when recursion is on,
+    even without inherited inputs. A literal string format and an explicit
+    option terminator keep data outside the additional operand check.
+    Unsettled option values can refuse commands even with recursion off.
+    Quoted substitutions, quoted subscripts, complex quoted parameter forms
+    and unquoted brace forms are conservative refusals in option values.
+    Non-ASCII parameter names also retain uncertainty in option values,
+    even where a shell would keep their expansion to one word.
+    Supported writer forms can lose tracking even when they do not actually
+    write. Recognized external
+    launchers can also discard tracking although their child cannot change
+    the parent shell.
+    The tokens-only configuration reader retains its earlier conservative
+    refusals where quote provenance is unavailable.
+    Ordinary output without format or destination operands adds no such check.
+    Numeric special parameters remain known in arithmetic operand positions.
+    Explicit inline shell bodies retain their shell's operand rules;
+    an unspecified shell retains the conservative supported readings.
+    An assignment on the current Git command or its direct launcher is
+    certain; a carried prefix remains uncertain.
+    Runner children independently keep or clear each known input, with
+    the same 3-input bound. A generated index or an unproved callback
+    index remains unresolved. A launcher that clears its whole environment
+    marks every probe input unresolved for the line, without consuming the
+    bound. Its own direct command still has certain absent or assigned
+    inputs. These conservative views can refuse a command even when the
+    actual child would not recurse. An index
+    too large to read within the probe's limits refuses every command that
+    may recurse and reads the index: fetch, pull, a remote update and
+    adding a remote that fetches. The command line clears these with the
+    recursion-off option on fetch and pull; earlier authority refusals
+    remain, including those on carried callbacks. A remote update or an added
+    remote has no such option, so name the remote in a fetch that turns
+    recursion off. A push whose recursion may be on, by its command line or
+    by a recursion setting in any configuration scope, a user's own
+    included, and in the check mode too, refuses without probing whether
+    nested repositories are present, since it recurses into the nested
+    repositories of the revisions it sends, which the guards do not read.
+    Whoever sets push recursion on, in a project or for their own account,
+    needs the recursion-off option on each push, and a push that leaves
+    recursion off keeps its verdict;
+  - a new copy, which is judged by every address the configuration gives
+    any remote, since it may use any of them, and by the settings of its
+    own command line;
+  - a command whose options include one the guard cannot read or place,
+    or a word that one option may take as its value and Git may read as an
+    option of its own;
+  - any other command the guards list as contacting a remote whose contact
+    they do not resolve.
+
+  Options are read as Git reads them, abbreviations and attached or
+  separate values included, and an option the guard cannot read as turning
+  a risk off counts as on. Git takes the word after an option that needs a
+  value as that value, whatever it looks like, so a word counts as an
+  option only where the guard can tell it is one. A configuration or an
+  index the guard cannot read, a read that exceeds its time or size
+  bounds, or a repository it cannot locate, refuses and names the cause.
+  Transports Git runs itself or ships keep their verdict. The way
+  through: name one remote with a clear reading, limit the command to what
+  the guards can prove, reach the remote over a transport Git runs itself,
+  have the operator run the command, or land a reviewed policy that names
+  the helper. The fetch both guards allow while the policy authority is
+  unresolved is held to the same transport rule.
+- A credential helper Git starts for a command that contacts a remote is
+  judged as a command, so exec-guard's account rule refuses one it matches.
+  When the landed policy's `git.admitted_helpers` names that helper,
+  written as the command Git runs, the account finding is skipped on those
+  commands only, never on a command that reads the stored credential
+  directly, and every other finding on the helper stands.
+- Two keys, two rules, no overlap. `git.admitted_helpers` names helper
+  programs: it governs the transport rule above and the credential-helper
+  relief beside it. `git.agent_remote_urls` names remote URLs: it governs
+  the agent fetch and push rule, with its fixed GitHub CLI helper. Neither
+  key relaxes the other's rule: a URL in `git.agent_remote_urls` admits no
+  helper program, and a helper in `git.admitted_helpers` admits no agent
+  remote. Where both rules meet the GitHub CLI credential helper on an
+  agent fetch or push, each judges by its own key alone.
 - A Git call that stages working-tree files it does not name (`git add
   .`, `-A`, `-u`, a directory, `git commit -a` or a commit pathspec, `git
   stash` with or without `-u` or `-a`) is judged by the files Git would
@@ -1146,8 +1319,10 @@ reworded. The default, `builtin`, runs the built-in patterns alone.
   remote (a partial clone) also needs git 2.46 or later: the setting arrives
   in 2.45, but only 2.46 stops the diff prefetch from starting a fetch. Before
   any staged object is read, the staged listing, the attribute lookup and the
-  scan read the repository's promisor setting in the scan's own configuration
-  view; an older git, or a setting that cannot be read, is a failed commit.
+  scan read the repository's promisor settings in the scan's own configuration
+  view, by the same rule the guards use for promisor remotes, which counts
+  every way a partial clone registers one; an older git, or a configuration
+  that cannot be read, is a failed commit.
   The clone's own `.git/info/attributes` still applies, since
   nothing committed or staged can change it. gitleaks cannot read a path
   with a backslash, double quote or control character reliably (it skips a
@@ -1850,6 +2025,8 @@ checked, so a symlink does not remove the target owner's protection.
   options and environment, including alias overrides. The `ext::` transport
   syntax refuses because its percent expansion is not a classified shell
   body; this includes configured URLs, URL rewrites and direct helper calls.
+  Any other transport that starts a remote helper program refuses the same
+  way unless the landed `git.admitted_helpers` names it (TSK-1489).
   A preceding config write that could change command settings or a saved-instruction rewrite
   makes the next Git command's runner state unknown; run those commands
   separately so the guard can read the resulting state. The same holds for

@@ -369,7 +369,15 @@ fn runner_violations(
                         root,
                         outcome,
                     );
-                    if admitted && super::agent_transport::exempt_body(body) {
+                    // Each key relaxes the account finding by its own rule
+                    // alone: TSK-1489 AC-7, a credential helper the landed
+                    // `git.admitted_helpers` names, started by a command
+                    // that contacts a remote; TSK-1479, the exempt helper
+                    // on an agent fetch or push to an admitted remote URL.
+                    // Every other finding stands.
+                    if body.admitted_helper
+                        || (admitted && super::agent_transport::exempt_body(body))
+                    {
                         findings
                             .retain(|finding| !super::agent_transport::is_account_finding(finding));
                     }

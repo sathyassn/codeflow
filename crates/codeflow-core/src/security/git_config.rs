@@ -107,10 +107,60 @@ impl EffectiveConfig {
     }
 }
 
+/// The promisor remotes Git registers from the configuration `entries`, as
+/// Git's own registration reads them. Each entry is a key (section and
+/// variable lower case, subsection as written) and its raw value (`None` for
+/// a key written without `=`), in Git's order. Registered:
+///
+/// - the remote that the repository-wide partial-copy setting names;
+/// - each remote with a promisor setting, unless Git reads its value as false;
+/// - each remote with a partial-copy filter.
+///
+/// A setting without a usable name gives the empty name. Sorted, without
+/// duplicates; empty for a repository that is no partial copy. The guards and
+/// the commit-time secret scan both read promisor state through this one
+/// function.
+pub(crate) fn promisor_remotes<'a>(
+    entries: impl IntoIterator<Item = (&'a [u8], Option<&'a [u8]>)>,
+) -> Vec<Vec<u8>> {
+    let mut names: Vec<Vec<u8>> = Vec::new();
+    for (key, value) in entries {
+        if key == b"extensions.partialclone" {
+            names.push(value.unwrap_or_default().to_vec());
+            continue;
+        }
+        let Some(rest) = key.strip_prefix(b"remote.") else {
+            continue;
+        };
+        let (name, variable) = match rest.iter().rposition(|byte| *byte == b'.') {
+            Some(dot) => (&rest[..dot], &rest[dot + 1..]),
+            None => (&rest[..0], rest),
+        };
+        let registers = match variable {
+            b"promisor" => value.is_none_or(|value| {
+                std::str::from_utf8(value)
+                    .ok()
+                    .and_then(super::git::config_boolean)
+                    != Some(false)
+            }),
+            b"partialclonefilter" => true,
+            _ => false,
+        };
+        if registers {
+            names.push(name.to_vec());
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 /// The value of an [`Environment`] entry that removes the variable from the
 /// reading's child process, for a command whose launcher removes it
 /// (`env -u NAME`, `env -i`). No real value holds a NUL byte.
 pub(crate) const UNSET: &str = "\0";
+
+pub(crate) const UNREAD_PROBE: &str = "\0unread-probe";
 
 /// Give `command` the entries of `environment`, removing each [`UNSET`] one.
 fn apply_environment(command: &mut std::process::Command, environment: &Environment) {
@@ -471,10 +521,326 @@ pub(crate) fn repository_of(
     }
 }
 
+/// The repository a Git call works in, as Git finds it from the call's
+/// location inputs alone (TSK-1489).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Location {
+    /// The common Git directory, as an absolute path.
+    pub(crate) common: PathBuf,
+    /// The work tree's top-level folder; `None` in a bare repository or
+    /// from inside the Git directory.
+    pub(crate) top: Option<PathBuf>,
+    pub(crate) bare: bool,
+}
+
+/// The environment variables that select the repository a Git call works
+/// in.
+pub(crate) const LOCATION_ENVIRONMENT: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+    "GIT_DISCOVERY_ACROSS_FILESYSTEM",
+];
+
+/// A probe of the repository the call works in, built on
+/// [`crate::git::judging_command`]: only the call's location inputs, and the
+/// inputs a caller names for its own reading, reach it (the directory,
+/// repository, work-tree and bare options, and [`LOCATION_ENVIRONMENT`], the
+/// call's own value or else the inherited one the call also sees). Its configuration settings, whether given as options
+/// or through the environment, never do, so they cannot move what the probe
+/// reports.
+fn location_command(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<std::process::Command, String> {
+    probe_command(cwd, globals, environment, &[])
+}
+
+/// [`location_command`] that also forwards each variable in `extra` the
+/// same way, the call's own value or else the inherited one.
+fn probe_command(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    extra: &[&str],
+) -> Result<std::process::Command, String> {
+    let mut command = crate::git::judging_command();
+    command.current_dir(cwd).stdin(Stdio::null());
+    for name in LOCATION_ENVIRONMENT.iter().chain(extra) {
+        if let Some(value) = environment.get(*name) {
+            if value == UNSET {
+                command.env_remove(name);
+            } else if value == UNREAD_PROBE {
+                return Err("cannot establish an index or object input for this child; run the commands separately".into());
+            } else {
+                command.env(name, value);
+            }
+        } else if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    let mut at = 0;
+    while at < globals.len() {
+        let arg = globals[at].as_str();
+        if matches!(arg, "-C" | "--git-dir" | "--work-tree") {
+            let value = globals.get(at + 1).ok_or(
+                "cannot read the repository the command works in: missing global-option value",
+            )?;
+            command.args([arg, value]);
+            at += 2;
+        } else if super::git::GLOBAL_VALUE_OPTIONS.contains(&arg) {
+            at += 2;
+        } else {
+            if arg == "--bare"
+                || arg == "--no-replace-objects"
+                || arg.starts_with("--git-dir=")
+                || arg.starts_with("--work-tree=")
+                || (arg.starts_with("-C") && arg.len() > 2)
+            {
+                command.arg(arg);
+            }
+            at += 1;
+        }
+    }
+    Ok(command)
+}
+
+/// The repository the call works in. Any probe failure or timeout is an
+/// error, so the caller refuses.
+pub(crate) fn locate(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<Location, String> {
+    let unread = |_| "cannot read the repository the command works in".to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = location_command(cwd, globals, environment)?;
+    probe.args([
+        "--no-pager",
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+        "--is-bare-repository",
+        "--is-inside-work-tree",
+    ]);
+    let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+    let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
+    // Git ends each value with one newline; a carriage return stays part of
+    // the path, so a directory whose name ends in one is not misread.
+    let lines: Vec<&str> = text
+        .strip_suffix('\n')
+        .ok_or_else(|| unread(String::new()))?
+        .split('\n')
+        .collect();
+    let [common, bare, inside] = lines.as_slice() else {
+        return Err(unread(String::new()));
+    };
+    let flag = |value: &str| match value {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(unread(String::new())),
+    };
+    let (bare, inside) = (flag(bare)?, flag(inside)?);
+    if common.is_empty() || !Path::new(common).is_absolute() {
+        return Err(unread(String::new()));
+    }
+    let top = if inside {
+        let mut probe = location_command(cwd, globals, environment)?;
+        probe.args([
+            "--no-pager",
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+        ]);
+        let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+        let text = String::from_utf8(bytes).map_err(|_| unread(String::new()))?;
+        let top = text.strip_suffix('\n').unwrap_or(&text);
+        if top.is_empty() || top.contains('\n') || !Path::new(top).is_absolute() {
+            return Err(unread(String::new()));
+        }
+        Some(PathBuf::from(top))
+    } else {
+        None
+    };
+    Ok(Location {
+        common: PathBuf::from(common),
+        top,
+        bare,
+    })
+}
+
+/// Whether the index the call reads holds a record of a nested repository
+/// or a definition file for them, or the last commit holds one, as Git itself
+/// lists them, read with the call's location inputs and the variables that
+/// select its index file and its objects only. The listing covers the whole index and is not narrowed by
+/// the call's own settings. Any probe failure, timeout or listing over the
+/// output limit is an error, so the caller refuses.
+pub(crate) fn index_gitlinks(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<bool, String> {
+    let unread = |_| "cannot read the index of the repository the command works in".to_string();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let listing = |paths: &str| -> Result<String, String> {
+        let mut probe = probe_command(
+            cwd,
+            globals,
+            environment,
+            &["GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"],
+        )?;
+        probe
+            .env("GIT_LITERAL_PATHSPECS", "0")
+            .env_remove("GIT_GLOB_PATHSPECS")
+            .env_remove("GIT_NOGLOB_PATHSPECS")
+            .env_remove("GIT_ICASE_PATHSPECS");
+        probe.args([
+            "--no-pager",
+            "ls-files",
+            "--format=%(objectmode)",
+            "--",
+            paths,
+        ]);
+        let bytes = bounded_output(&mut probe, deadline).map_err(unread)?;
+        String::from_utf8(bytes).map_err(|_| unread(String::new()))
+    };
+    // Entries are selected from the top of the repository, so the directory
+    // the call runs in does not change what is read.
+    if listing(":/")?.split('\n').any(|mode| mode == "160000")
+        || listing(":(top,literal).gitmodules")?
+            .split('\n')
+            .any(|mode| !mode.is_empty())
+    {
+        return Ok(true);
+    }
+    commit_holds_definition(cwd, globals, environment, deadline)
+}
+
+/// The variables that select the objects a call reads, forwarded to the
+/// probes of the last commit: the call's own value, else the inherited one.
+/// Whether the call has a value an earlier command of its line set is for the
+/// caller to decide; it judges the call with and without it.
+pub(crate) const OBJECT_INPUTS: &[&str] = &[
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+];
+
+/// Whether the last commit holds a definition file for nested repositories,
+/// read from the top of the repository. Only a branch whose name is proven to
+/// resolve to nothing holds none; a commit or tree that cannot be read, a ref
+/// that cannot be read and every other probe failure are errors. The probe
+/// never fetches a missing object, so one the call could fetch is an error
+/// too.
+fn commit_holds_definition(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+    deadline: Instant,
+) -> Result<bool, String> {
+    let unread =
+        |_| "cannot read the last commit of the repository the command works in".to_string();
+    let command = |extra: &[&str]| -> Result<std::process::Command, String> {
+        let mut command = probe_command(cwd, globals, environment, OBJECT_INPUTS)?;
+        command.arg("--no-pager").args(extra);
+        Ok(command)
+    };
+    let run = |extra: &[&str]| -> Result<(Vec<u8>, std::process::ExitStatus), String> {
+        bounded_run(&mut command(extra)?, deadline).map_err(unread)
+    };
+    let (branch, status) = run(&["symbolic-ref", "-q", "HEAD"])?;
+    if status.success() {
+        let branch = String::from_utf8(branch).map_err(|_| unread(String::new()))?;
+        let branch = branch.strip_suffix('\n').unwrap_or(&branch);
+        if !branch.starts_with("refs/") || branch.contains('\n') {
+            return Err(unread(String::new()));
+        }
+        let (_, status) = run(&["show-ref", "--verify", "-q", branch])?;
+        match status.code() {
+            Some(0) => {}
+            Some(1) => {
+                // Absent only when no file holds the ref, so a ref that
+                // cannot be read is not taken for a missing one.
+                let (path, status) =
+                    run(&["rev-parse", "--path-format=absolute", "--git-path", branch])?;
+                let path = String::from_utf8(path).map_err(|_| unread(String::new()))?;
+                let path = path.strip_suffix('\n').unwrap_or(&path);
+                let missing = status.success()
+                    && Path::new(path).is_absolute()
+                    && crate::absence::proven_absent(Path::new(path)).unwrap_or(false);
+                return if missing {
+                    Ok(false)
+                } else {
+                    Err(unread(String::new()))
+                };
+            }
+            _ => return Err(unread(String::new())),
+        }
+    }
+    let (_, status) = run(&["rev-parse", "-q", "--verify", "HEAD^{tree}"])?;
+    if !status.success() {
+        return Err(unread(String::new()));
+    }
+    let mut tree = command(&[
+        "ls-tree",
+        "--full-tree",
+        "--name-only",
+        "HEAD",
+        "--",
+        ".gitmodules",
+    ])?;
+    tree.env("GIT_LITERAL_PATHSPECS", "1")
+        .env_remove("GIT_GLOB_PATHSPECS")
+        .env_remove("GIT_NOGLOB_PATHSPECS")
+        .env_remove("GIT_ICASE_PATHSPECS");
+    let bytes = bounded_output(&mut tree, deadline).map_err(unread)?;
+    Ok(!bytes.is_empty())
+}
+
+/// The name of the branch the call's repository has checked out. A
+/// detached HEAD, like any probe failure or timeout, is an error.
+pub(crate) fn current_branch(
+    cwd: &Path,
+    globals: &[String],
+    environment: &Environment,
+) -> Result<String, String> {
+    let unread = "cannot read the current branch: HEAD is detached or cannot be read";
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut probe = location_command(cwd, globals, environment)?;
+    probe.args(["--no-pager", "symbolic-ref", "-q", "HEAD"]);
+    let bytes = bounded_output(&mut probe, deadline).map_err(|_| unread.to_string())?;
+    let text = String::from_utf8(bytes).map_err(|_| unread.to_string())?;
+    let name = text
+        .strip_suffix('\n')
+        .unwrap_or(&text)
+        .strip_prefix("refs/heads/")
+        .ok_or(unread)?;
+    if name.is_empty() || name.contains('\n') {
+        return Err(unread.into());
+    }
+    Ok(name.to_string())
+}
+
 pub(crate) fn bounded_output(
     command: &mut std::process::Command,
     deadline: Instant,
 ) -> Result<Vec<u8>, String> {
+    let (bytes, status) = bounded_run(command, deadline)?;
+    if !status.success() {
+        return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
+    }
+    Ok(bytes)
+}
+
+/// [`bounded_output`] that also returns the exit status, for a probe whose
+/// failure status is an answer.
+fn bounded_run(
+    command: &mut std::process::Command,
+    deadline: Instant,
+) -> Result<(Vec<u8>, std::process::ExitStatus), String> {
     const LIMIT: u64 = 4 * 1024 * 1024;
     if Instant::now() >= deadline {
         return Err("cannot verify Git configuration: child exceeded 3 seconds".into());
@@ -522,10 +888,7 @@ pub(crate) fn bounded_output(
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    if !status.success() {
-        return Err("cannot verify Git configuration: git rejected the configuration (including malformed values or an include loop)".into());
-    }
-    Ok(bytes)
+    Ok((bytes, status))
 }
 
 #[cfg(test)]

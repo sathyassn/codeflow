@@ -1786,6 +1786,191 @@ fn configuration_launch<'w>(
 }
 
 /// Variable-writing builtins have destination operands, unlike ordinary data.
+#[derive(Default)]
+struct OutputOptions<'a> {
+    format: Option<&'a str>,
+    values_at: usize,
+    destinations: Vec<&'a str>,
+    uncertain: bool,
+    configuration_uncertain: bool,
+    configuration_word_count_uncertain: bool,
+}
+
+/// Both readers consume output options with the same operand boundaries.
+fn output_builtin_options<'a>(program: &str, args: &'a [String]) -> OutputOptions<'a> {
+    let mut result = OutputOptions::default();
+    let mut at = 0;
+    while let Some(option) = args.get(at) {
+        if output_word_unsettled(option) {
+            result.uncertain = true;
+            result.configuration_uncertain |= output_option_unsettled(option);
+            break;
+        }
+        if !option.starts_with('-') {
+            break;
+        }
+        at += 1;
+        if option == "--" {
+            break;
+        }
+        for (index, flag) in option.char_indices().skip(1) {
+            let takes_value = flag == 'v' || program == "print" && "uCxXf".contains(flag);
+            if !takes_value {
+                result.uncertain |= program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
+                result.configuration_uncertain |=
+                    program == "print" && !"abcDilmnNoOpPrsSzRen".contains(flag);
+                continue;
+            }
+            let attached = &option[index + flag.len_utf8()..];
+            let value = if attached.is_empty() {
+                let value = args.get(at).map(String::as_str);
+                at += usize::from(value.is_some());
+                value
+            } else {
+                Some(attached)
+            };
+            let Some(value) = value else {
+                result.uncertain = true;
+                result.configuration_uncertain = true;
+                break;
+            };
+            result.configuration_uncertain |= output_option_unsettled(value);
+            result.configuration_word_count_uncertain |= output_value_multiple_words(value);
+            match flag {
+                'v' => result.destinations.push(value),
+                'f' => result.format = Some(value),
+                _ => {
+                    let unsettled = output_word_unsettled(value);
+                    result.uncertain |= unsettled;
+                    result.configuration_uncertain |= unsettled;
+                }
+            }
+            break;
+        }
+    }
+    if program == "printf" {
+        result.format = args.get(at).map(String::as_str);
+        at += usize::from(result.format.is_some());
+    }
+    result.uncertain |= result.format.is_some_and(output_word_unsettled);
+    result.values_at = at;
+    result
+}
+
+fn output_word_unsettled(word: &str) -> bool {
+    unresolved_word(word)
+        || expands_marked(word)
+        || has_glob(word)
+        || word.contains('{') && (brace_group(word).is_some() || brace_expand(word).is_none())
+}
+
+/// Only an unsettled option prefix can conceal a destination option.
+fn output_option_unsettled(word: &str) -> bool {
+    output_word_unsettled(word)
+        && word.chars().next().is_some_and(|first| {
+            let first = match marked_char(first) {
+                Some((plain, true)) => plain,
+                _ => first,
+            };
+            matches!(
+                first,
+                '-' | '$' | '`' | '\u{1}' | '\u{2}' | '*' | '?' | '[' | '^' | '(' | '{' | '~' | '<'
+            )
+        })
+}
+
+/// An option value must stay one word before option parsing resumes.
+fn output_value_multiple_words(word: &str) -> bool {
+    if unresolved_word(word) || has_glob(word) || word.contains('{') {
+        return true;
+    }
+    let mut chars = word.chars();
+    let mut dollar_parameter_next = false;
+    while let Some(ch) = chars.next() {
+        let dollar_parameter_character = std::mem::take(&mut dollar_parameter_next);
+        match marked_char(ch) {
+            Some(('`', true)) => return true,
+            Some(('$', true)) => {
+                let tail = unmarked(chars.as_str());
+                if let Some(braced) = tail.strip_prefix('{') {
+                    // Only a simple quoted scalar has a settled word count.
+                    if !braced
+                        .split_once('}')
+                        .is_some_and(|(name, _)| is_identifier(name))
+                    {
+                        return true;
+                    }
+                } else {
+                    // Keep the earlier conservative reading of the second
+                    // character of a scalar special parameter.
+                    if dollar_parameter_character {
+                        if tail.starts_with(['@', '*', '(', '=']) {
+                            return true;
+                        }
+                        continue;
+                    }
+                    let end = tail
+                        .find(|ch: char| ch.is_ascii() && !ch.is_ascii_alphanumeric() && ch != '_')
+                        .unwrap_or(tail.len());
+                    let plain_name = is_identifier(&tail[..end]) && !tail[end..].starts_with('[');
+                    let special = tail.chars().next().is_some_and(|ch| {
+                        ch.is_ascii_digit() || matches!(ch, '#' | '?' | '$' | '!' | '-')
+                    });
+                    if !plain_name && !special {
+                        return true;
+                    }
+                    dollar_parameter_next = special && tail.starts_with('$');
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+/// Keep quote provenance on output syntax while leaving flags and formats readable.
+fn output_reader_words(segment: &str) -> Vec<String> {
+    command_argv_marked(segment)
+        .1
+        .into_iter()
+        .map(|word| {
+            word.chars()
+                .map(|ch| match marked_char(ch) {
+                    Some(
+                        (_, true)
+                        | (
+                            '$' | '`' | '*' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | ',' | '^'
+                            | '~' | '#' | '<' | '>',
+                            false,
+                        ),
+                    )
+                    | None => ch,
+                    Some((plain, _)) => plain,
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Word-count evidence is consumed only with quote provenance. The raw
+/// configuration reading keeps its earlier refusals and remains additive.
+fn configuration_output_trigger(
+    program: &str,
+    args: &[String],
+    quote_provenance: bool,
+) -> Option<String> {
+    let options = output_builtin_options(program, args);
+    options
+        .destinations
+        .iter()
+        .find_map(|word| configuration_destination(program, &unmarked(word)))
+        .or_else(|| {
+            (options.configuration_uncertain
+                || quote_provenance && options.configuration_word_count_uncertain)
+                .then(|| "unresolved output builtin options".into())
+        })
+}
+
 fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<String> {
     if matches!(program, "export" | "unset") || is_declare_builtin(program) {
         if is_declare_builtin(program)
@@ -1843,27 +2028,7 @@ fn configuration_builtin_trigger(program: &str, args: &[String]) -> Option<Strin
                 .iter()
                 .find_map(|word| configuration_destination(program, word))
         }
-        "printf" | "print" => {
-            let options = args.iter().take_while(|arg| arg.starts_with('-'));
-            for (index, option) in options.enumerate() {
-                if option == "--" {
-                    break;
-                }
-                if let Some(flags) = option.strip_prefix('-') {
-                    if let Some(position) = flags.find('v') {
-                        let attached = &flags[position + 1..];
-                        let destination = if attached.is_empty() {
-                            args.get(index + 1).map(String::as_str)
-                        } else {
-                            Some(attached)
-                        };
-                        return destination
-                            .and_then(|word| configuration_destination(program, word));
-                    }
-                }
-            }
-            None
-        }
+        "printf" | "print" => configuration_output_trigger(program, args, false),
         "getopts" => args
             .get(1)
             .and_then(|word| configuration_destination(program, word)),
@@ -1903,9 +2068,16 @@ pub(crate) fn configuration_shell_change(segment: &str) -> Option<String> {
     {
         return Some(reason);
     }
-    if let Some(reason) = strip_launchers(&words)
-        .and_then(|(program, args)| configuration_builtin_trigger(program, args))
-    {
+    let mut output_words = output_reader_words(segment);
+    strip_reserved_words(&mut output_words);
+    if let Some(reason) = strip_launchers(&words).and_then(|(program, args)| {
+        if matches!(program, "print" | "printf") {
+            strip_launchers(&output_words)
+                .and_then(|(program, args)| configuration_output_trigger(program, args, true))
+        } else {
+            configuration_builtin_trigger(program, args)
+        }
+    }) {
         return Some(reason);
     }
     // Read expansion syntax before quote removal. Single-quoted or escaped
@@ -7437,6 +7609,8 @@ pub(crate) fn expand_commands(command: &str) -> Vec<String> {
 /// What [`expand_commands_read`] reads from a line.
 #[derive(Debug, Default)]
 pub(crate) struct Expanded {
+    /// Executable arithmetic found by the segmenter, including carried bodies.
+    pub(crate) arithmetic: bool,
     /// The simple commands the line runs ([`expand_commands`]).
     pub(crate) segments: Vec<String>,
     /// Each command word whose expansion the guard cannot fill in (`$CMD`
@@ -7507,18 +7681,39 @@ fn expand_shell_commands(command: &str) -> Expanded {
 }
 
 fn expand_command_bodies(command: &str, git_bodies: bool) -> Expanded {
-    let raw = command_segments(command);
-    let mut out = Expanded::default();
-    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies);
+    let (raw, arithmetic) = command_segments_read(command, 0);
+    let mut out = Expanded {
+        arithmetic,
+        ..Expanded::default()
+    };
+    expand_segments(raw, &mut out, 1, &mut Literals::default(), git_bodies, true);
     out
 }
 
 /// Split shell syntax without also expanding the code carried by a command.
 /// Position-aware consumers already visit those bodies with their own state.
 pub(crate) fn command_segments(command: &str) -> Vec<String> {
+    command_segments_read(command, 0).0
+}
+
+// Internal evidence is removed before consumers assign segment positions.
+const ARITHMETIC_READ: &str = "\0arithmetic_read";
+
+fn command_segments_read(command: &str, depth: usize) -> (Vec<String>, bool) {
     let mut segments = Vec::new();
-    split_into_segments(command, &mut segments, 0, false);
-    segments
+    split_into_segments(command, &mut segments, depth, false);
+    let arithmetic = segments.iter().any(|segment| segment == ARITHMETIC_READ);
+    segments.retain(|segment| segment != ARITHMETIC_READ);
+    (segments, arithmetic)
+}
+
+fn zsh_operand_context(words: &[String], inherited: bool) -> bool {
+    // Unknown shells retain the conservative supported shell readings.
+    strip_launchers(words).map_or(inherited, |(program, _)| match launcher_name(program) {
+        "zsh" => true,
+        "bash" | "sh" | "dash" | "ash" => false,
+        _ => inherited,
+    })
 }
 
 /// Push each segment, then the commands its text carries, unwrapped again
@@ -7534,6 +7729,7 @@ fn expand_segments(
     depth: usize,
     literals: &mut Literals,
     git_bodies: bool,
+    zsh_operands: bool,
 ) {
     for seg in segments {
         // Each word as written too, for the readings below (TSK-1456).
@@ -7541,6 +7737,8 @@ fn expand_segments(
         let written = toks.len();
         strip_reserved_words(&mut toks);
         marks.drain(..written - toks.len());
+        out.arithmetic |= runners::probe_arithmetic_in_context(&seg, &toks, literals, zsh_operands);
+        let body_zsh = zsh_operand_context(&toks, zsh_operands);
         let carries_git = strip_launchers(&toks)
             .is_some_and(|(program, args)| runners::arguments(program, args).is_some());
         let carried = if !git_bodies && carries_git {
@@ -7626,16 +7824,15 @@ fn expand_segments(
         // its expansions is a reading of its own, with no unread word.
         let joined_first = out.segments.len();
         if let Some(joined) = joined_expansion_reading(&seg) {
-            expand_bodies(vec![joined], out, depth, literals, git_bodies);
+            expand_bodies(vec![joined], out, depth, literals, git_bodies, zsh_operands);
         }
         let joined_within = joined_first..out.segments.len();
-        let first = out.segments.len();
-        expand_bodies(alternatives, out, depth, literals, git_bodies);
-        let within = first..out.segments.len();
+        expand_bodies(alternatives, out, depth, literals, git_bodies, zsh_operands);
+        let within = joined_within.end..out.segments.len();
         // Only the line's own top level: an assignment inside a body or a
         // subshell may not outlive it.
         if depth == 1 {
-            literals.note(&words);
+            literals.note_segment(&seg);
         }
         out.segments.push(seg);
         if !joined_within.is_empty() {
@@ -7655,7 +7852,7 @@ fn expand_segments(
         if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
             out.segments.push(PROGRAM_UNREAD.to_string());
         }
-        expand_bodies(bodies, out, depth, literals, git_bodies);
+        expand_bodies(bodies, out, depth, literals, git_bodies, body_zsh);
     }
 }
 
@@ -7781,6 +7978,7 @@ fn expand_bodies(
     depth: usize,
     literals: &mut Literals,
     git_bodies: bool,
+    zsh_operands: bool,
 ) {
     if bodies.is_empty() {
         return;
@@ -7792,9 +7990,9 @@ fn expand_bodies(
         return;
     }
     for body in bodies {
-        let mut inner = Vec::new();
-        split_into_segments(&body, &mut inner, depth, false);
-        expand_segments(inner, out, depth + 1, literals, git_bodies);
+        let (inner, arithmetic) = command_segments_read(&body, depth);
+        out.arithmetic |= arithmetic;
+        expand_segments(inner, out, depth + 1, literals, git_bodies, zsh_operands);
     }
 }
 
@@ -8031,13 +8229,87 @@ pub(crate) fn builtin_words(mut words: &[String]) -> &[String] {
 }
 
 impl Literals {
+    fn note_segment(&mut self, segment: &str) {
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
+        let mut output_words = output_reader_words(segment);
+        strip_reserved_words(&mut output_words);
+        self.note_with_output(&words, &output_words);
+    }
+
     /// Record the assignments of one segment's words.
     fn note(&mut self, words: &[String]) {
+        self.note_with_output(words, words);
+    }
+
+    fn note_with_output(&mut self, words: &[String], output_words: &[String]) {
         fn assignment(w: &str) -> Option<(&str, &str)> {
             w.split_once('=')
                 .filter(|(name, _)| !name.is_empty() && is_identifier(name))
         }
         let words = builtin_words(words);
+        let at = launched_at(words).map(|(at, _)| at);
+        let launched = at.and_then(|at| words.get(at..)).unwrap_or_default();
+        let output_args = at
+            .and_then(|at| builtin_words(output_words).get(at + 1..))
+            .unwrap_or_default();
+        let assignments_only = words.iter().all(|word| assignment(word).is_some());
+        let unresolved_launch = !assignments_only
+            && (at.is_none()
+                || launcher_effects(words).1.is_some()
+                || words[..at.map_or(words.len(), |at| at + 1)]
+                    .iter()
+                    .any(|word| output_word_unsettled(word)));
+        // These writes can replace tracked values without an assignment word.
+        // Forget all bindings when their complete effects are not established.
+        let writer = unresolved_launch
+            || launched.first().is_some_and(|program| {
+                matches!(
+                    program.as_str(),
+                    "read"
+                        | "getln"
+                        | "mapfile"
+                        | "readarray"
+                        | "getopts"
+                        | "unset"
+                        | "set"
+                        | "shift"
+                        | "eval"
+                        | "let"
+                        | "integer"
+                        | "float"
+                        | "declare"
+                        | "typeset"
+                        | "local"
+                        | "readonly"
+                        | "export"
+                        | "wait"
+                        | "for"
+                        | "select"
+                        | "foreach"
+                        | "source"
+                        | "."
+                        | "vared"
+                        | "coproc"
+                        | "zparseopts"
+                        | "zstyle"
+                        | "zformat"
+                        | "strftime"
+                        | "sysread"
+                        | "zstat"
+                        | "private"
+                ) || matches!(program.as_str(), "print" | "printf") && {
+                    let options = output_builtin_options(program, output_args);
+                    options.uncertain
+                        || !options.destinations.is_empty()
+                        || options.format.is_some_and(|format| format.contains("%n"))
+                }
+            });
+        if writer {
+            for value in self.0.values_mut() {
+                *value = None;
+            }
+        }
         let declaring = matches!(
             words.first().map(String::as_str),
             Some("export" | "declare" | "typeset" | "local" | "readonly")
@@ -8218,6 +8490,7 @@ pub(crate) fn git_runner_bodies(command: &str, cwd: &Path) -> Result<Vec<GitRunn
         .map(|body| GitRunnerBody {
             command: body.command,
             directory: body.directory,
+            admitted_helper: body.admitted_helper,
             helper: body.helper,
         })
         .collect())
@@ -8245,6 +8518,18 @@ pub(crate) struct GitRunnerBody {
     /// Whether the command is a credential-helper value, and how Git runs
     /// it.
     pub helper: HelperKind,
+    /// Whether the command is a credential helper the landed
+    /// `git.admitted_helpers` names, started by a command that contacts a
+    /// remote (TSK-1489 AC-7): exec-guard skips its account finding, and
+    /// every other finding on it stands.
+    pub admitted_helper: bool,
+}
+
+/// Whether every remote the Git call `args` (its words after `git`)
+/// contacts is reached over a transport Git runs itself, with no helper
+/// program admitted (TSK-1489): the recovery fetch's transport check.
+pub(crate) fn git_transports_stock(args: &[String], cwd: &Path) -> bool {
+    runners::stock_transports(args, cwd)
 }
 
 /// The environment variables whose value is a program Git runs, as the
@@ -9039,6 +9324,198 @@ pub(crate) fn shell_inline_code(program: &str, args: &[String]) -> Option<String
     (!bodies.is_empty()).then(|| bodies.join("; "))
 }
 
+/// Every braced form not known to be literal may evaluate an indirect value.
+/// Nested expansions still pass through the segmenter's executable reader.
+fn parameter_arithmetic(chars: &[char], dollar: usize) -> bool {
+    if chars.get(dollar + 1) == Some(&'[') {
+        return true;
+    }
+    if chars.get(dollar + 1) == Some(&'{') {
+        return expansion_end(chars, dollar + 1)
+            .is_none_or(|end| !literal_parameter_form(&chars[dollar + 2..end - 1]));
+    }
+    // Some shells also allow an element subscript without braces.
+    parameter_name_end(chars, dollar + 1)
+        .is_some_and(|at| chars.get(at) == Some(&'[') && literal_subscript_end(chars, at).is_none())
+}
+
+fn parameter_name_end(chars: &[char], start: usize) -> Option<usize> {
+    let first = *chars.get(start)?;
+    let mut at = start + 1;
+    if first.is_ascii_alphabetic() || first == '_' || !first.is_ascii() {
+        while chars
+            .get(at)
+            .is_some_and(|c| c.is_ascii_alphanumeric() || *c == '_' || !c.is_ascii())
+        {
+            at += 1;
+        }
+    } else if first.is_ascii_digit() {
+        while chars.get(at).is_some_and(char::is_ascii_digit) {
+            at += 1;
+        }
+    } else if !matches!(first, '@' | '*' | '?' | '$' | '-' | '#' | '!') {
+        return None;
+    }
+    Some(at)
+}
+
+fn literal_subscript_end(chars: &[char], open: usize) -> Option<usize> {
+    let close = open + 1 + chars.get(open + 1..)?.iter().position(|c| *c == ']')?;
+    let index = &chars[open + 1..close];
+    (matches!(index, ['@' | '*']) || literal_digits(index)).then_some(close + 1)
+}
+
+fn literal_digits(chars: &[char]) -> bool {
+    !chars.is_empty() && chars.iter().all(char::is_ascii_digit)
+}
+
+fn literal_parameter_form(body: &[char]) -> bool {
+    let Some(&first) = body.first() else {
+        return false;
+    };
+    if first == '!' && body.len() > 1 && body[1] != ':' {
+        // Enumeration is literal; other indirection can re-evaluate a value.
+        if !body[1].is_ascii_alphabetic() && body[1] != '_' {
+            return false;
+        }
+        return parameter_name_end(body, 1).is_some_and(|at| {
+            body[1..at].iter().all(char::is_ascii)
+                && matches!(&body[at..], ['@' | '*'] | ['[', '@' | '*', ']'])
+        });
+    }
+    // A standalone special parameter is distinct from a length prefix.
+    let length = first == '#' && body.len() > 1 && body[1] != ':';
+    let Some(mut at) = parameter_name_end(body, usize::from(length)) else {
+        return false;
+    };
+    // Broader unbraced name recognition must not settle an earlier unread form.
+    if !body[usize::from(length)..at].iter().all(char::is_ascii) {
+        return false;
+    }
+    if body.get(at) == Some(&'[') {
+        let Some(end) = literal_subscript_end(body, at) else {
+            return false;
+        };
+        at = end;
+    }
+    if at == body.len() {
+        return true;
+    }
+    if length {
+        return false;
+    }
+    match body[at] {
+        '-' | '=' | '+' | '?' | '#' | '%' | '/' | '^' | ',' => true,
+        ':' if body
+            .get(at + 1)
+            .is_some_and(|c| matches!(c, '-' | '=' | '+' | '?')) =>
+        {
+            true
+        }
+        ':' => {
+            let fields = &body[at + 1..];
+            fields.split(|c| *c == ':').count() <= 2
+                && fields.split(|c| *c == ':').all(literal_digits)
+        }
+        _ => false,
+    }
+}
+
+/// Evaluation evidence at an executable opener split by continuations.
+fn continued_arithmetic(chars: &[char], start: usize, depth: usize, code_context: bool) -> bool {
+    if chars.get(start) == Some(&'$') && continued_parameter_arithmetic(chars, start) {
+        return true;
+    }
+    let mut prefix = Vec::new();
+    let mut positions = Vec::new();
+    let mut i = start;
+    let mut continued = false;
+    while i < chars.len() && prefix.len() < 3 {
+        if chars[i] == '\\' && chars.get(i + 1) == Some(&'\n') {
+            continued = true;
+            i += 2;
+        } else {
+            positions.push(i);
+            prefix.push(chars[i]);
+            i += 1;
+        }
+    }
+    if !continued {
+        return false;
+    }
+    if prefix.starts_with(&['(', '(']) || prefix.starts_with(&['$', '(', '(']) {
+        return true;
+    }
+    if prefix.starts_with(&['$', '[']) {
+        return true;
+    }
+    if prefix.starts_with(&['$', '(']) {
+        let (inner, _) = capture_balanced(chars, positions[1] + 1);
+        let mut evidence = Vec::new();
+        split_into_segments(&inner, &mut evidence, depth + 1, code_context);
+        return evidence
+            .iter()
+            .any(|segment| matches!(segment.as_str(), ARITHMETIC_READ | NESTING_UNREAD));
+    }
+    if !prefix.starts_with(&['$', '{']) {
+        return false;
+    }
+    // The caller has already established an executable expansion position.
+    // Read only its parameter text; comments and quoting outside it never
+    // supply lexical state to this evidence.
+    while i < chars.len() {
+        if chars[i] == '\\' && chars.get(i + 1) == Some(&'\n') {
+            i += 2;
+        } else {
+            let c = chars[i];
+            prefix.push(c);
+            i += 1;
+            if c == '}' {
+                break;
+            }
+        }
+    }
+    parameter_arithmetic(&prefix, 0)
+}
+
+fn continued_parameter_arithmetic(chars: &[char], start: usize) -> bool {
+    let mut parameter = vec!['$'];
+    let mut at = start + 1;
+    let mut continued = false;
+    while let Some(&c) = chars.get(at) {
+        if c == '\\' && chars.get(at + 1) == Some(&'\n') {
+            continued = true;
+            at += 2;
+            continue;
+        }
+        if !(c.is_ascii_alphanumeric()
+            || c == '_'
+            || !c.is_ascii()
+            || parameter.len() == 1 && parameter_name_end(&[c], 0).is_some())
+        {
+            break;
+        }
+        parameter.push(c);
+        at += 1;
+    }
+    if parameter_name_end(&parameter, 1) != Some(parameter.len()) || chars.get(at) != Some(&'[') {
+        return false;
+    }
+    while let Some(&c) = chars.get(at) {
+        if c == '\\' && chars.get(at + 1) == Some(&'\n') {
+            continued = true;
+            at += 2;
+            continue;
+        }
+        parameter.push(c);
+        at += 1;
+        if c == ']' {
+            break;
+        }
+    }
+    continued && parameter_arithmetic(&parameter, 0)
+}
+
 /// Split a command into simple-command segments, recursing into `$(…)` and
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
@@ -9116,8 +9593,25 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             i += 1;
             continue;
         }
+        // Keep evidence before substitutions replace their source syntax.
+        // This position has the segmenter's own quote and escape provenance.
+        if c == '$'
+            && (parameter_arithmetic(&chars, i)
+                || continued_arithmetic(
+                    &chars,
+                    i,
+                    depth,
+                    code_context || substitution_output_runs(&cur),
+                ))
+            || c == '(' && !in_double && continued_arithmetic(&chars, i, depth, code_context)
+        {
+            out.push(ARITHMETIC_READ.into());
+        }
         // Command substitution executes even inside double quotes.
         if c == '$' && chars.get(i + 1) == Some(&'(') {
+            if chars.get(i + 2) == Some(&'(') {
+                out.push(ARITHMETIC_READ.into());
+            }
             let (inner, ni) = capture_balanced(&chars, i + 2);
             line.substitution(inner, &cur, code_context, out, depth);
             // The segment keeps a placeholder for the text the shell will
@@ -9216,6 +9710,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 line.finish(continues, out, depth);
             }
             '(' if chars.get(i + 1) == Some(&'(') => {
+                out.push(ARITHMETIC_READ.into());
                 arithmetic += 1;
                 line.end_segment(out, &mut cur, false);
                 i += 2;
@@ -9226,6 +9721,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 i += 2;
             }
             '$' if chars.get(i + 1) == Some(&'[') => {
+                out.push(ARITHMETIC_READ.into());
                 bracket_arithmetic += 1;
                 cur.push_str("$[");
                 i += 2;
@@ -9433,6 +9929,9 @@ impl Line {
         // space when its last word does (OS text rule, issue 79).
         let text = text.trim_matches([' ', '\t', '\n']);
         if !text.is_empty() {
+            if runners::probe_arithmetic_words(&command_argv(text), false) {
+                out.push(ARITHMETIC_READ.into());
+            }
             out.push(text.to_string());
             self.segments.push((self.pipeline, text.to_string()));
         }
@@ -9792,6 +10291,13 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
     let chars: Vec<char> = body.chars().collect();
     let mut i = 0;
     while i < chars.len() {
+        if chars[i] == '$'
+            && (parameter_arithmetic(&chars, i)
+                || continued_arithmetic(&chars, i, depth, false)
+                || chars.get(i + 1) == Some(&'(') && chars.get(i + 2) == Some(&'('))
+        {
+            out.push(ARITHMETIC_READ.into());
+        }
         match chars[i] {
             '\\' => i += 2,
             '$' if chars.get(i + 1) == Some(&'[') => {
@@ -14674,8 +15180,9 @@ const LITERAL_MARK: u32 = 0xF_0000;
 /// stays an expansion ([`ShellWord::marked`]).
 const QUOTED_LIVE_MARK: u32 = 0xF_0080;
 
-/// The stand-in for `c` made literal by a quote or escape; a character
-/// past ASCII is never shell syntax, so it stays as written ([`unmarked_as`]).
+/// The stand-in for an ASCII `c` made literal by a quote or escape.
+/// Other characters stay as written ([`unmarked_as`]); parameter-name readers
+/// conservatively include them because some shells accept non-ASCII names.
 fn literal_mark(c: char) -> char {
     if c.is_ascii() {
         char::from_u32(LITERAL_MARK + u32::from(c)).unwrap_or(c)
@@ -14687,8 +15194,7 @@ fn literal_mark(c: char) -> char {
 /// `c`, read unquoted, in a marked word ([`ShellWord::marked`]). A written
 /// character that falls among the stand-ins becomes U+FFFD, so no text a
 /// command carries reads back as a quote mark or as the ASCII character a
-/// stand-in names; like the character it replaces, U+FFFD is never shell
-/// syntax.
+/// stand-in names. Parameter-name readers conservatively include U+FFFD too.
 fn unmarked_as(c: char) -> char {
     if (LITERAL_MARK..QUOTED_LIVE_MARK + 0x80).contains(&u32::from(c)) {
         char::REPLACEMENT_CHARACTER

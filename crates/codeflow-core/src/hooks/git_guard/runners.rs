@@ -1,5 +1,6 @@
 //! Read Git command sources through one option, configuration and location grammar.
 mod catalog;
+mod transport;
 use super::{
     basename, command_argv_patterns, config_only_reads, configuration_variable,
     expand_shell_commands, expands, git_subcommand, inherited_locations, integrity_shell_path,
@@ -12,21 +13,30 @@ use super::{
 };
 use std::path::{Path, PathBuf};
 
+/// A configured command: its text, whether and how Git runs it as a
+/// credential helper (TSK-1479), and whether it is a credential helper the
+/// landed `git.admitted_helpers` names on a remote contact (TSK-1489).
+type Configured = (String, super::HelperKind, bool);
+
 pub(super) struct Body {
     pub command: String,
     pub directory: PathBuf,
-    /// Whether the command is a `credential.helper` or
-    /// `credential.<url>.helper` value, and whether Git runs it as written
-    /// (a leading `!` or an absolute path) or as `git credential-<name>`
-    /// (TSK-1479).
+    /// Whether the command is a credential helper that the landed
+    /// `git.admitted_helpers` names, started by a command that contacts a
+    /// remote (TSK-1489 AC-7). Exec-guard skips its account finding only.
+    pub admitted_helper: bool,
+    /// Whether the command is a credential helper setting value, and whether
+    /// Git runs it as written or resolves it by name (TSK-1479).
     pub helper: super::HelperKind,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct Inputs {
     globals: Vec<String>,
     environment: crate::security::git_config::Environment,
 }
+
+type Descent = (String, PathBuf, Inputs, super::HelperKind, bool);
 
 impl Inputs {
     fn child(
@@ -44,17 +54,80 @@ impl Inputs {
             };
             globals.extend([name.to_string(), value.to_string()]);
         }
-        // The body directory represents repository setup. Submodule runners
-        // clear the parent's repository-location environment for their children.
-        let environment = env
+        let mut environment: crate::security::git_config::Environment = env
             .iter()
             .filter(|(name, _)| !GIT_LOCATION_VARS.contains(&name.as_str()))
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
+        for name in probe_names() {
+            if let std::collections::btree_map::Entry::Vacant(entry) =
+                environment.entry(name.into())
+            {
+                match std::env::var(name) {
+                    Ok(value) => {
+                        entry.insert(value);
+                    }
+                    Err(std::env::VarError::NotPresent) => {}
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        return Err("an inherited index or object input is not UTF-8".into());
+                    }
+                }
+            }
+        }
+        if matches!(git_subcommand(args), Some(("filter-branch", _))) {
+            environment.insert(
+                INDEX_FILE.into(),
+                crate::security::git_config::UNREAD_PROBE.into(),
+            );
+        }
         Ok(Self {
             globals,
             environment,
         })
+    }
+
+    fn views(
+        args: &[String],
+        env: &crate::security::git_config::Environment,
+        callback: bool,
+    ) -> Result<Vec<Self>, String> {
+        let mut kept = Self::child(args, env)?;
+        if callback {
+            for (name, value) in env
+                .iter()
+                .filter(|(name, _)| GIT_LOCATION_VARS.contains(&name.as_str()))
+            {
+                kept.environment.insert(name.clone(), value.clone());
+            }
+            kept.environment.insert(
+                INDEX_FILE.into(),
+                crate::security::git_config::UNREAD_PROBE.into(),
+            );
+        }
+        let uncertain: Vec<_> = probe_names()
+            .filter(|name| {
+                kept.environment.get(*name).is_some_and(|value| {
+                    value != crate::security::git_config::UNSET
+                        && value != crate::security::git_config::UNREAD_PROBE
+                })
+            })
+            .collect();
+        if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
+            return Err("the child has more uncertain index or object inputs than the guard reads; run the commands separately".into());
+        }
+        Ok((0..1_usize << uncertain.len())
+            .map(|mask| {
+                let mut child = kept.clone();
+                for (at, name) in uncertain.iter().enumerate() {
+                    if mask & (1 << at) != 0 {
+                        child
+                            .environment
+                            .insert((*name).into(), crate::security::git_config::UNSET.into());
+                    }
+                }
+                child
+            })
+            .collect())
     }
 }
 
@@ -65,11 +138,222 @@ pub(super) fn program_environment_names() -> impl Iterator<Item = &'static str> 
 }
 
 pub(super) fn unread(reason: &str) -> Violation {
+    let sanctioned = if reason.starts_with(transport::HELPER_REFUSAL) {
+        "reach the remote over a transport Git runs itself (https, ssh or a local path), have the operator run the command, or name the helper in `git.admitted_helpers` in a reviewed policy on the default branch"
+    } else if reason.starts_with(transport::UNPROVEN) {
+        "name one configured remote that has a single address and no helper setting, turn recursion into nested repositories off on the command line, or have the operator run the command"
+    } else {
+        "use explicit, readable Git runner options and a resolvable checkout"
+    };
     Violation::always_blocking(
         "git.hook_integrity",
         format!("cannot read Git runner: {reason}"),
-        "use explicit, readable Git runner options and a resolvable checkout",
+        sanctioned,
     )
+}
+
+/// The verbs whose credential helper an admission covers: the verbs that
+/// contact a remote, never the verb that hands the credential to its
+/// caller.
+fn contacts_remote(verb: &str) -> bool {
+    catalog::active(catalog::REMOTE, verb) && verb != "credential"
+}
+
+/// The command Git runs for the credential helper `value`, by the forms Git
+/// reads: a value marked as a command runs as written after the mark, an
+/// absolute path runs as written, and any other value names a program Git
+/// builds from it.
+fn credential_program(value: &str) -> String {
+    match value.strip_prefix('!') {
+        Some(command) => command.to_string(),
+        None if Path::new(value).is_absolute() => value.to_string(),
+        None => format!("git credential-{value}"),
+    }
+}
+
+/// The helper programs `git.admitted_helpers` names in the policy landed at
+/// the remote's default branch of the repository the Git call runs in.
+/// Any other policy source, and any read that fails, admits none.
+fn landed_helpers(args: &[String], cwd: &Path) -> Vec<String> {
+    let Ok(directory) = starting_directory(args, cwd) else {
+        return Vec::new();
+    };
+    match super::super::landed_policy::load_local(&directory) {
+        Ok(landed) if landed.authority.is_some() && landed.remote_tracked => {
+            landed.policy.git.admitted_helpers
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Whether the call may work in a repository other than the one its
+/// starting folder finds: a location option, or a location variable the
+/// probe also forwards, set on the line or inherited. An unreadable global
+/// option counts too.
+fn relocated(args: &[String], env: &crate::security::git_config::Environment) -> bool {
+    let Ok(words) = globals(args) else {
+        return true;
+    };
+    let option = words.iter().any(|word| {
+        matches!(word.as_str(), "--git-dir" | "--work-tree" | "--bare")
+            || word.starts_with("--git-dir=")
+            || word.starts_with("--work-tree=")
+    });
+    option
+        || crate::security::git_config::LOCATION_ENVIRONMENT
+            .iter()
+            .any(|name| env.contains_key(*name) || std::env::var_os(name).is_some())
+}
+
+/// The landed `git.admitted_helpers` list, read once and only when a
+/// helper needs it. A call with a location input admits nothing, since the
+/// list is read from the repository the starting folder finds.
+struct Admitted<'a> {
+    args: &'a [String],
+    cwd: &'a Path,
+    relocated: bool,
+    list: Option<Vec<String>>,
+}
+
+impl<'a> Admitted<'a> {
+    fn new(
+        args: &'a [String],
+        cwd: &'a Path,
+        env: &crate::security::git_config::Environment,
+    ) -> Self {
+        Self {
+            args,
+            cwd,
+            relocated: relocated(args, env),
+            list: None,
+        }
+    }
+
+    fn admits(&mut self, program: &str) -> bool {
+        if self.relocated {
+            return false;
+        }
+        let (args, cwd) = (self.args, self.cwd);
+        self.list
+            .get_or_insert_with(|| landed_helpers(args, cwd))
+            .iter()
+            .any(|entry| entry == program)
+    }
+}
+
+/// The resolution's probe of the call's repository, read once each, with
+/// only the call's location, index and object inputs.
+struct CallProbe<'a> {
+    cwd: &'a Path,
+    globals: Result<&'a [String], String>,
+    env: &'a crate::security::git_config::Environment,
+    location: Option<Result<crate::security::git_config::Location, String>>,
+    branch: Option<Result<String, String>>,
+    gitlinks: Option<Result<bool, String>>,
+}
+
+impl<'a> CallProbe<'a> {
+    fn new(
+        args: &'a [String],
+        cwd: &'a Path,
+        env: &'a crate::security::git_config::Environment,
+    ) -> Self {
+        Self {
+            cwd,
+            globals: globals(args),
+            env,
+            location: None,
+            branch: None,
+            gitlinks: None,
+        }
+    }
+}
+
+impl transport::Probe for CallProbe<'_> {
+    fn location(&mut self) -> Result<crate::security::git_config::Location, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.location
+            .get_or_insert_with(|| crate::security::git_config::locate(cwd, globals?, env))
+            .clone()
+    }
+
+    fn branch(&mut self) -> Result<String, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.branch
+            .get_or_insert_with(|| crate::security::git_config::current_branch(cwd, globals?, env))
+            .clone()
+    }
+
+    fn gitlinks(&mut self) -> Result<bool, String> {
+        let (cwd, env) = (self.cwd, self.env);
+        let globals = self.globals.clone();
+        self.gitlinks
+            .get_or_insert_with(|| crate::security::git_config::index_gitlinks(cwd, globals?, env))
+            .clone()
+    }
+}
+
+/// Whether every remote the Git call `args` (its words after `git`)
+/// contacts is reached over a transport Git runs itself, read with no
+/// admission and no environment of its own. Anything the resolution cannot
+/// prove, and any read that fails, is `false`.
+pub(super) fn stock_transports(args: &[String], cwd: &Path) -> bool {
+    let Some((verb, rest)) = git_subcommand(args) else {
+        return false;
+    };
+    let Ok(settings) = configuration_options(args) else {
+        return false;
+    };
+    let env = crate::security::git_config::Environment::new();
+    let Ok(config) = crate::security::git_config::read(cwd, &settings, &env) else {
+        return false;
+    };
+    let mut probe = CallProbe::new(args, cwd, &env);
+    transport::contacts(verb, rest, &config, &mut probe).is_ok_and(|contacts| {
+        contacts
+            .iter()
+            .all(|contact| contact.selected == transport::Selected::Stock)
+    })
+}
+
+/// The remote helper programs the transports of the remotes the command
+/// contacts start, each one the landed policy admits; a helper it does not
+/// admit, and a transport that carries a command, refuse.
+fn helper_programs(
+    verb: &str,
+    rest: &[String],
+    config: &crate::security::git_config::EffectiveConfig,
+    admitted: &mut Admitted<'_>,
+    probe: &mut dyn transport::Probe,
+) -> Result<Vec<Configured>, String> {
+    let mut programs: Vec<Configured> = Vec::new();
+    for contact in transport::contacts(verb, rest, config, probe)? {
+        match contact.selected {
+            transport::Selected::Stock => {}
+            transport::Selected::Ext => {
+                return Err(
+                    "an ext:: transport command requires unclassified percent expansion".into(),
+                );
+            }
+            transport::Selected::Helper(name) => {
+                let program = format!("git-remote-{name}");
+                if !admitted.admits(&program) {
+                    return Err(format!(
+                        "{}: Git starts `{}` for remote `{}`, and `git.admitted_helpers` in the landed policy does not name it",
+                        transport::HELPER_REFUSAL,
+                        shown_word(&program),
+                        shown_word(&contact.remote)
+                    ));
+                }
+                if !programs.iter().any(|(known, _, _)| *known == program) {
+                    programs.push((program, super::HelperKind::NotHelper, false));
+                }
+            }
+        }
+    }
+    Ok(programs)
 }
 
 pub(super) fn arguments(program: &str, args: &[String]) -> Option<Vec<String>> {
@@ -116,6 +400,40 @@ fn checked_mode<'a>(
                 if candidates.is_empty() { shown_word(word) } else { candidates.join(" or ") }
             ));
         }
+    }
+    Ok(parsed)
+}
+
+/// The one reading of this verb's options for every reader of them. Every word
+/// that may be one of the protected options must also be read by the option
+/// table as that option. An option reading the guard cannot prove is refused.
+fn archive_checked(words: &[String]) -> Result<ParsedOptions<'_>, String> {
+    let parsed = checked_mode(words, &catalog::ARCHIVE_OPTIONS, false)?;
+    let long_words = |name: &str| {
+        words
+            .iter()
+            .filter(|word| {
+                word.strip_prefix("--").is_some_and(|option| {
+                    let option = option.split_once('=').map_or(option, |(name, _)| name);
+                    !option.is_empty() && name.starts_with(option)
+                })
+            })
+            .count()
+    };
+    let short_words = words
+        .iter()
+        .filter(|word| !word.starts_with("--") && word.starts_with('-') && word.contains('o'))
+        .count();
+    let hidden = [
+        ("--remote", long_words("remote")),
+        ("--exec", long_words("exec")),
+        ("--output", long_words("output")),
+    ]
+    .iter()
+    .any(|(name, written)| *written > parsed.values_of('\0', name).len())
+        || short_words > parsed.values_of('o', "").len();
+    if hidden {
+        return Err(transport::HIDDEN_OPTION.to_string());
     }
     Ok(parsed)
 }
@@ -258,7 +576,11 @@ pub(super) fn commands(args: &[String]) -> Result<Vec<String>, String> {
             let Some(spec) = option_spec(verb) else {
                 return Ok(Vec::new());
             };
-            let parsed = checked_mode(rest, spec, verb == "grep")?;
+            let parsed = if verb == "archive" {
+                archive_checked(rest)?
+            } else {
+                checked_mode(rest, spec, verb == "grep")?
+            };
             if verb != "grep" && parsed.operands.iter().any(|word| unresolved_word(word)) {
                 return Err("a Git runner operand expands at run time".into());
             }
@@ -360,7 +682,10 @@ pub(super) fn output_paths(verb: &str, rest: &[String]) -> Result<Vec<String>, S
         Ok::<_, String>((parsed, found))
     };
     match verb {
-        "archive" => paths.extend(read(&catalog::ARCHIVE_OPTIONS, false, &[('o', "--output")])?.1),
+        "archive" => {
+            archive_checked(rest)?;
+            paths.extend(read(&catalog::ARCHIVE_OPTIONS, false, &[('o', "--output")])?.1);
+        }
         "format-patch" => paths.extend(
             read(
                 &catalog::FORMAT_PATCH_OPTIONS,
@@ -596,6 +921,378 @@ fn known_program(verb: &str) -> bool {
     GIT_BUILTINS.contains(&verb) || command_options(verb) || matches!(verb, "submodule" | "bisect")
 }
 
+/// The variable that selects the index file a Git call reads. The
+/// transport resolution's index probe reads it (TSK-1489); a configuration
+/// reading does not take it.
+const INDEX_FILE: &str = "GIT_INDEX_FILE";
+
+/// Whether the variable `name` is one the transport resolution's probes
+/// read besides the location ones: the index file, and the inputs that
+/// select the objects a call reads, replacement of them included. A
+/// configuration reading does not take them.
+fn probe_input(name: &str) -> bool {
+    name == INDEX_FILE || crate::security::git_config::OBJECT_INPUTS.contains(&name)
+}
+
+fn probe_names() -> impl Iterator<Item = &'static str> {
+    std::iter::once(INDEX_FILE).chain(crate::security::git_config::OBJECT_INPUTS.iter().copied())
+}
+
+/// Whether an option name enables whole-shell export for this operation.
+fn probe_export_option(option: &str, mut enabled: bool) -> bool {
+    let normalized = option.replace('_', "").to_ascii_lowercase();
+    let mut name = normalized.as_str();
+    while let Some(rest) = name.strip_prefix("no") {
+        enabled = !enabled;
+        name = rest;
+    }
+    name == "allexport" && enabled
+}
+
+/// Recognized export options add uncertainty; indirect writes do not depend
+/// on recognizing an option or knowing the shell's inherited option state.
+fn probe_export_options(words: &[String]) -> bool {
+    if launched(words).is_ok_and(|launch| {
+        launch.assigned.iter().any(|(name, value)| {
+            name == "SHELLOPTS"
+                && (expands(value)
+                    || value
+                        .split(':')
+                        .any(|option| probe_export_option(option, true)))
+        })
+    }) {
+        return true;
+    }
+    let Some((program, args)) = super::configuration_launch(words, None) else {
+        return false;
+    };
+    let program = super::basename(program);
+    if matches!(program, "setopt" | "unsetopt") {
+        return args
+            .iter()
+            .any(|option| expands(option) || probe_export_option(option, program == "setopt"));
+    }
+    if program == "shopt" {
+        return args.iter().any(|option| expands(option))
+            || args
+                .iter()
+                .any(|option| option.starts_with('-') && option.contains('o'))
+                && args
+                    .iter()
+                    .any(|option| option.starts_with('-') && option.contains('s'))
+                && args.iter().any(|option| probe_export_option(option, true));
+    }
+    if program != "set" && !super::is_shell(program) {
+        return false;
+    }
+    let mut options = args.iter();
+    while let Some(option) = options.next() {
+        if option == "--" {
+            break;
+        }
+        if expands(option) {
+            return true;
+        }
+        let enabled = option.starts_with('-');
+        let Some(flags) = option.strip_prefix(['-', '+']) else {
+            break;
+        };
+        if enabled && flags.contains('a') {
+            return true;
+        }
+        if let Some((_, tail)) = flags.split_once('o') {
+            let name = if tail.is_empty() {
+                options.next().map_or("", String::as_str)
+            } else {
+                tail
+            };
+            if expands(name) || probe_export_option(name, enabled) {
+                return true;
+            }
+        }
+        if program != "set" && flags.contains('c') {
+            break;
+        }
+    }
+    false
+}
+
+/// Arithmetic may evaluate values as further assignments to indirect names.
+#[cfg(test)]
+fn probe_arithmetic(segment: &str, words: &[String]) -> bool {
+    super::expand_shell_commands(segment).arithmetic || probe_arithmetic_words(words, false)
+}
+
+/// Read filled operands before flattening discards the body's shell context.
+pub(super) fn probe_arithmetic_in_context(
+    segment: &str,
+    words: &[String],
+    literals: &Literals,
+    zsh_operands: bool,
+) -> bool {
+    let read = |text: &str| {
+        let tokens = super::command_argv(text);
+        let destination_arithmetic = zsh_operands
+            && super::configuration_launch(&tokens, None).is_some_and(|(program, args)| {
+                matches!(program, "print" | "printf")
+                    && super::output_builtin_options(program, args)
+                        .destinations
+                        .iter()
+                        .any(|target| target.contains('['))
+            });
+        let tokens = super::output_reader_words(text);
+        destination_arithmetic || probe_arithmetic_words(&tokens, zsh_operands)
+    };
+    probe_arithmetic_words(words, false) || read(segment) || read(&literals.fill(segment))
+}
+
+/// Arithmetic operand positions in commands, after shell syntax is segmented.
+pub(super) fn probe_arithmetic_words(words: &[String], zsh_operands: bool) -> bool {
+    let mut words = words.to_vec();
+    strip_reserved_words(&mut words);
+    if words
+        .iter()
+        .take_while(|word| word.contains('='))
+        .any(|word| {
+            word.split_once('=')
+                .is_some_and(|(name, _)| super::expands_marked(name) || name.contains('['))
+        })
+    {
+        return true;
+    }
+    let Some((program, args)) = super::configuration_launch(&words, None) else {
+        return false;
+    };
+    if zsh_operands && zsh_arithmetic_operands(program, args) {
+        return true;
+    }
+    match program {
+        "let" | "integer" | "float" | "repeat" => true,
+        "declare" | "typeset" | "local" | "readonly" | "export" => {
+            args.iter()
+                .take_while(|word| word.as_str() != "--")
+                .any(|word| word.starts_with('-') && word.contains(['i', 'E', 'F']))
+                || args.iter().any(|word| word.contains('['))
+                    && super::configuration_builtin_trigger(program, args).is_some()
+        }
+        "[[" | "[" | "test" => {
+            args.iter()
+                .any(|word| matches!(word.as_str(), "-eq" | "-ne" | "-lt" | "-le" | "-gt" | "-ge"))
+                || args.windows(2).any(|pair| {
+                    pair[0] == "-v" && (super::expands_marked(&pair[1]) || pair[1].contains('['))
+                })
+        }
+        "printf" | "read" | "mapfile" | "readarray" | "unset" | "getopts" => {
+            args.iter().any(|word| word.contains('['))
+                && super::configuration_builtin_trigger(program, args).is_some()
+        }
+        "wait" => args.iter().enumerate().any(|(at, word)| {
+            word.strip_prefix('-')
+                .and_then(|flags| flags.split_once('p'))
+                .is_some_and(|(_, tail)| {
+                    if tail.is_empty() {
+                        args.get(at + 1).is_some_and(|target| target.contains('['))
+                    } else {
+                        tail.contains('[')
+                    }
+                })
+        }),
+        _ => false,
+    }
+}
+
+fn zsh_arithmetic_operands(program: &str, args: &[String]) -> bool {
+    if matches!(
+        program,
+        "shift" | "return" | "break" | "continue" | "exit" | "bye" | "logout"
+    ) {
+        return args
+            .iter()
+            .find(|word| word.as_str() != "--" && !(program == "shift" && word.as_str() == "-p"))
+            .is_some_and(|word| !numeric_operand(word));
+    }
+    if !matches!(program, "printf" | "print") {
+        return false;
+    }
+    let options = super::output_builtin_options(program, args);
+    if options.uncertain
+        || options
+            .destinations
+            .iter()
+            .any(|target| super::expands_marked(target) || target.contains('['))
+    {
+        return true;
+    }
+    let Some(format) = options.format else {
+        return false;
+    };
+    let values = &args[options.values_at..];
+    let mut chars = format.chars();
+    let mut numeric = false;
+    let mut setter = false;
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            continue;
+        }
+        for conversion in chars.by_ref() {
+            match conversion {
+                '%' | 's' | 'c' | 'b' | 'q' => break,
+                'n' => {
+                    setter = true;
+                    break;
+                }
+                '*' | 'd' | 'i' | 'o' | 'u' | 'x' | 'X' | 'e' | 'E' | 'f' | 'F' | 'g' | 'G' => {
+                    numeric = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+    }
+    !values.is_empty() && (setter || numeric && values.iter().any(|word| !numeric_operand(word)))
+}
+
+fn numeric_operand(word: &str) -> bool {
+    // Literal parameter punctuation stays readable; a literal dollar does not
+    // become a live parameter merely because the surrounding quotes were read.
+    let plain: String = word
+        .chars()
+        .map(|ch| match super::marked_char(ch) {
+            Some((plain, true)) => plain,
+            Some((plain, false)) if !matches!(plain, '$' | '`') => plain,
+            _ => ch,
+        })
+        .collect();
+    let mut word = plain.as_str();
+    if word.is_empty() {
+        return false;
+    }
+    while !word.is_empty() {
+        if word.as_bytes()[0].is_ascii_digit() {
+            word = &word[1..];
+        } else if let Some(tail) = word.strip_prefix("${") {
+            if !tail.starts_with(['?', '#', '$', '!']) || tail.as_bytes().get(1) != Some(&b'}') {
+                return false;
+            }
+            word = &tail[2..];
+        } else if let Some(tail) = word.strip_prefix('$') {
+            if !tail.starts_with(['?', '#', '$', '!']) {
+                return false;
+            }
+            word = &tail[1..];
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+fn probe_line_literals(segments: &[String]) -> Literals {
+    let expanded = expand_shell_commands(&segments.join("; "));
+    let segments = literal_segments(&expanded.segments);
+    expanded_probe_literals(&segments, expanded.arithmetic)
+}
+
+fn expanded_probe_literals(segments: &[String], arithmetic: bool) -> Literals {
+    let mut literals = probe_line_literals_in_context(segments);
+    if arithmetic {
+        for name in probe_names() {
+            literals.0.insert(name.into(), None);
+        }
+    }
+    literals
+}
+
+fn probe_line_literals_in_context(segments: &[String]) -> Literals {
+    let mut result = Literals::default();
+    for segment in segments {
+        let mut words = super::command_argv(segment);
+        strip_reserved_words(&mut words);
+        let (builtin, args) = super::configuration_launch(&words, None).unwrap_or(("", &[]));
+        let opaque_setter = matches!(builtin, "read" | "mapfile" | "readarray" | "let")
+            || builtin == "printf" && args.iter().any(|word| word.starts_with("-v"));
+        let target_builtin = opaque_setter
+            || matches!(
+                builtin,
+                "unset" | "export" | "declare" | "typeset" | "local" | "readonly" | "getopts"
+            );
+        let unknown_target = (target_builtin
+            && args
+                .iter()
+                .any(|word| expands(word.split_once('=').map_or(word.as_str(), |(name, _)| name))))
+            || builtin == "wait"
+                && args.iter().enumerate().any(|(at, word)| {
+                    word.strip_prefix('-')
+                        .and_then(|flags| flags.split_once('p'))
+                        .is_some_and(|(_, tail)| {
+                            let target = if tail.is_empty() {
+                                args.get(at + 1).map_or("", String::as_str)
+                            } else {
+                                tail
+                            };
+                            expands(target)
+                        })
+                });
+        let removing = builtin == "unset";
+        if unknown_target || probe_arithmetic_words(&words, false) || probe_export_options(&words) {
+            for name in probe_names() {
+                result.0.insert(name.into(), None);
+            }
+        }
+        if let Ok(launch) = launched(&words) {
+            if launch.cleared {
+                for name in probe_names() {
+                    result.0.insert(name.into(), None);
+                }
+            }
+            for name in launch.unset.iter().filter(|name| probe_input(name)) {
+                result
+                    .0
+                    .entry(name.clone())
+                    .or_insert_with(|| Some(crate::security::git_config::UNSET.into()));
+            }
+        }
+        for word in &words {
+            for name in probe_names() {
+                let value = if let Some(value) = word
+                    .strip_prefix(name)
+                    .and_then(|tail| tail.strip_prefix('='))
+                {
+                    Some((!opaque_setter && !expands(value)).then(|| value.to_string()))
+                } else if word == name {
+                    Some(if removing {
+                        Some(crate::security::git_config::UNSET.into())
+                    } else {
+                        None
+                    })
+                } else if word.contains(name) {
+                    Some(None)
+                } else {
+                    None
+                };
+                if let Some(value) = value {
+                    result
+                        .0
+                        .entry(name.into())
+                        .and_modify(|seen| {
+                            if value.as_deref() == Some(crate::security::git_config::UNSET) {
+                                return;
+                            }
+                            if seen.as_deref() == Some(crate::security::git_config::UNSET) {
+                                seen.clone_from(&value);
+                            } else if *seen != value {
+                                *seen = None;
+                            }
+                        })
+                        .or_insert(value);
+                }
+            }
+        }
+    }
+    result
+}
+
 /// The entries of `env` a configuration reading takes. `GIT_CONFIG` names
 /// a file only `git config` reads, and the reader removes it from every
 /// reading, so an entry for it, a launcher removing it included, changes
@@ -605,21 +1302,36 @@ fn config_environment(
 ) -> crate::security::git_config::Environment {
     env.iter()
         .filter(|(name, _)| {
-            !catalog::environment(name) && !program_environment(name) && *name != "GIT_CONFIG"
+            !catalog::environment(name)
+                && !program_environment(name)
+                && *name != "GIT_CONFIG"
+                && !probe_input(name)
         })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
 
+/// How Git runs `value` of a configuration key (TSK-1479): not a credential
+/// helper unless `helper_key`; run as written, or resolved by name.
+fn helper_kind(helper_key: bool, value: &str) -> super::HelperKind {
+    match (helper_key, value.starts_with('!') || value.starts_with('/')) {
+        (false, _) => super::HelperKind::NotHelper,
+        (true, true) => super::HelperKind::AsWritten,
+        (true, false) => super::HelperKind::Named,
+    }
+}
+
 /// The commands the Git call's configuration and environment name, each
 /// with whether it is a credential helper and how Git runs it (see
-/// [`Body::helper`]).
+/// [`Body::helper`]) and whether it is an admitted credential helper (see
+/// [`Body::admitted_helper`]), and the remote helper programs its
+/// transports start that the landed policy admits.
 fn configured_commands(
     args: &[String],
     cwd: &Path,
     env: &crate::security::git_config::Environment,
     earlier: &[PathBuf],
-) -> Result<Vec<(String, super::HelperKind)>, String> {
+) -> Result<Vec<Configured>, String> {
     let Some((verb, rest)) = git_subcommand(args) else {
         return Ok(Vec::new());
     };
@@ -634,7 +1346,9 @@ fn configured_commands(
     {
         unchanged(path, earlier)?;
     }
-    let mut commands = Vec::new();
+    let mut admitted = Admitted::new(args, cwd, env);
+    let mut probe = CallProbe::new(args, cwd, env);
+    let mut commands = helper_programs(verb, rest, &config, &mut admitted, &mut probe)?;
     let pagination = globals(args)?
         .iter()
         .fold(None, |choice, word| match word.as_str() {
@@ -677,15 +1391,14 @@ fn configured_commands(
             {
                 continue;
             }
-            // Git runs a helper value as written when it starts with `!` or
-            // is an absolute path; any other value names `git credential-*`.
-            let helper = match (helper_key, value.starts_with('!') || value.starts_with('/')) {
-                (false, _) => super::HelperKind::NotHelper,
-                (true, true) => super::HelperKind::AsWritten,
-                (true, false) => super::HelperKind::Named,
-            };
+            let admitted_helper =
+                helper_key && contacts_remote(verb) && admitted.admits(&credential_program(value));
             // Helpers and custom submodule updates use a leading shell marker.
-            commands.push((value.strip_prefix('!').unwrap_or(value).to_string(), helper));
+            commands.push((
+                value.strip_prefix('!').unwrap_or(value).to_string(),
+                helper_kind(helper_key, value),
+                admitted_helper,
+            ));
         }
     }
     for source in catalog::SOURCES {
@@ -713,7 +1426,7 @@ fn configured_commands(
                 },
             };
             if let Some(value) = value.filter(|value| !value.is_empty()) {
-                commands.push((value, super::HelperKind::NotHelper));
+                commands.push((value, super::HelperKind::NotHelper, false));
             }
         }
     }
@@ -792,8 +1505,8 @@ fn config_values<'a>(
     Ok(values)
 }
 
-// remote-ext has its own percent expansion and service substitutions. It is
-// not a shell body, so fail closed instead of guessing its resulting argv.
+// One transport class has its own expansion and is not a shell body, so fail
+// closed instead of guessing its resulting argv.
 fn transport(
     args: &[String],
     config: &crate::security::git_config::EffectiveConfig,
@@ -1019,6 +1732,7 @@ fn external_body(
     Ok(Some(Body {
         command: quote_words(&words),
         directory: at,
+        admitted_helper: false,
         helper: super::HelperKind::NotHelper,
     }))
 }
@@ -1125,6 +1839,7 @@ fn note_literals(literals: &mut Literals, tokens: &mut [String]) -> Result<(), S
 /// a location, a program, a runner from the catalog or the configuration.
 fn git_relevant(name: &str) -> bool {
     GIT_LOCATION_VARS.contains(&name)
+        || probe_input(name)
         || program_environment(name)
         || catalog::environment(name)
         || configuration_variable(name)
@@ -1135,23 +1850,32 @@ fn git_relevant(name: &str) -> bool {
 /// launcher removes them, then the command's assignments, as its launchers
 /// leave them ([`Launched`]). A variable of the guard's own process that a
 /// launcher removes is removed from the reading too ([`removed_variables`]).
+///
+/// A variable named in `absent` is explicitly removed from the probe's
+/// environment, so it cannot fall back to the guard's inherited value.
 fn launched_environment(
     launched: &Launched,
     literals: &Literals,
     inherited: &crate::security::git_config::Environment,
+    absent: &[String],
 ) -> Result<crate::security::git_config::Environment, String> {
     let mut env: crate::security::git_config::Environment = inherited
         .iter()
         .filter(|(name, _)| launched.keeps(name))
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
+    for name in absent {
+        env.insert(name.clone(), crate::security::git_config::UNSET.into());
+    }
     for (name, value) in &literals.0 {
-        if git_relevant(name) && launched.keeps(name) {
+        if git_relevant(name) && launched.keeps(name) && !absent.contains(name) {
             env.insert(
                 name.clone(),
-                value
-                    .clone()
-                    .ok_or("an unresolved Git location assignment")?,
+                match value {
+                    Some(value) => value.clone(),
+                    None if probe_input(name) => crate::security::git_config::UNREAD_PROBE.into(),
+                    None => return Err("an unresolved assignment of a variable Git reads".into()),
+                },
             );
         }
     }
@@ -1163,8 +1887,83 @@ fn launched_environment(
             env.insert(name.clone(), value.clone());
         }
     }
+    for name in probe_names() {
+        if !launched.keeps(name) && !env.contains_key(name) {
+            env.insert(name.into(), crate::security::git_config::UNSET.into());
+        }
+    }
     removed_variables(launched, &mut env)?;
     Ok(env)
+}
+
+/// The most known alternate probe values in a line or child environment.
+const UNCERTAIN_INPUT_LIMIT: usize = 3;
+
+/// The recorded, absent and inherited states of each candidate input from
+/// the whole line, in every combination. The line can repeat or reorder
+/// bodies, so a recorded value need not reach this call. Unresolved inputs
+/// stay unread in every view and do not consume the alternate-value bound.
+/// A variable the current command's own prefix or launcher sets is certain
+/// in every view.
+fn launched_environments(
+    launched: &Launched,
+    literals: &Literals,
+    inherited: &crate::security::git_config::Environment,
+) -> Result<Vec<crate::security::git_config::Environment>, String> {
+    let uncertain: Vec<String> = literals
+        .0
+        .iter()
+        .filter(|(name, value)| {
+            value.is_some()
+                && probe_input(name)
+                && launched.keeps(name)
+                && !launched.assigned.iter().any(|(set, _)| set == *name)
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    if uncertain.len() > UNCERTAIN_INPUT_LIMIT {
+        return Err(
+            "the line changes more of the variables that select the index or objects than the guard reads; run the commands separately"
+                .into(),
+        );
+    }
+    let mut views = Vec::new();
+    let mut identities = Vec::new();
+    for mut mask in 0..uncertain.iter().fold(1_usize, |count, _| count * 3) {
+        let mut literal_view = Literals(literals.0.clone());
+        let mut absent = Vec::new();
+        for name in &uncertain {
+            match mask % 3 {
+                1 => absent.push(name.clone()),
+                2 => {
+                    literal_view.0.remove(name);
+                }
+                _ => {}
+            }
+            mask /= 3;
+        }
+        let env = launched_environment(launched, &literal_view, inherited, &absent)?;
+        let mut identity = env.clone();
+        for name in probe_names() {
+            if let std::collections::btree_map::Entry::Vacant(entry) = identity.entry(name.into()) {
+                let value = match std::env::var(name) {
+                    Ok(value) => value,
+                    Err(std::env::VarError::NotPresent) => {
+                        crate::security::git_config::UNSET.into()
+                    }
+                    Err(std::env::VarError::NotUnicode(_)) => {
+                        return Err("an inherited index or object input is not UTF-8".into())
+                    }
+                };
+                entry.insert(value);
+            }
+        }
+        if !identities.contains(&identity) {
+            identities.push(identity);
+            views.push(env);
+        }
+    }
+    Ok(views)
 }
 
 /// Git's own program search path when `PATH` is unset (`_PATH_DEFPATH`).
@@ -1192,7 +1991,7 @@ fn removed_variables(
         .filter(|name| !launched.keeps(name) && !env.contains_key(name))
         .collect();
     for name in removed {
-        if configuration_variable(&name) {
+        if configuration_variable(&name) || probe_input(&name) {
             env.insert(name, crate::security::git_config::UNSET.to_string());
         } else if name == "PATH" && cfg!(unix) {
             env.insert(name, DEFAULT_PATH.to_string());
@@ -1874,33 +2673,55 @@ fn descend(
     runner: &Runner<'_>,
     args: &[String],
     commands: &[String],
-    configured: &[(String, super::HelperKind)],
+    configured: &[Configured],
     bodies: &mut Vec<Body>,
+    seen: &mut Vec<Descent>,
 ) -> Result<(), String> {
-    let child = Inputs::child(args, runner.env)?;
-    let commands: Vec<(&String, super::HelperKind)> = commands
+    let commands: Vec<(&String, super::HelperKind, bool)> = commands
         .iter()
-        .map(|command| (command, super::HelperKind::NotHelper))
+        .map(|command| (command, super::HelperKind::NotHelper, false))
         .collect();
-    let configured: Vec<(&String, super::HelperKind)> = configured
+    let configured: Vec<(&String, super::HelperKind, bool)> = configured
         .iter()
-        .map(|(command, helper)| (command, *helper))
+        .map(|(command, helper, admitted)| (command, *helper, *admitted))
         .collect();
     for (commands, callbacks) in [(commands, false), (configured, true)] {
         if commands.is_empty() {
             continue;
         }
+        let children = Inputs::views(args, runner.env, callbacks)?;
         let dirs = if callbacks {
             callback_directories(args, runner.at, runner.env)?
         } else {
             directories(args, runner.at, runner.env)?
         };
         for dir in dirs {
-            for (command, helper) in &commands {
-                collect(command, &dir, runner.depth + 1, &child, bodies)?;
+            for (command, helper, admitted_helper) in &commands {
+                for child in &children {
+                    let mut identity = child.clone();
+                    for name in probe_names() {
+                        identity
+                            .environment
+                            .entry(name.into())
+                            .or_insert_with(|| crate::security::git_config::UNSET.into());
+                    }
+                    let key = (
+                        (*command).clone(),
+                        dir.clone(),
+                        identity,
+                        *helper,
+                        *admitted_helper,
+                    );
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.push(key);
+                    collect(command, &dir, runner.depth + 1, child, bodies)?;
+                }
                 bodies.push(Body {
                     command: (*command).clone(),
                     directory: dir.clone(),
+                    admitted_helper: *admitted_helper,
                     helper: *helper,
                 });
             }
@@ -2267,6 +3088,7 @@ fn alias_environment_of(
         launched,
         literals,
         &inputs.environment,
+        &[],
     )?))
 }
 
@@ -2578,9 +3400,7 @@ fn literal_segments(segments: &[String]) -> Vec<String> {
         .iter()
         .map(|segment| {
             let filled = bindings.fill(segment);
-            let mut tokens = super::command_argv(&filled);
-            strip_reserved_words(&mut tokens);
-            bindings.note(&tokens);
+            bindings.note_segment(&filled);
             filled
         })
         .collect()
@@ -2597,7 +3417,13 @@ fn normalized_command(args: &[String], env: &crate::security::git_config::Enviro
         words.extend(
             env.iter()
                 .filter(|(_, value)| !unset(value))
-                .map(|(name, value)| format!("{name}={value}")),
+                .map(|(name, value)| {
+                    if value == crate::security::git_config::UNREAD_PROBE {
+                        format!("{name}=${{{name}}}")
+                    } else {
+                        format!("{name}={value}")
+                    }
+                }),
         );
     }
     words.push("git".to_string());
@@ -2705,6 +3531,8 @@ fn collect_segments(
         return Err("a Git runner body contains an unread command word".into());
     }
     let segments = literal_segments(&expanded.segments);
+    // Expanded arithmetic already carries each body's shell context.
+    let probe_literals = expanded_probe_literals(&segments, expanded.arithmetic);
     let run = run_dirs(&segments, cwd);
     let every = segments.clone();
     let locations = segment_directories(command, &expanded.segments, cwd, &run.dirs);
@@ -2775,9 +3603,16 @@ fn collect_segments(
         launcher_env(&tokens)?;
         let launched = launched(&tokens)?;
         let args = config_env(&args, &literals, &launched)?;
-        let env = launched_environment(&launched, &literals, &inputs.environment)?;
+        let mut proof_literals = Literals(literals.0.clone());
+        proof_literals.0.retain(|name, _| !probe_input(name));
+        proof_literals.0.extend(probe_literals.0.clone());
+        let envs = launched_environments(&launched, &proof_literals, &inputs.environment)?;
         let mut pending = Vec::new();
-        for start in &locations[index] {
+        let mut descended = Vec::new();
+        for (env, start) in envs
+            .iter()
+            .flat_map(|env| locations[index].iter().map(move |start| (env, start)))
+        {
             let (changes, uncertain) = launcher_effects(&tokens);
             let at = changes.iter().fold(start.clone(), |at, change| {
                 integrity_shell_path(change, &at)
@@ -2785,22 +3620,23 @@ fn collect_segments(
             let runner = Runner {
                 segment: &filled,
                 at: &at,
-                env: &env,
+                env,
                 depth,
             };
             let args = runner.resolve(&args, &landings, &mut pending)?;
             if depth > 0 && args != original {
                 bodies.push(Body {
-                    command: normalized_command(&args, &env),
+                    command: normalized_command(&args, env),
                     directory: at.clone(),
+                    admitted_helper: false,
                     helper: super::HelperKind::NotHelper,
                 });
             }
-            bodies.extend(external_body(&args, &at, &env)?);
+            bodies.extend(external_body(&args, &at, env)?);
             note_config_write(&args, &mut changed_sources, &mut changed_aliases);
             let mut commands = commands(&args)?;
-            let configured = configured_commands(&args, &at, &env, &earlier)?;
-            commands.extend(saved_commands(&args, &at, &env, &earlier)?);
+            let configured = configured_commands(&args, &at, env, &earlier)?;
+            commands.extend(saved_commands(&args, &at, env, &earlier)?);
             if option_spec(git_subcommand(&args).map_or("", |(verb, _)| verb)).is_some()
                 || !commands.is_empty()
                 || !configured.is_empty()
@@ -2830,7 +3666,14 @@ fn collect_segments(
             if changed_checkouts && !commands.is_empty() && runs_in_checkouts(&args) {
                 return Err("an earlier command may change the checkouts a Git runner runs its command in; run the commands separately".into());
             }
-            descend(&runner, &args, &commands, &configured, bodies)?;
+            descend(
+                &runner,
+                &args,
+                &commands,
+                &configured,
+                bodies,
+                &mut descended,
+            )?;
         }
         landings.extend(pending);
         changed_checkouts = true;
