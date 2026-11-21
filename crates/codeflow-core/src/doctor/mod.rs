@@ -3484,7 +3484,14 @@ fn check_id_registry(opts: &Options) -> CheckResult {
         }
     }
     let git = crate::ids::Git::new(&root);
-    let report = match crate::ids::check::check(&git, None) {
+    // One read-only judgment for this check only, so the history snapshot
+    // is read and verified once rather than before every history query
+    // (TSK-1520). The other doctor checks keep their own reads.
+    let checked = {
+        let _judgment = crate::workgraph::history::judgment();
+        crate::ids::check::check(&git, None)
+    };
+    let report = match checked {
         Ok(report) => report,
         Err(error) => return result(Status::Fail, format!("cannot read the registry: {error}")),
     };
@@ -4480,6 +4487,62 @@ mod tests {
         };
         let result = check_id_registry(&opts);
         assert_eq!(result.status, Status::Pass, "{}", result.message);
+    }
+
+    /// TSK-1520: doctor's id check verifies the commit graph once.
+    #[test]
+    fn id_registry_reads_the_history_snapshot_once() {
+        use crate::workgraph::history::{reset_snapshot_reads, snapshot_reads};
+        let (repo, _) = crate::ids::judgment_fixture::seeded();
+        let opts = Options {
+            project_dir: repo.root().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        reset_snapshot_reads();
+        let report = crate::ids::check::check(&crate::ids::Git::new(repo.root()), None).unwrap();
+        let unscoped_reads = snapshot_reads();
+        assert!(unscoped_reads > 1, "{unscoped_reads}");
+        for _ in 0..2 {
+            reset_snapshot_reads();
+            let result = check_id_registry(&opts);
+            assert_eq!(snapshot_reads(), 1, "unscoped: {unscoped_reads}");
+            // The same verdict the unscoped check gives.
+            let mut notes: Vec<String> = report.info.iter().take(1).cloned().collect();
+            notes.extend(report.warns.iter().cloned());
+            assert_eq!(result.message, notes.join("; "));
+            assert_eq!(
+                result.status,
+                Status::Warn(remedy::DOCTOR_ID_REGISTRY.remedy())
+            );
+        }
+    }
+
+    #[test]
+    fn id_registry_reads_no_snapshot_without_a_registry_or_on_a_shallow_clone() {
+        use crate::workgraph::history::{reset_snapshot_reads, snapshot_reads};
+        let repo = crate::ids::judgment_fixture::Repo::new();
+        repo.record("TSK-001", "first");
+        repo.commit("a record");
+        let opts = Options {
+            project_dir: repo.root().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        reset_snapshot_reads();
+        let result = check_id_registry(&opts);
+        assert_eq!(snapshot_reads(), 0);
+        assert!(matches!(result.status, Status::Fail), "{}", result.message);
+        assert!(result.message.starts_with("no `codeflow/registry` found"));
+        let (repo, _) = crate::ids::judgment_fixture::seeded();
+        repo.make_shallow();
+        let opts = Options {
+            project_dir: repo.root().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        reset_snapshot_reads();
+        let result = check_id_registry(&opts);
+        assert_eq!(snapshot_reads(), 0);
+        assert!(matches!(result.status, Status::Fail), "{}", result.message);
+        assert_eq!(result.message, crate::ids::IdsError::Shallow.to_string());
     }
 
     #[test]

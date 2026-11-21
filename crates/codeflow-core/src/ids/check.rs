@@ -4,6 +4,7 @@
 //! Nothing here fetches or writes (R-20: read commands never fetch).
 
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
 use super::git::{z_fields, Git};
@@ -41,6 +42,68 @@ pub fn registry_ref(git: &Git) -> Result<Option<String>, IdsError> {
         return Ok(Some(tracking));
     }
     Ok(git.rev(REGISTRY_REF)?.map(|_| REGISTRY_REF.to_string()))
+}
+
+/// What the standalone `codeflow ids check` found.
+#[derive(Debug)]
+pub enum Standalone {
+    /// Durable work tracking is off, so no registry rule applies.
+    TrackingOff,
+    /// The registry check, and with a range the merge rule, judged.
+    Judged(Report),
+}
+
+/// Why the standalone `codeflow ids check` could not finish.
+#[derive(Debug)]
+pub enum StandaloneError {
+    /// Whether durable work tracking is on could not be read; the message
+    /// is the full explanation.
+    Tracking(String),
+    /// The registry check could not run.
+    Check(IdsError),
+    /// The merge rule could not run.
+    MergeRule(IdsError),
+}
+
+/// The standalone `codeflow ids check`: [`check`], then with a range
+/// `(base, head)` the [`merge_rule`], its findings appended to the check's.
+/// A blocking check report still runs the merge rule.
+///
+/// Both run in one read-only history judgment, as `codeflow ci` runs its
+/// id-registry check, so the overlay and graph snapshot is read and verified
+/// once per repository for the run instead of before every history query
+/// (TSK-1520). Each spawned query still reads the replace refs, graft files
+/// and shallow file for itself (`history::check_query`), and the graph
+/// identity check still runs on every query.
+///
+/// # Errors
+///
+/// Returns which step could not run.
+pub fn standalone(
+    root: &Path,
+    registry: Option<&str>,
+    range: Option<(&str, &str)>,
+) -> Result<Standalone, StandaloneError> {
+    match crate::workgraph::durable_work_tracking_enabled(root) {
+        Ok(true) => {}
+        Ok(false) => return Ok(Standalone::TrackingOff),
+        Err(error) => {
+            return Err(StandaloneError::Tracking(
+                crate::workgraph::work_start::tracking_state_message(error),
+            ))
+        }
+    }
+    let git = Git::new(root);
+    // Read only: neither step writes the registry or any ref.
+    let _judgment = crate::workgraph::history::judgment();
+    let mut report = check(&git, registry).map_err(StandaloneError::Check)?;
+    if let Some((base, head)) = range {
+        let range = merge_rule(&git, base, head).map_err(StandaloneError::MergeRule)?;
+        report.info.extend(range.info);
+        report.warns.extend(range.warns);
+        report.blocks.extend(range.blocks);
+    }
+    Ok(Standalone::Judged(report))
 }
 
 /// `ids check`: the registry's growth and damage rules, reconciled with the
@@ -550,5 +613,266 @@ mod r22_tests {
         reconcile(&git, &Ledger::default(), &mut absent).unwrap();
         assert!(absent.blocks.is_empty());
         assert!(!absent.warns.is_empty());
+    }
+}
+
+/// TSK-1520: the standalone check verifies the commit graph once per run.
+#[cfg(test)]
+mod judgment_tests {
+    use super::*;
+    use crate::ids::judgment_fixture::{seeded, Repo};
+    use crate::workgraph::history::{reset_snapshot_reads, snapshot_reads};
+
+    fn judged(outcome: Result<Standalone, StandaloneError>) -> Report {
+        match outcome.unwrap() {
+            Standalone::Judged(report) => report,
+            Standalone::TrackingOff => panic!("tracking is on in the fixture"),
+        }
+    }
+
+    /// The calls the arm made before TSK-1520, with no judgment scope.
+    fn unscoped(root: &Path, range: Option<(&str, &str)>) -> Report {
+        let git = Git::new(root);
+        let mut report = check(&git, None).unwrap();
+        if let Some((base, head)) = range {
+            let range = merge_rule(&git, base, head).unwrap();
+            report.info.extend(range.info);
+            report.warns.extend(range.warns);
+            report.blocks.extend(range.blocks);
+        }
+        report
+    }
+
+    fn same(left: &Report, right: &Report) {
+        assert_eq!(left.info, right.info);
+        assert_eq!(left.warns, right.warns);
+        assert_eq!(left.blocks, right.blocks);
+    }
+
+    #[test]
+    fn the_range_entry_reads_the_snapshot_once() {
+        let (repo, _) = seeded();
+        let range = Some(("main", "feat/one"));
+        // The fixture exercises history: without one scope the same calls
+        // read the snapshot before every guarded query.
+        reset_snapshot_reads();
+        let before = unscoped(repo.root(), range);
+        let unscoped_reads = snapshot_reads();
+        assert!(unscoped_reads > 1, "{unscoped_reads}");
+        reset_snapshot_reads();
+        let report = judged(standalone(repo.root(), None, range));
+        assert_eq!(snapshot_reads(), 1, "unscoped: {unscoped_reads}");
+        // AC-2: the same findings in the same order.
+        same(&report, &before);
+        assert!(report.passed(), "{:?}", report.blocks);
+        assert!(
+            report
+                .warns
+                .iter()
+                .any(|warn| warn.contains("collision: TSK-002 on feat/other")),
+            "{:?}",
+            report.warns
+        );
+        assert!(
+            report
+                .info
+                .iter()
+                .any(|line| line.starts_with("merge rule:")),
+            "{:?}",
+            report.info
+        );
+    }
+
+    #[test]
+    fn the_no_range_entry_reads_the_snapshot_once() {
+        let (repo, _) = seeded();
+        reset_snapshot_reads();
+        let before = unscoped(repo.root(), None);
+        let unscoped_reads = snapshot_reads();
+        assert!(unscoped_reads > 1, "{unscoped_reads}");
+        reset_snapshot_reads();
+        let report = judged(standalone(repo.root(), None, None));
+        assert_eq!(snapshot_reads(), 1, "unscoped: {unscoped_reads}");
+        same(&report, &before);
+    }
+
+    #[test]
+    fn a_blocking_range_still_runs_the_merge_rule_in_the_same_read() {
+        let (repo, _) = seeded();
+        // A different record on a landing line blocks the check.
+        repo.git(&["branch", "integration/EPC-002-other", "feat/other"]);
+        let range = Some(("main", "feat/other"));
+        let before = unscoped(repo.root(), range);
+        reset_snapshot_reads();
+        let report = judged(standalone(repo.root(), None, range));
+        assert_eq!(snapshot_reads(), 1);
+        same(&report, &before);
+        assert!(!report.passed());
+        assert!(
+            report
+                .info
+                .iter()
+                .any(|line| line.starts_with("merge rule:")),
+            "{:?}",
+            report.info
+        );
+    }
+
+    #[test]
+    fn two_runs_each_read_the_snapshot_once() {
+        let (repo, _) = seeded();
+        for _ in 0..2 {
+            reset_snapshot_reads();
+            judged(standalone(repo.root(), None, Some(("main", "feat/two"))));
+            assert_eq!(snapshot_reads(), 1);
+        }
+    }
+
+    #[test]
+    fn tracking_off_reads_no_snapshot() {
+        let repo = Repo::new();
+        reset_snapshot_reads();
+        assert!(matches!(
+            standalone(repo.root(), None, Some(("main", "main"))),
+            Ok(Standalone::TrackingOff)
+        ));
+        assert_eq!(snapshot_reads(), 0);
+    }
+
+    #[test]
+    fn no_registry_reads_no_snapshot_without_a_range() {
+        let repo = Repo::new();
+        repo.record("TSK-001", "first");
+        repo.commit("a record");
+        let before = unscoped(repo.root(), None);
+        reset_snapshot_reads();
+        let report = judged(standalone(repo.root(), None, None));
+        assert_eq!(snapshot_reads(), 0);
+        same(&report, &before);
+        assert!(report.blocks[0].starts_with("no `codeflow/registry` found"));
+    }
+
+    #[test]
+    fn a_shallow_clone_reads_no_snapshot_without_a_range_and_one_with_it() {
+        let (repo, _) = seeded();
+        repo.make_shallow();
+        reset_snapshot_reads();
+        let report = judged(standalone(repo.root(), None, None));
+        assert_eq!(snapshot_reads(), 0);
+        assert_eq!(report.blocks, vec![IdsError::Shallow.to_string()]);
+        // The merge rule still runs and refuses as before, reading once.
+        let git = Git::new(repo.root());
+        let before = merge_rule(&git, "main", "feat/one")
+            .unwrap_err()
+            .to_string();
+        reset_snapshot_reads();
+        let Err(StandaloneError::MergeRule(error)) =
+            standalone(repo.root(), None, Some(("main", "feat/one")))
+        else {
+            panic!("the merge rule refuses a shallow clone");
+        };
+        assert!(snapshot_reads() <= 1, "{}", snapshot_reads());
+        assert_eq!(error.to_string(), before);
+        assert!(error.to_string().contains("shallow"), "{error}");
+    }
+}
+
+/// TSK-1520: inside one judgment the graph check is shared, but the overlay
+/// state is read again for every spawned history query.
+#[cfg(test)]
+mod overlay_state_tests {
+    use super::*;
+    use crate::ids::judgment_fixture::{seeded, Repo};
+
+    /// The seeded fixture plus `feat/new`, which adds a record whose uid
+    /// the registry does not hold, so the range's merge rule blocks it.
+    fn fixture() -> (Repo, String, String) {
+        let (repo, base) = seeded();
+        repo.git(&["checkout", "-q", "-b", "feat/new", "main"]);
+        repo.write(
+            "project-management/tasks/TSK-003.md",
+            "---\nid: TSK-003\nuid: 00000000-0000-4000-8000-000000000003\ntitle: \"third\"\nstatus: todo\n---\n\n# TSK-003\n",
+        );
+        let head = repo.commit("feat/new: TSK-003");
+        repo.git(&["checkout", "-q", "main"]);
+        (repo, base, head)
+    }
+
+    /// Run the standalone steps in one judgment, changing the overlay
+    /// state between the check and the merge rule.
+    fn judged_with_change(repo: &Repo, change: impl FnOnce(&Repo)) -> Result<Report, IdsError> {
+        let git = Git::new(repo.root());
+        let _judgment = crate::workgraph::history::judgment();
+        check(&git, None)?;
+        change(repo);
+        merge_rule(&git, "main", "feat/new")
+    }
+
+    #[test]
+    fn the_merge_rule_blocks_the_unreserved_record_without_a_change() {
+        let (repo, _, _) = fixture();
+        let report = judged_with_change(&repo, |_| {}).unwrap();
+        assert!(
+            report.blocks.iter().any(|block| block.contains("TSK-003")),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn a_replace_ref_added_during_a_run_refuses_the_next_query() {
+        let (repo, _, head) = fixture();
+        let tree = repo.git(&["rev-parse", "main^{tree}"]);
+        let main = repo.git(&["rev-parse", "main"]);
+        let stand_in = repo.git(&["commit-tree", &tree, "-p", &main, "-m", "stand-in"]);
+        let error = judged_with_change(&repo, |repo| {
+            repo.git(&["replace", &head, &stand_in]);
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("replace ref"), "{error}");
+    }
+
+    /// A replace ref added after the last guard is not read by a child:
+    /// the unguarded `diff` the merge rule runs after `merge-base` still
+    /// sees the recorded head.
+    #[test]
+    fn a_spawned_query_reads_the_recorded_objects() {
+        let (repo, _, head) = fixture();
+        let recorded = repo.git(&["rev-parse", &format!("{head}^{{tree}}")]);
+        let tree = repo.git(&["rev-parse", "main^{tree}"]);
+        let main = repo.git(&["rev-parse", "main"]);
+        let stand_in = repo.git(&["commit-tree", &tree, "-p", &main, "-m", "stand-in"]);
+        repo.git(&["replace", &head, &stand_in]);
+        assert_eq!(
+            repo.git(&["rev-parse", &format!("{head}^{{tree}}")]),
+            tree,
+            "the fixture's own Git reads the replacement"
+        );
+        let seen = Git::new(repo.root())
+            .run(&["rev-parse", &format!("{head}^{{tree}}")])
+            .unwrap();
+        assert_eq!(seen.trim(), recorded);
+    }
+
+    #[test]
+    fn a_graft_file_added_during_a_run_refuses_the_next_query() {
+        let (repo, base, head) = fixture();
+        let error = judged_with_change(&repo, |repo| {
+            repo.write(".git/info/grafts", &format!("{head} {base}\n"));
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("graft file"), "{error}");
+    }
+
+    #[test]
+    fn a_shallow_file_added_during_a_run_refuses_the_next_query() {
+        let (repo, base, _) = fixture();
+        let error = judged_with_change(&repo, |repo| {
+            repo.write(".git/shallow", &format!("{base}\n"));
+        })
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("shallow"), "{error}");
     }
 }

@@ -46,7 +46,7 @@ impl Git {
             args.first(),
             Some(&"log" | &"rev-list" | &"merge-base" | &"cherry" | &"diff-tree")
         ) {
-            crate::workgraph::history::check_command(&self.root)
+            crate::workgraph::history::check_query(&self.root)
                 .map_err(|error| IdsError::Git(format!("git {}: {error}", args[0])))?;
         }
         Ok(())

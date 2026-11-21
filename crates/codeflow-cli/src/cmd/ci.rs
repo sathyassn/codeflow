@@ -2990,8 +2990,7 @@ fn resolve_base(root: &Path, candidates: &[String]) -> Result<Option<String>, St
 
 /// Git's own refusal of a base candidate, when it stopped on one rather than
 /// finding no such commit: `--quiet` keeps a missing rev silent, so any
-/// message is git's cause, such as a replace ref it cannot follow or a
-/// `GIT_REPLACE_REF_BASE` git 2.55 refuses.
+/// message is git's cause, such as a corrupt base object.
 fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
     candidates.iter().find_map(|candidate| {
         let out = codeflow_core::workgraph::history::command()
