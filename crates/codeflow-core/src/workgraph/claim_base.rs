@@ -72,6 +72,14 @@ pub fn head_contains(root: &Path, head: &str, base: &str) -> Result<bool, String
 
 /// Resolve only a fetched ref owned by the source's configured remote.
 pub(crate) fn source(repo: &Repository, target: &str) -> Result<(String, Oid), String> {
+    unchecked_source(repo, target).map_err(|reason| {
+        let root = repo.commondir();
+        let shown = crate::security::git::shown_escaped_ref(root, target);
+        crate::security::git::without_remote_names(root, &reason.replace(target, &shown))
+    })
+}
+
+fn unchecked_source(repo: &Repository, target: &str) -> Result<(String, Oid), String> {
     if !work_start::is_stable_work_target(target) {
         return Err(format!("'{target}' is not a stable work source"));
     }
@@ -144,8 +152,16 @@ pub fn select(root: &Path, task: &str, target: &str, pins: &[ReviewedPin]) -> Re
             }
         }
     }
+    // A source is a tracking ref that holds its remote's name, shown only
+    // when plain (TSK-416 review round 7).
+    let shown = |reference: &str| {
+        crate::security::git::without_remote_names(
+            root,
+            &crate::security::git::shown_ref(root, reference),
+        )
+    };
     if sources.len() > 1 {
-        return Err(format!("predecessors require different unmerged sources: {}; use the line sync pull request route (issue #280) to bring them onto the target first", sources.keys().cloned().collect::<Vec<_>>().join(", ")));
+        return Err(format!("predecessors require different unmerged sources: {}; use the line sync pull request route (issue #280) to bring them onto the target first", sources.keys().map(|source| shown(source)).collect::<Vec<_>>().join(", ")));
     }
     let (mut reference, mut base) = sources.into_iter().next().unwrap_or((target_ref, tip));
     if base != tip && pins.is_empty() {
@@ -153,11 +169,11 @@ pub fn select(root: &Path, task: &str, target: &str, pins: &[ReviewedPin]) -> Re
         let mut planning = records(&repo, common)?;
         project_dependencies(&repo, &mut planning, task, common, base, pins)?;
         work_start::validate_anchored_task_on(&repo, &planning, task, target, pins)
-            .map_err(|error| format!("source {reference}@{base} lacks the target's required planning anchor: {error}; use the line sync pull request route (issue #280) first"))?;
+            .map_err(|error| format!("source {}@{base} lacks the target's required planning anchor: {}; use the line sync pull request route (issue #280) first", shown(&reference), error.shown(root)))?;
     }
     if let Some(stack) = work_start::stack_base(root, pins)? {
         if base != tip && !contains(&repo, stack, base)? {
-            return Err(format!("reviewed stack does not contain {reference}@{base}; use the line sync pull request route (issue #280) first"));
+            return Err(format!("reviewed stack does not contain {}@{base}; use the line sync pull request route (issue #280) first", shown(&reference)));
         }
         reference = REVIEWED_SOURCE.into();
         base = stack;
@@ -335,18 +351,21 @@ fn decide(
         .and_then(|r| r.peel_to_commit())
         .map_err(|e| e.to_string())?
         .id();
+    let source_shown = crate::security::git::without_remote_names(
+        root,
+        &crate::security::git::shown_ref(root, &base.source),
+    );
     if !contains(&repo, head, oid)? {
-        return Err(format!("HEAD does not contain required base {}@{}; start new work with `codeflow work claim {task}`", base.source, base.revision));
+        return Err(format!("HEAD does not contain required base {source_shown}@{}; start new work with `codeflow work claim {task}`", base.revision));
     }
     if fixed && base.pins.is_empty() {
         let (_, now) = source(&repo, &base.source)?;
         if now != oid {
             if !contains(&repo, now, oid)? {
-                return Err(format!("source {} no longer contains the recorded base {oid}; reconcile its history before starting", base.source));
+                return Err(format!("source {source_shown} no longer contains the recorded base {oid}; reconcile its history before starting"));
             }
             let note = Some(format!(
-                "source {} advanced to {now}; recorded base {oid} remains valid",
-                base.source
+                "source {source_shown} advanced to {now}; recorded base {oid} remains valid"
             ));
             return Ok(Decision { base, note, renew });
         }

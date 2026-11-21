@@ -2594,3 +2594,59 @@ fn an_unknown_repository_identity_never_matches_a_link() {
     assert!(due::fulfilment(&foreign, &ledger, &mut observer).is_none());
     assert!(due::fulfilment(&own, &ledger, &mut observer).is_none());
 }
+
+/// TSK-416 review round 4, L4: a proof and a reopen reason that an earlier
+/// binary stored with a withheld remote's name raw are shown with that
+/// name withheld by `follow list <id>` and by the snapshot export; an
+/// ordinary remote's name stays. The credential-shaped name is synthetic.
+#[test]
+fn stored_proofs_and_reopen_reasons_withhold_remote_names() {
+    use codeflow_core::coord::schema::{Data, Evidence, EvidenceKind, Reason};
+    use codeflow_core::coord::store::{Draft, SubjectId, COMMAND_WAIT};
+    let f = fixture();
+    let paths = bind(&f.root);
+    git(&f.root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    ok(&cli(
+        &f.root,
+        &lane("LN-001", "s1"),
+        &add_args(
+            "watch the topic branch",
+            &["--no-link-reason", "a stored event"],
+        ),
+    ));
+    // The events as a binary from before judgment-time scrubbing wrote them.
+    let holder = fixture::lane("LN-001", "s1", 1);
+    let event = |data: Data| {
+        store::commit(&paths, &holder, COMMAND_WAIT, |_| {
+            Ok(vec![Draft::new(SubjectId::Given("FU-001".into()), data)])
+        })
+        .unwrap();
+    };
+    event(Data::ItemClosed(Evidence {
+        kind: EvidenceKind::MachineVerified,
+        reference: "branch topic absent from cred@SECRETVALUE".into(),
+        source: "remotes origin and cred@SECRETVALUE".into(),
+        repository: Some("example/repo".into()),
+        target: Some("cred@SECRETVALUE".into()),
+        revision: Some("absent".into()),
+        observed_at: codeflow_core::coord::format_time(codeflow_core::coord::now_secs()),
+    }));
+    event(Data::ItemReopened(Reason {
+        reason: "branch topic is present on cred@SECRETVALUE".into(),
+    }));
+    let shown = [
+        ok(&cli(&f.root, &[], &["follow", "list", "FU-001"])),
+        ok(&cli(&f.root, &[], &["follow", "list", "FU-001", "--md"])),
+        ok(&cli(&f.root, &[], &["follow", "snapshot"])),
+    ];
+    for out in shown {
+        assert!(!out.contains("SECRETVALUE"), "{out}");
+        for needle in [
+            "branch topic absent from",
+            "remotes origin and",
+            "branch topic is present on",
+        ] {
+            assert!(out.contains(needle), "missing `{needle}` in:\n{out}");
+        }
+    }
+}

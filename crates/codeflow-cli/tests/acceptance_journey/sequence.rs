@@ -705,7 +705,7 @@ fn a_blocked_reopened_task_and_its_epic_close_in_one_valid_sequence() {
         &archive[spans[1].1..]
     );
     let dropped = format!("{}{}", &archive[..spans[0].0], &archive[spans[0].1..]);
-    let renamed = archive.replacen("reason: regression", "reason: a different reason", 1);
+    let renamed = archive.replacen("reason: \"regression\"", "reason: a different reason", 1);
     for (fault, content, reason) in [
         ("reordered", reordered.as_str(), "chronological"),
         ("dropped", dropped.as_str(), "acceptance_superseded"),

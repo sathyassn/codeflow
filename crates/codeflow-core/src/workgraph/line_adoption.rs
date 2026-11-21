@@ -75,22 +75,45 @@ impl AdoptionReport {
 /// would receive, as `(message, remedy)`. `reset` is the ref the remedy's
 /// `git reset --keep` returns the line to. The pre-push hook and
 /// `codeflow ci` share it, so both name the same commits and the same
-/// remedy (TSK-1155).
+/// remedy (TSK-1155). `root` is the repository whose remotes decide
+/// whether `reset`, which can name a remote-tracking ref, is printed.
 #[must_use]
-pub fn direct_commit_refusal(line: &str, unadopted: &[String], reset: &str) -> (String, String) {
+pub fn direct_commit_refusal(
+    root: &Path,
+    line: &str,
+    unadopted: &[String],
+    reset: &str,
+) -> (String, String) {
     let epic = epic_id(line).unwrap_or("its epic");
     let ids = unadopted
         .iter()
         .map(|id| id.get(..9).unwrap_or(id))
         .collect::<Vec<_>>()
         .join(", ");
-    (
+    // The ref is rendered from its raw value: a full ref can hold `$(…)`,
+    // and `git reset` reads paths after `--`, so a ref that starts with `-`
+    // is not printed (TSK-416 review round 2). A ref holding a remote name
+    // messages withhold, judged on the raw ref, is not printed either
+    // (TSK-416 review).
+    let reset_step = if crate::security::git::word_shown(root, reset) {
+        crate::git::pasted::step(
+            &crate::git::Pasted::new(root, "git reset --keep")
+                .value(reset)
+                .without_end_of_options(),
+        )
+    } else {
         format!(
+            "return the line to its fetched tip (no command is printed, since {})",
+            crate::security::git::WITHHELD_REMOTE_STEP
+        )
+    };
+    (
+        crate::security::git::without_remote_names(root, &format!(
             "{} would receive a commit made directly on the line ({ids})",
             crate::git::display_text(line)
-        ),
+        )),
         format!(
-            "land it by a pull request: save it on a task or planning branch, then `git reset --keep {reset}` and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
+            "land it by a pull request: save it on a task or planning branch, then {reset_step} and open a task or planning pull request to the line; a commit already on the remote is adopted by a `line_adoptions` entry in {epic} (see git-rules.md, \"Bodies of work\")"
         ),
     )
 }
@@ -148,19 +171,19 @@ pub(crate) fn parse_parent_line(value: Option<&Value>) -> Result<Option<String>,
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(text)) => {
-            let id = epic_id(text).map_err(|reason| format!("{PARENT_LINE_FIELD}: {reason}"))?;
+            let id = epic_id(text).map_err(|_| format!("{PARENT_LINE_FIELD}: the declared value is not an integration line (integration/EPC-NNN-<slug>); name withheld"))?;
             // `epic_id` proved the text is `integration/<id>-...`.
             let slug = text
                 .get("integration/".len() + id.len() + 1..)
                 .unwrap_or_default();
             if slug.is_empty() {
                 return Err(format!(
-                    "{PARENT_LINE_FIELD}: '{text}' has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
+                    "{PARENT_LINE_FIELD}: the declared value has no slug after '{id}-'; an epic line is integration/EPC-NNN-<slug>"
                 ));
             }
             if !super::work_start::is_stable_work_target(text) {
                 return Err(format!(
-                    "{PARENT_LINE_FIELD}: '{text}' is not a valid branch name"
+                    "{PARENT_LINE_FIELD}: the declared value is not a valid branch name; name withheld"
                 ));
             }
             Ok(Some(text.clone()))
@@ -182,7 +205,7 @@ pub fn check_parent_line(own_epic: &str, value: Option<&Value>) -> Result<Option
     };
     if epic_id(&line) == Ok(own_epic) {
         return Err(format!(
-            "{PARENT_LINE_FIELD} names {own_epic}'s own line '{line}'; an epic lands on its own line without declaring it"
+            "{PARENT_LINE_FIELD} names {own_epic}'s own line; an epic lands on its own line without declaring it"
         ));
     }
     Ok(Some(line))
@@ -252,13 +275,13 @@ pub fn check_range(
     head: &str,
 ) -> Result<AdoptionReport, String> {
     let _judgment = history::judgment();
-    let epic = epic_id(branch)?;
+    let epic = epic_id(branch).map_err(|reason| reference_error(root, branch, &reason))?;
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let resolve = |revision: &str| {
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
-            .map_err(|e| format!("{revision}: {e}"))
+            .map_err(|e| reference_error(root, revision, &format!("{revision}: {e}")))
     };
     let head = resolve(head)?;
     let target = resolve(target)?;
@@ -355,7 +378,32 @@ pub fn reference_tip(root: &Path, name: &str) -> Result<Option<String>, String> 
         Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(None),
         Err(error) => Err(format!("{name}: {error}")),
     };
-    tip
+    tip.map_err(|reason| reference_error(root, name, &reason))
+}
+
+fn reference_error(root: &Path, name: &str, reason: &str) -> String {
+    let shown = crate::security::git::shown_ref(root, name);
+    reference_error_shown(root, name, &shown, reason)
+}
+
+fn reference_error_shown(root: &Path, name: &str, shown: &str, reason: &str) -> String {
+    let reason = reason.replace(name, shown);
+    let reason = if name.starts_with("refs/remotes/") {
+        let remote = Repository::discover(root).map_or_else(
+            |_| {
+                name.trim_start_matches("refs/remotes/")
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            },
+            |repo| super::work_start::remote_of(&repo, name),
+        );
+        crate::security::git::without_remote_name(root, &remote, &reason)
+    } else {
+        reason
+    };
+    crate::security::git::without_remote_names(root, &reason)
 }
 
 /// The epic lines (`integration/EPC-*`) whose fetched tip is exactly
@@ -370,7 +418,7 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
         .revparse_single(commit)
         .and_then(|object| object.peel_to_commit())
         .map(|commit| commit.id())
-        .map_err(|e| format!("{commit}: {e}"))?;
+        .map_err(|e| reference_error(root, commit, &format!("{commit}: {e}")))?;
     let mut lines = Vec::new();
     let references = repo
         .references_glob("refs/remotes/origin/integration/*")
@@ -387,18 +435,30 @@ pub fn fetched_lines_at(root: &Path, commit: &str) -> Result<Vec<String>, String
             // commit refuses rather than being skipped.
             Err(_) => None,
         };
-        let tip = reference
-            .peel_to_commit()
-            .map_err(|e| format!("cannot read the tip of '{}': {e}", full.display()))?;
+        let full_text = full.display().to_string();
+        let full_shown = crate::security::git::shown_escaped_ref(root, &full_text);
+        let tip = reference.peel_to_commit().map_err(|e| {
+            reference_error_shown(
+                root,
+                &full_text,
+                &full_shown,
+                &format!("cannot read the tip of '{}': {e}", full.display()),
+            )
+        })?;
         if tip.id() != commit {
             continue;
         }
         match line {
             Some(name) => lines.push(name),
             None => {
-                return Err(format!(
-                    "a fetched line at {commit} has a name that is not UTF-8: '{}'",
-                    full.display()
+                return Err(reference_error_shown(
+                    root,
+                    &full_text,
+                    &full_shown,
+                    &format!(
+                        "a fetched line at {commit} has a name that is not UTF-8: '{}'",
+                        full.display()
+                    ),
                 ))
             }
         }
@@ -418,9 +478,128 @@ pub fn descends_from(root: &Path, tip: &str, head: &str) -> Result<bool, String>
         repo.revparse_single(revision)
             .and_then(|object| object.peel_to_commit())
             .map(|commit| commit.id())
-            .map_err(|e| format!("{revision}: {e}"))
+            .map_err(|e| reference_error(root, revision, &format!("{revision}: {e}")))
     };
     let tip = resolve(tip)?;
     let head = resolve(head)?;
     Ok(history::merge_base(&repo, tip, head).map_err(|e| e.to_string())? == tip)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn fetched_line_errors_escape_a_name_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let repo = git2::Repository::init(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.origin.url", "/unused")
+            .unwrap();
+        let signature = git2::Signature::now("Fixture", "fixture@example.test").unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let head = repo
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "base",
+                &repo.find_tree(tree).unwrap(),
+                &[],
+            )
+            .unwrap();
+        let name = "refs/remotes/origin/integration/EPC-001-\u{202e}";
+        repo.reference(name, repo.blob(b"not a commit").unwrap(), true, "test")
+            .unwrap();
+        let said = super::fetched_lines_at(root, &head.to_string()).unwrap_err();
+        let shown = crate::git::display_text(name);
+        assert!(said.contains(&format!("'{shown}'")), "{said}");
+        assert!(!said.contains(&crate::git::display_text(&shown)), "{said}");
+    }
+    #[test]
+    fn reference_errors_withhold_tracking_names_and_keep_local_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap();
+        for name in [
+            "refs/remotes/unknown-SECRETVALUE/blob",
+            "refs/heads/ordinary",
+        ] {
+            repo.reference(name, blob, true, "test").unwrap();
+            let said = super::reference_tip(dir.path(), name).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if name == "refs/heads/ordinary" {
+                assert!(said.contains(name), "{said}");
+            }
+        }
+    }
+    use super::direct_commit_refusal;
+
+    /// TSK-416 review round 2, finding 1: the `git reset --keep` step gives
+    /// a ref holding `$(…)` as one argument, and pasting it runs nothing
+    /// else; a ref that starts with `-` is not printed, since `--` would
+    /// make `git reset` read it as a path.
+    #[test]
+    #[cfg(unix)]
+    fn the_reset_step_keeps_a_hostile_ref_as_one_argument() {
+        let scratch = tempfile::tempdir().unwrap();
+        let marker = scratch.path().join("ran");
+        let reset = format!(
+            "refs/remotes/origin/integration/EPC-001-x$(touch {})",
+            marker.display()
+        );
+        let repo = tempfile::tempdir().unwrap();
+        let git_in = |args: &[&str]| {
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+        };
+        git_in(&["init", "-q"]);
+        let root = repo.path();
+        let (_, remedy) =
+            direct_commit_refusal(root, "integration/EPC-001-x", &["a".repeat(40)], &reset);
+        let command = remedy
+            .split('`')
+            .find(|span| span.starts_with("git reset "))
+            .unwrap_or_else(|| panic!("{remedy}"));
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\0' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        let printed = String::from_utf8(out.stdout).unwrap();
+        let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+        assert_eq!(arguments, ["reset", "--keep", reset.as_str()], "{remedy}");
+        assert!(!marker.exists(), "{remedy}");
+        let (_, dashed) = direct_commit_refusal(root, "x", &["a".repeat(40)], "-x");
+        assert!(!dashed.contains("git reset"), "{dashed}");
+        // Round 3: the reason names the dash, not a hidden character.
+        assert!(
+            dashed.contains(crate::git::pasted::NOT_PRINTED_DASHED),
+            "{dashed}"
+        );
+        assert!(!dashed.contains("does not show as itself"), "{dashed}");
+        let (_, hidden) = direct_commit_refusal(root, "x", &["a".repeat(40)], "x\u{200b}$(id)");
+        assert!(!hidden.contains("git reset"), "{hidden}");
+        assert!(!hidden.contains("$(id)"), "{hidden}");
+        assert!(hidden.contains(crate::git::pasted::NOT_PRINTED), "{hidden}");
+        // A ref holding a remote name messages withhold is judged on the raw
+        // ref, so quoting cannot split the name past the check.
+        let withheld_remote = "user:p'ass@host";
+        let key = format!("remote.{withheld_remote}.url");
+        git_in(&["config", &key, "https://example.test/repo"]);
+        let reset = format!("refs/remotes/origin/{withheld_remote}");
+        let (_, withheld) = direct_commit_refusal(root, "x", &["a".repeat(40)], &reset);
+        assert!(!withheld.contains("git reset"), "{withheld}");
+        assert!(!withheld.contains("p'"), "{withheld}");
+        assert!(
+            withheld.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{withheld}"
+        );
+    }
 }

@@ -246,11 +246,11 @@ cannot say: exit contracts, and how the gates and the landing path behave.
 | | `--json` | Print the same facts as JSON, each task with its `state`; a landed task adds `landed_branches` and `suggested_command`. |
 | `codeflow work claim <TASK_ID>` | | Fetch, choose the live target tip or the single line holding a completed predecessor the target has not received, then create and push `task/<id>-<slug>` from that base. The pushed branch is an advisory mark others can see |
 | | `<TASK_ID>` | Stable task id. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin, repeat once per code dependency. A copy of the predecessor branch behind the pin is accepted; a copy ahead of it or diverged from it is refused. |
 | `codeflow work start <TASK_ID>` | | Fetch, verify planning, and require HEAD to contain its recorded claim base or the current selected base |
 | | `<TASK_ID>` | Stable task id. |
 | | `--into <REF>` | Non-task branch/ref this task will merge into. |
-| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. |
+| | `--on <TSK-NNN@SHA>...` | Reviewed predecessor pin already contained in HEAD. Its code dependency edge may be on the target or added by this task's own committed record. |
 | `codeflow work status` | | List, per task, each worktree with uncommitted changes, unpushed commits or commits on no branch, read from git; work that cannot be recovered is named. Reads only |
 
 ### Remember

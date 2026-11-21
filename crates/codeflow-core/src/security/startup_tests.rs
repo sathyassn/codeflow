@@ -2520,3 +2520,39 @@ fn a_long_chain_reads_the_ripgrep_config_name_once() {
     assert!(short >= 1, "the search path was not reached");
     assert_eq!(long, short, "reads grew with the segment count");
 }
+
+/// TSK-416 review round 6: a `git -c` refusal names the key with its
+/// subsection withheld, and no refusal of a setting made by `-c`,
+/// `--config-env` or `GIT_CONFIG_KEY_n` prints the subsection. The
+/// credential is synthetic.
+#[test]
+fn a_git_setting_refusal_holds_no_key_subsection() {
+    let f = Fixture::new();
+    let key = "mystery.https://u:OPAQUECANARY@h.invalid/x.key";
+    let named = format!("git -c '{key}=~/.zshrc' log");
+    let found = f.judge(&named);
+    assert!(
+        found.iter().any(|violation| violation
+            .message
+            .contains("`git -c mystery.<name>.key` names the shell startup file")),
+        "{named}: {found:?}"
+    );
+    for command in [
+        named.clone(),
+        format!("git -c '{key}=1' log -p -- .envrc | head"),
+        format!("git --config-env '{key}=NOPE' log -p -- .envrc | head"),
+        format!("C=1 git --config-env '{key}=C' log -p -- .envrc | head"),
+        format!("GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0='{key}' GIT_CONFIG_VALUE_0=1 git log -p -- .envrc | head"),
+    ] {
+        let found = f.judge(&command);
+        assert!(refused(&found), "{command}: {found:?}");
+        for violation in &found {
+            assert!(
+                !violation.message.contains("OPAQUECANARY")
+                    && !violation.message.contains("h.invalid"),
+                "{command}: {}",
+                violation.message
+            );
+        }
+    }
+}

@@ -271,21 +271,27 @@ fn bind_completion_of(
     if kind == RecordKind::Task {
         let repo = git2::Repository::discover(repo_root)
             .map_err(|e| VerbError::Refused(vec![e.to_string()]))?;
-        let target =
-            super::work_start::resolve_work_target(repo_root, after.integration_target.as_deref())
-                .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
-                .ok_or_else(|| {
-                    VerbError::Refused(vec![
-                        "cannot resolve the task target for reopen criteria".into()
-                    ])
-                })?;
+        // The checked resolver: a reopen is judged against the fetched line
+        // or a local branch that contains it, and a local branch diverged
+        // from it refuses, naming both tips (TSK-416 AC-9).
+        let target = super::work_start::resolve_work_target_checked(
+            repo_root,
+            after.integration_target.as_deref(),
+        )
+        .map_err(|error| VerbError::Refused(vec![error.to_string()]))?
+        .map(|resolved| resolved.target)
+        .ok_or_else(|| {
+            VerbError::Refused(vec![
+                "cannot resolve the task target for reopen criteria".into()
+            ])
+        })?;
         let frozen = super::acceptance::reopened_criteria(
             &repo,
             &target,
             "HEAD",
             &graph.with(after.clone()),
         )
-        .map_err(|e| VerbError::Refused(vec![e]))?;
+        .map_err(|e| VerbError::Refused(vec![withheld(&repo, &e)]))?;
         let findings = binding(repo_root, &graph.with(after.clone()), after, change);
         if !frozen.is_empty() {
             // The binding's own refusals follow the frozen criteria, so a
@@ -534,12 +540,143 @@ fn target_commit(
 ) -> Result<Option<git2::Oid>, String> {
     target
         .map(|target| {
-            repo.revparse_single(target)
-                .and_then(|object| object.peel_to_commit())
-                .map(|commit| commit.id())
-                .map_err(|error| format!("cannot read acceptance target '{target}': {error}"))
+            pinned_commit(repo, target)?.map_err(|error| {
+                withheld(
+                    repo,
+                    &format!(
+                        "cannot read acceptance target '{}': class={:?}, code={:?}",
+                        crate::security::git::shown_ref(repo.commondir(), target),
+                        error.class(),
+                        error.code()
+                    ),
+                )
+            })
         })
         .transpose()
+}
+
+/// The commit a pinned anchor names: `--base`, or the acceptance target
+/// (TSK-416; TSK-398 binds anchors to remote-tracking refs). A value
+/// spelled `<remote>/<branch>` for a configured remote reads exactly
+/// `refs/remotes/<remote>/<branch>`. Git's own name lookup tries
+/// `refs/<value>`, `refs/tags/<value>` and `refs/heads/<value>` first, so a
+/// local ref spelled like the fetched one would decide in its place; when
+/// one exists, the read refuses (the outer error), naming both refs and
+/// their commits. Any other value, a full ref or a commit, reads as git
+/// reads it. The inner error is a value that names no commit here. The
+/// outer refusal has every withheld remote name replaced ([`withheld`]);
+/// a caller that prints the inner error replaces them too.
+fn pinned_commit(
+    repo: &git2::Repository,
+    value: &str,
+) -> Result<Result<git2::Oid, git2::Error>, String> {
+    unchecked_pinned_commit(repo, value).map_err(|reason| withheld(repo, &reason))
+}
+
+/// `text`, which can quote a remote-tracking ref or the value that names
+/// one, with every configured remote name messages withhold replaced
+/// ([`crate::security::git::without_remote_names`]).
+fn withheld(repo: &git2::Repository, text: &str) -> String {
+    crate::security::git::without_remote_names(repo.commondir(), text)
+}
+
+/// "fetch it" with the fetch of `branch` from `origin`, or, when either
+/// raw word holds a remote name messages withhold, no command and the steps
+/// for a withheld remote ([`super::work_start::fetch_origin`]). The raw
+/// words are judged, never the rendered command: quoting can split a name
+/// so the rendered text no longer holds it.
+fn fetch_step(repo: &git2::Repository, branch: &str) -> String {
+    super::work_start::fetch_origin(repo.commondir(), branch)
+}
+
+fn unchecked_pinned_commit(
+    repo: &git2::Repository,
+    value: &str,
+) -> Result<Result<git2::Oid, git2::Error>, String> {
+    let peel = |object: Result<git2::Object<'_>, git2::Error>| {
+        object
+            .and_then(|object| object.peel_to_commit())
+            .map(|commit| commit.id())
+    };
+    let remotes = repo
+        .remotes()
+        .map_err(|error| format!("cannot read the remotes: {error}"))?;
+    let remote = remotes
+        .iter()
+        .flatten()
+        .flatten()
+        .filter(|remote| {
+            value
+                .strip_prefix(remote)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .is_some_and(|branch| !branch.is_empty())
+        })
+        .max_by_key(|remote| remote.len());
+    if remote.is_none() || value.starts_with("refs/") {
+        return Ok(peel(repo.revparse_single(value)));
+    }
+    let fetched = format!("refs/remotes/{value}");
+    let read = |reference: &str| {
+        repo.find_reference(reference)
+            .and_then(|found| found.peel_to_commit())
+            .map(|commit| commit.id())
+    };
+    let shown = |reference: &str| {
+        repo.find_reference(reference).ok().map(|_| {
+            read(reference).map_or_else(
+                |_| "a target that is not a readable commit".to_string(),
+                |oid| oid.to_string(),
+            )
+        })
+    };
+    for shadow in [
+        format!("refs/{value}"),
+        format!("refs/tags/{value}"),
+        format!("refs/heads/{value}"),
+    ] {
+        let Some(shadow_tip) = shown(&shadow) else {
+            continue;
+        };
+        let fetched_tip =
+            shown(&fetched).map_or_else(|| "absent here".to_string(), |tip| format!("at {tip}"));
+        // A withheld remote's name is in every command that would fix this,
+        // so none is printed; the caller replaces the name in the prose.
+        let root = repo.commondir();
+        // The raw value is judged too: the part after the remote can hold
+        // another remote's name, which the commands below would carry.
+        if let Some(withheld) = remote.filter(|remote| {
+            !crate::security::git::remote_name_shown(root, remote)
+                || !crate::security::git::word_shown(root, value)
+        }) {
+            return Err(format!(
+                "`{}` is ambiguous here: the local ref {} at {shadow_tip} is spelled like the fetched {} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; no command is printed, since {}",
+                crate::git::display_text(value),
+                crate::git::display_text(&shadow),
+                crate::git::display_text(&fetched),
+                crate::security::git::withheld_remote_step(root, withheld)
+            ));
+        }
+        // Each argument a reader may paste is rendered from its raw value:
+        // a ref name can hold `$(…)`, `;` or a backtick, and the branch to
+        // rename follows `--` when it starts with `-` (TSK-416 review). The
+        // names in prose are shown escaped (TSK-388).
+        let base = crate::git::pasted::option(root, "--base", &fetched).map_or_else(
+            || "`--base` with the full ref, which is not printed to paste since it holds a character a terminal does not show as itself".to_string(),
+            |option| format!("`{option}`"),
+        );
+        return Err(format!(
+            "`{}` is ambiguous here: the local ref {} at {shadow_tip} is spelled like the fetched {} ({fetched_tip}), and git would read the local ref first, so a local ref would decide the fetched line; name the fetched line in full, as in {base}, or rename the local ref ({} for a branch)",
+            crate::git::display_text(value),
+            crate::git::display_text(&shadow),
+            crate::git::display_text(&fetched),
+            crate::git::pasted::step(
+                &crate::git::Pasted::new(root, "git branch -m")
+                    .value(value)
+                    .placeholder("<new-name>")
+            )
+        ));
+    }
+    Ok(read(&fetched))
 }
 
 /// The receiving lines `task status` binds against, settled once from
@@ -612,8 +749,16 @@ fn qualify(
         if default.is_some_and(|(default, _)| default == name) || protected(name)? {
             own_target = true;
             let Some(tip) = receiving_tip(repo, name)? else {
-                return Err(format!(
-                    "the target `{name}` does not resolve here; fetch it (`git fetch origin {name}`)"
+                // The name in the prose is scrubbed too: the renderer keeps
+                // a withheld remote name out of the command only (TSK-416
+                // review).
+                return Err(withheld(
+                    repo,
+                    &format!(
+                        "the target `{}` does not resolve here; {}",
+                        crate::git::display_text(name),
+                        fetch_step(repo, name)
+                    ),
                 ));
             };
             target = Some(tip);
@@ -680,13 +825,37 @@ fn default_target(
             .into
             .clone()
             .unwrap_or_else(|| super::work_start::logical_target(base).to_string());
-        let tip = repo
-            .revparse_single(base)
-            .and_then(|object| object.peel_to_commit())
-            .map_err(|error| {
-                format!("`--base {base}` does not name a commit here ({error}); fetch it (`git fetch origin {name}`)")
-            })?
-            .id();
+        let tip = pinned_commit(repo, base)?.map_err(|error| {
+            let remote = super::work_start::remote_of(repo, base);
+            let remote_spelling = base.starts_with("refs/remotes/")
+                || (!base.starts_with("refs/") && base.contains('/'));
+            if !base.starts_with("refs/")
+                && base.contains('/')
+                && !repo
+                    .remotes()
+                    .map(|names| names.iter().flatten().flatten().any(|name| name == remote))
+                    .unwrap_or(false)
+            {
+                return "`--base` names no commit and no configured remote here (value withheld); name a fetched line as `<remote>/<branch>` for a configured remote, or by its full ref".to_string();
+            }
+            if remote_spelling
+                && !crate::security::git::remote_name_shown(repo.commondir(), &remote)
+            {
+                return format!(
+                    "`--base` does not name a commit here ({}); {}",
+                    crate::security::git::WITHHELD_REMOTE,
+                    crate::security::git::withheld_remote_step(repo.commondir(), &remote)
+                );
+            }
+            let step = fetch_step(repo, &name);
+            withheld(
+                repo,
+                &format!(
+                    "`--base {}` does not name a commit here ({error}); {step}",
+                    crate::git::display_text(base),
+                ),
+            )
+        })?;
         return Ok(Some((name, tip)));
     }
     let remotes = repo
@@ -757,8 +926,18 @@ fn unpinned_binding(
 /// The tip of the branch `name` as the clone's receiving source holds it.
 /// A clone with no remotes has only local branches. Otherwise the source
 /// is `origin`'s remote-tracking ref; a clone with remotes but no `origin`,
-/// or whose `origin` lacks the ref, refuses and names what to set up.
+/// or whose `origin` lacks the ref, refuses and names what to set up. The
+/// refusal quotes the target and its ref, so a withheld remote name in
+/// either is replaced in the whole text (TSK-416 review); the command in it
+/// holds none, since the renderer refuses one.
 fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid>, String> {
+    unchecked_receiving_tip(repo, name).map_err(|reason| withheld(repo, &reason))
+}
+
+fn unchecked_receiving_tip(
+    repo: &git2::Repository,
+    name: &str,
+) -> Result<Option<git2::Oid>, String> {
     let remotes = repo
         .remotes()
         .map_err(|error| format!("cannot read the remotes: {error}"))?;
@@ -770,7 +949,9 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
             .any(|remote| matches!(remote, Ok(Some("origin"))));
         if !origin {
             return Err(format!(
-                "this clone has remotes but no `origin`, so the target `{name}` has no receiving source; add the remote that carries it as `origin` and fetch it (`git fetch origin {name}`)"
+                "this clone has remotes but no `origin`, so the target `{}` has no receiving source; add the remote that carries it as `origin`; then {}",
+                crate::git::display_text(name),
+                fetch_step(repo, name)
             ));
         }
         format!("refs/remotes/origin/{name}")
@@ -785,7 +966,10 @@ fn receiving_tip(repo: &git2::Repository, name: &str) -> Result<Option<git2::Oid
                 Ok(None)
             } else {
                 Err(format!(
-                    "the target `{name}` has no remote-tracking ref {reference} here, and a local branch is never the target's authority; fetch it (`git fetch origin {name}`) and run this again"
+                    "the target `{}` has no remote-tracking ref {} here, and a local branch is never the target's authority, so run this again once the target is fetched; {}",
+                    crate::git::display_text(name),
+                    crate::git::display_text(&reference),
+                    fetch_step(repo, name)
                 ))
             }
         }
@@ -1026,7 +1210,10 @@ fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
         {
             let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
             out[header] = "acceptance_superseded:".to_string();
-            out.insert(header + 1, format!("  reason: {reason}"));
+            // A double-quoted scalar (JSON's string form is one), so any
+            // reason, ': ', '#' and quotes included, reads back as written.
+            let quoted = super::record_text::reason_scalar(reason);
+            out.insert(header + 1, format!("  reason: {quoted}"));
             return Some(out.join("\n"));
         }
         index = body_end + 1;
@@ -1112,6 +1299,418 @@ mod tests {
         assert!(target_commit(&repo, Some("refs/tags/not-commit")).is_err());
     }
 
+    /// TSK-416 (security review nit N2): `--base origin/main` and an
+    /// acceptance target spelled `origin/main` read the fetched
+    /// `refs/remotes/origin/main`, never a local branch named `origin/main`,
+    /// which git's own name lookup would read first; with such a branch
+    /// present they refuse, naming both refs and commits.
+    #[test]
+    fn a_local_branch_spelled_like_the_fetched_line_never_anchors() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let local = repo
+            .commit(None, &signature, &signature, "local", &tree, &[])
+            .unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[])
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", fetched, true, "test")
+            .unwrap();
+        let change = StatusChange {
+            base: Some("origin/main".into()),
+            into: Some("main".into()),
+            ..StatusChange::default()
+        };
+        assert_eq!(
+            default_target(&repo, &change).unwrap(),
+            Some(("main".to_string(), fetched))
+        );
+        assert_eq!(
+            target_commit(&repo, Some("origin/main")).unwrap(),
+            Some(fetched)
+        );
+        for shadow in ["refs/heads/origin/main", "refs/tags/origin/main"] {
+            repo.reference(shadow, local, true, "test").unwrap();
+            for error in [
+                default_target(&repo, &change).unwrap_err(),
+                target_commit(&repo, Some("origin/main")).unwrap_err(),
+            ] {
+                for part in [
+                    "`origin/main` is ambiguous",
+                    &format!("{shadow} at {local}"),
+                    &format!("refs/remotes/origin/main (at {fetched})"),
+                    "`--base refs/remotes/origin/main`",
+                ] {
+                    assert!(error.contains(part), "{part}: {error}");
+                }
+            }
+            // The full ref names only the fetched line.
+            let full = StatusChange {
+                base: Some("refs/remotes/origin/main".into()),
+                ..change.clone()
+            };
+            assert_eq!(default_target(&repo, &full).unwrap().unwrap().1, fetched);
+            repo.find_reference(shadow).unwrap().delete().unwrap();
+        }
+        // A commit and a value naming no configured remote read as before.
+        let by_commit = StatusChange {
+            base: Some(local.to_string()),
+            ..change.clone()
+        };
+        assert_eq!(default_target(&repo, &by_commit).unwrap().unwrap().1, local);
+        repo.reference("refs/heads/fork/main", local, true, "test")
+            .unwrap();
+        assert_eq!(
+            target_commit(&repo, Some("fork/main")).unwrap(),
+            Some(local)
+        );
+    }
+
+    /// The arguments `command` passes to `git`, read by a shell whose `git`
+    /// prints them one per line.
+    #[cfg(unix)]
+    fn printed_git_arguments(command: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{command}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// TSK-416 review: the ambiguity refusal's commands reach a shell as
+    /// the arguments they name when the branch name holds `$(…)` and `;`,
+    /// and git reads a name that starts with `-` as the branch, never as
+    /// an option. Each runs here under a shell whose `git` prints its
+    /// arguments, and the rename then runs with git itself. (A backtick
+    /// would split the message's own code spans; the renderer's own test
+    /// covers it.)
+    #[test]
+    #[cfg(unix)]
+    fn the_ambiguity_remedy_quotes_a_name_holding_shell_syntax() {
+        for (remote, value, dashed) in [
+            ("origin", "origin/m$(id);x", false),
+            ("-x", "-x/--upload-pack=touch_pwned", true),
+            (
+                "--upload-pack=touch_pwned",
+                "--upload-pack=touch_pwned/main",
+                true,
+            ),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str(&format!("remote.{remote}.url"), "/nowhere")
+                .unwrap();
+            let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+            let tree = repo
+                .find_tree(repo.index().unwrap().write_tree().unwrap())
+                .unwrap();
+            let tip = repo
+                .commit(None, &signature, &signature, "tip", &tree, &[])
+                .unwrap();
+            repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+                .unwrap();
+            repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+                .unwrap();
+            let error = target_commit(&repo, Some(value)).unwrap_err();
+            // Withhold remote names from refusal text: a remote whose name
+            // is not shown gets no command, since every command names it.
+            if !crate::security::git::remote_name_shown(dir.path(), remote) {
+                assert!(!error.contains(remote), "{error}");
+                assert!(!error.contains("git branch -m"), "{error}");
+                assert!(!error.contains("`--base "), "{error}");
+                assert!(
+                    error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                    "{error}"
+                );
+                continue;
+            }
+            let base = error
+                .split('`')
+                .find(|span| span.starts_with("--base "))
+                .unwrap_or_else(|| panic!("{error}"));
+            let rename = error
+                .split('`')
+                .find(|span| span.starts_with("git branch -m "))
+                .unwrap_or_else(|| panic!("{error}"))
+                .replace(" <new-name>", " new");
+            let end = if dashed { "--\n" } else { "" };
+            assert_eq!(
+                printed_git_arguments(&format!("git {base}")),
+                format!("--base\nrefs/remotes/{value}\n"),
+                "{error}"
+            );
+            let printed = printed_git_arguments(&rename);
+            assert_eq!(
+                printed,
+                format!("branch\n-m\n{end}{value}\nnew\n"),
+                "{error}"
+            );
+            let arguments: Vec<&str> = printed.lines().collect();
+            let out = crate::git::command()
+                .arg("-C")
+                .arg(dir.path())
+                .args(&arguments)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{rename}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(repo.find_reference("refs/heads/new").is_ok(), "{rename}");
+            assert!(
+                repo.find_reference(&format!("refs/heads/{value}")).is_err(),
+                "{rename}"
+            );
+        }
+    }
+
+    /// The ambiguity remedy judges the raw value, not only the remote that
+    /// prefixes it: a shown remote's ref whose branch part holds another,
+    /// withheld remote's name gets no command, since quoting could split
+    /// that name inside a printed one.
+    #[test]
+    fn the_ambiguity_remedy_prints_no_command_for_a_value_holding_a_withheld_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let mut config = repo.config().unwrap();
+        config.set_str("remote.origin.url", "/nowhere").unwrap();
+        config.set_str("remote.p'ass.url", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let tip = repo
+            .commit(None, &signature, &signature, "tip", &tree, &[])
+            .unwrap();
+        let value = "origin/p'ass";
+        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+            .unwrap();
+        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+            .unwrap();
+        let error = target_commit(&repo, Some(value)).unwrap_err();
+        assert!(error.contains("is ambiguous here"), "{error}");
+        assert!(!error.contains("git branch -m"), "{error}");
+        assert!(!error.contains("`--base "), "{error}");
+        assert!(!error.contains("p'"), "{error}");
+        assert!(
+            error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+            "{error}"
+        );
+    }
+
+    /// TSK-416 review: both receiving-source refusals name the target in
+    /// prose and print a fetch for it. A target holding a withheld remote's
+    /// name appears in neither, and a plain target keeps both.
+    #[test]
+    fn the_receiving_source_refusals_print_no_withheld_name() {
+        let withheld = "u'p@host.invalid";
+        for (origin, case) in [(true, "no remote-tracking ref"), (false, "no origin")] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            let mut config = repo.config().unwrap();
+            if origin {
+                config.set_str("remote.origin.url", "/nowhere").unwrap();
+            }
+            config
+                .set_str(&format!("remote.{withheld}.url"), "/nowhere")
+                .unwrap();
+            let error = receiving_tip(&repo, &format!("x/{withheld}")).unwrap_err();
+            assert!(!error.contains("u'p"), "{case}: {error}");
+            assert!(!error.contains("host.invalid"), "{case}: {error}");
+            assert!(!error.contains("git fetch"), "{case}: {error}");
+            assert!(
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{case}: {error}"
+            );
+            if origin {
+                let plain = receiving_tip(&repo, "main").unwrap_err();
+                assert!(plain.contains("`main`"), "{plain}");
+                assert!(plain.contains("`git fetch origin main`"), "{plain}");
+            }
+        }
+    }
+
+    /// Withhold remote names from refusal text: a `--base` that names a
+    /// fetched line not here gets a fetch command only when no withheld
+    /// remote name would be in it; a withheld remote gets the steps for it.
+    #[test]
+    fn a_missing_base_prints_no_fetch_command_for_a_withheld_remote() {
+        for (remote, shown) in [
+            ("origin", true),
+            ("--upload-pack=touch_pwned", false),
+            ("user:p'ass@host", false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str(&format!("remote.{remote}.url"), "/nowhere")
+                .unwrap();
+            let change = StatusChange {
+                base: Some(format!("{remote}/main")),
+                ..StatusChange::default()
+            };
+            let error = default_target(&repo, &change).unwrap_err();
+            assert!(error.contains("does not name a commit here"), "{error}");
+            if shown {
+                assert!(error.contains("git fetch"), "{error}");
+                continue;
+            }
+            assert!(!error.contains(remote), "{error}");
+            assert!(!error.contains("git fetch"), "{error}");
+            assert!(!error.contains("p'"), "a fragment of the name: {error}");
+            assert!(
+                error.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_base_withholds_unconfigured_remote_spellings() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        for base in [
+            "refs/remotes/cred:SECRETVALUE/main",
+            "cred:SECRETVALUE/main",
+            "user:p'ass-SECRETVALUE@host/main",
+        ] {
+            let change = StatusChange {
+                base: Some(base.into()),
+                ..StatusChange::default()
+            };
+            let said = default_target(&repo, &change).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            assert!(!said.contains("git fetch"), "{said}");
+            if base.starts_with("refs/remotes/") {
+                assert!(said.contains("fresh clone"), "{said}");
+            } else {
+                assert!(said.contains("no configured remote"), "{said}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_missing_slash_branch_explains_fetched_line_spelling() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        for base in ["integration/EPC-041-x", "cred@SECRETVALUE/EPC-041-x"] {
+            let change = StatusChange {
+                base: Some(base.into()),
+                ..StatusChange::default()
+            };
+            let said = default_target(&repo, &change).unwrap_err();
+            assert!(
+                said.contains("no commit and no configured remote"),
+                "{said}"
+            );
+            assert!(said.contains("<remote>/<branch>"), "{said}");
+            assert!(!said.contains("fresh clone"), "{said}");
+            assert!(!said.contains(base), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+        }
+    }
+
+    #[test]
+    fn acceptance_target_refusals_withhold_unconfigured_tracking_refs() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let said = target_commit(&repo, Some("refs/remotes/cred@SECRETVALUE/main")).unwrap_err();
+        assert!(said.contains("cannot read acceptance target"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        assert!(
+            said.contains(crate::security::git::WITHHELD_REMOTE),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_missing_base_withholds_an_unreadable_remote_inventory() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[broken-SECRETVALUE\n").unwrap();
+        let change = StatusChange {
+            base: Some("cred:SECRETVALUE/main".into()),
+            ..StatusChange::default()
+        };
+        let said = default_target(&repo, &change).unwrap_err();
+        assert_eq!(said, crate::security::git::UNREAD_REMOTES_TEXT);
+    }
+
+    /// TSK-416 review round 2, finding 3: a branch name holding a character
+    /// a terminal does not show as itself (U+200B) is named escaped in the
+    /// prose, and no command is printed for it, since the escaped form
+    /// pasted back would name another branch (`\u{200b}` as literal text).
+    #[test]
+    fn the_ambiguity_remedy_prints_no_command_for_a_hidden_character() {
+        let value = "origin/ma\u{200b}in";
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.remote("origin", "/nowhere").unwrap();
+        let signature = git2::Signature::now("Test", "test@example.test").unwrap();
+        let tree = repo
+            .find_tree(repo.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let tip = repo
+            .commit(None, &signature, &signature, "tip", &tree, &[])
+            .unwrap();
+        repo.reference(&format!("refs/remotes/{value}"), tip, true, "test")
+            .unwrap();
+        repo.reference(&format!("refs/heads/{value}"), tip, true, "test")
+            .unwrap();
+        let error = target_commit(&repo, Some(value)).unwrap_err();
+        assert!(error.contains(r"origin/ma\u{200b}in"), "{error}");
+        assert!(!error.contains('\u{200b}'), "{error}");
+        assert!(!error.contains("git branch -m"), "{error}");
+        assert!(!error.contains("`--base refs"), "{error}");
+        assert!(error.contains(crate::git::pasted::NOT_PRINTED), "{error}");
+    }
+
+    /// TSK-416 review: a target branch named like an option reaches git as
+    /// the branch to fetch, after `--`, in each fetch the receiving-source
+    /// refusals print; an ordinary name prints as it did.
+    #[test]
+    #[cfg(unix)]
+    fn a_fetch_remedy_ends_the_options_before_a_dashed_target() {
+        for (remotes, name, expected) in [
+            (
+                &["origin"][..],
+                "--upload-pack=touch_pwned",
+                "fetch\n--\norigin\n--upload-pack=touch_pwned\n",
+            ),
+            (
+                &["up"][..],
+                "--upload-pack=touch_pwned",
+                "fetch\n--\norigin\n--upload-pack=touch_pwned\n",
+            ),
+            (&["origin"][..], "main", "fetch\norigin\nmain\n"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let repo = git2::Repository::init(dir.path()).unwrap();
+            for remote in remotes {
+                repo.remote(remote, "/nowhere").unwrap();
+            }
+            let error = receiving_tip(&repo, name).unwrap_err();
+            let fetch = error
+                .split('`')
+                .find(|span| span.starts_with("git fetch "))
+                .unwrap_or_else(|| panic!("{error}"));
+            assert_eq!(printed_git_arguments(fetch), expected, "{error}");
+        }
+    }
+
     #[test]
     fn frontmatter_value_keeps_the_comment_column() {
         let content = "---\nid: TSK-001\nstatus: todo             # todo | blocked\n---\nbody\n";
@@ -1149,8 +1748,52 @@ mod tests {
         let reopened = supersede_active_block(&content, "regression").unwrap();
         assert_eq!(reopened.matches("acceptance_superseded:").count(), 1);
         assert!(reopened.ends_with(
-            "```yaml\nacceptance_superseded:\n  reason: regression\n  reviewed: x\n```\n"
+            "```yaml\nacceptance_superseded:\n  reason: \"regression\"\n  reviewed: x\n```\n"
         ));
+    }
+
+    /// TSK-416 AC-19: a reopen reason with ': ', '#' and quotes is written
+    /// as a quoted scalar and reads back byte for byte, both as YAML and as
+    /// the block parser reads it.
+    #[test]
+    fn a_reopen_reason_reads_back_byte_for_byte() {
+        let reason = r#"review: found a gap # in "AC-2" and 'AC-3' \ back"#;
+        let block = format!(
+            "acceptance:\n  reviewed: {}\n  review: https://example.test/pr/1\n  criteria:\n    AC-1: verified | cargo test\n  journey: ran\n  not_verified: none\n  follow_ups: none\n  verdict: approved\n",
+            "a".repeat(40)
+        );
+        let content = format!("---\nid: TSK-001\n---\n\n## Closeout\n\n```yaml\n{block}```\n");
+        let reopened = supersede_active_block(&content, reason).unwrap();
+        let blocks = super::super::record_text::acceptance_blocks(&reopened);
+        let parsed = blocks[0].parsed.as_ref().unwrap();
+        assert!(parsed.superseded);
+        assert_eq!(parsed.reason.as_deref(), Some(reason));
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&blocks[0].inner).unwrap();
+        assert_eq!(
+            yaml["acceptance_superseded"]["reason"].as_str(),
+            Some(reason)
+        );
+        // A reason written unquoted before this change still reads as written.
+        let old = reopened.replace(
+            &super::super::record_text::reason_scalar(reason),
+            "plain words",
+        );
+        let blocks = super::super::record_text::acceptance_blocks(&old);
+        assert_eq!(
+            blocks[0].parsed.as_ref().unwrap().reason.as_deref(),
+            Some("plain words")
+        );
+    }
+
+    /// TSK-416 AC-19: the Closeout's reason bullets are Markdown lines, read
+    /// from the first colon on, so such a reason reads back unchanged too.
+    #[test]
+    fn a_cancellation_reason_bullet_reads_back_byte_for_byte() {
+        let reason = r#"replaced: see # "TSK-9" and 'TSK-8'"#;
+        let body = format!("## Closeout\n\n- cancelled: {reason}\n- scope: moved: to TSK-9\n");
+        let parsed = super::super::record_text::parse_cancellation(&body);
+        assert_eq!(parsed.reason, reason);
+        assert_eq!(parsed.scope, "moved: to TSK-9");
     }
 
     /// Issue 94: the status verb's write refuses a link above the record

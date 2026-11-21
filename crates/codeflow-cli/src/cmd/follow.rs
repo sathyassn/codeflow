@@ -23,6 +23,7 @@ use codeflow_core::coord::text;
 use codeflow_core::coord::transition::{Item, ItemState, Ledger};
 use codeflow_core::coord::{self as coord, CoordError};
 use codeflow_core::git::TextBlock;
+use codeflow_core::security::git::WithheldRemotes;
 
 #[derive(Debug, Args)]
 pub struct FollowArgs {
@@ -257,7 +258,7 @@ pub fn run(args: &FollowArgs) -> i32 {
     };
     let result = match &args.command {
         FollowCommand::List(list) => return list_cmd(&paths, &root, list),
-        FollowCommand::Snapshot(snapshot) => return snapshot_cmd(&paths, snapshot),
+        FollowCommand::Snapshot(snapshot) => return snapshot_cmd(&paths, &root, snapshot),
         command => mutate(&paths, &root, command),
     };
     match result {
@@ -934,7 +935,8 @@ fn list_cmd(paths: &Paths, root: &Path, list: &ListArgs) -> i32 {
         };
         let observed = due::observe_item(item, ledger, &liveness, &mut watcher);
         let due = due::due_reasons(item, now, &observed);
-        print_block!(full_record(item, &due, list.md, false));
+        let remotes = WithheldRemotes::read(root);
+        print_block!(full_record(item, &due, list.md, false, &remotes));
         return 0;
     }
     let views: Vec<View<'_>> = ledger
@@ -1102,12 +1104,22 @@ fn render_text(value: &str, md: bool, redacted: bool) -> String {
     }
 }
 
-/// One follow-up in full, readable without its conversation.
+/// One follow-up in full, readable without its conversation. Proofs and
+/// reopen reasons that a judgment wrote are shown with the names of the
+/// repository's withheld remotes replaced: events an earlier binary
+/// recorded still hold them raw (TSK-416 review round 4, L4).
 #[allow(clippy::too_many_lines)]
-fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlock {
+fn full_record(
+    item: &Item,
+    due: &[String],
+    md: bool,
+    redacted: bool,
+    remotes: &WithheldRemotes,
+) -> TextBlock {
     let mut block = TextBlock::new();
     let record = &item.record;
     let t = |value: &str| render_text(value, md, redacted);
+    let judged = |value: &str| t(&remotes.scrub(value));
     let field = |block: &mut TextBlock, name: &str, value: &str| {
         if md {
             let _ = writeln!(block, "- **{name}:** {value}");
@@ -1181,8 +1193,8 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
             "proof",
             &format!(
                 "{kind}: {} ({}, observed {})",
-                t(&proof.reference),
-                t(&proof.source),
+                judged(&proof.reference),
+                judged(&proof.source),
                 proof.observed_at
             ),
         );
@@ -1191,7 +1203,7 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
         field(&mut block, "purged", &format!("{at} by {role}"));
     }
     for reason in &item.reopened {
-        field(&mut block, "reopened", &t(reason));
+        field(&mut block, "reopened", &judged(reason));
     }
     if let ItemState::Dropped {
         reason,
@@ -1214,7 +1226,7 @@ fn full_record(item: &Item, due: &[String], md: bool, redacted: bool) -> TextBlo
     block
 }
 
-fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
+fn snapshot_cmd(paths: &Paths, root: &Path, snapshot: &SnapshotArgs) -> i32 {
     let read = match store::read(paths) {
         ReadOutcome::Empty => {
             println!("coordination ledger: empty (no ledger in this clone)");
@@ -1242,9 +1254,10 @@ fn snapshot_cmd(paths: &Paths, snapshot: &SnapshotArgs) -> i32 {
         read.folded.ledger.last_sequence,
         coord::format_time(coord::now_secs())
     );
+    let remotes = WithheldRemotes::read(root);
     for item in read.folded.ledger.items.values() {
         let _ = writeln!(block);
-        block.push_str(full_record(item, &[], true, true).as_str());
+        block.push_str(full_record(item, &[], true, true, &remotes).as_str());
     }
     match &snapshot.output {
         None => {

@@ -10,6 +10,96 @@ use std::path::Path;
 
 use super::{imported_records, Graph, ImportedRecord, Repository};
 
+const CREDENTIAL_REMOTE: &str = "cred:SECRETVALUE";
+
+fn with_credential_remote(fixture: &Fixture) {
+    fixture.git(&[
+        "config",
+        &format!("remote.{CREDENTIAL_REMOTE}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", CREDENTIAL_REMOTE]);
+}
+
+#[test]
+fn an_unreadable_home_ref_withholds_the_remote_name() {
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
+    with_credential_remote(&fixture);
+    fixture.sync();
+    let said = fixture.judge().unwrap_err();
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+    assert!(said.contains("cannot read the published home"), "{said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "{said}"
+    );
+}
+
+#[test]
+fn an_invalid_configured_tracking_target_withholds_the_remote_name() {
+    let fixture = Fixture::new(&[]);
+    with_credential_remote(&fixture);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let declared = format!("refs/remotes/{CREDENTIAL_REMOTE}/main");
+    let said = crate::workgraph::readiness::target_fetch_remote(&repo, &declared).unwrap_err();
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+    assert!(
+        said.contains("names a remote that is not configured"),
+        "{said}"
+    );
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "{said}"
+    );
+}
+
+#[test]
+fn import_path_resolution_withholds_unreadable_revision_names() {
+    let fixture = Fixture::new(&[]);
+    with_credential_remote(&fixture);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let blob = repo.blob(b"not a commit").unwrap();
+    repo.reference("refs/tags/cred-SECRETVALUE", blob, true, "test")
+        .unwrap();
+    let mut refusals = Vec::new();
+    for bad in [
+        "refs/remotes/cred:SECRETVALUE/main",
+        "refs/remotes/cred-SECRETVALUE/main",
+        "cred:SECRETVALUE/main",
+        "refs/tags/cred-SECRETVALUE",
+    ] {
+        for (base, head) in [(bad, "HEAD"), ("HEAD", bad)] {
+            let said = super::imported_record_paths(fixture.root(), base, head).unwrap_err();
+            let role = if base == bad { "base" } else { "head" };
+            assert!(said.contains(&format!("import {role} revision")), "{said}");
+            refusals.push(said);
+        }
+    }
+    assert!(
+        refusals
+            .iter()
+            .all(|said| !said.contains("SECRETVALUE") && said.contains("cannot resolve import")),
+        "{refusals:?}"
+    );
+}
+
+#[test]
+fn an_unreadable_home_ref_keeps_a_shown_remote() {
+    let fixture = Fixture::new(&[]);
+    let repo = Repository::open(fixture.root()).unwrap();
+    repo.remote("mirror", "/nowhere").unwrap();
+    let said = super::unread_home(
+        &repo,
+        "mirror",
+        "refs/remotes/mirror/main",
+        &git2::Error::from_str("unreadable ref"),
+    );
+    assert!(said.contains("mirror/main"), "{said}");
+    assert!(said.contains("unreadable ref"), "{said}");
+    assert!(said.contains("fetch the configured remote"), "{said}");
+}
+
 pub(super) const LINE: &str = "integration/EPC-001-outcome";
 pub(super) const OTHER: &str = "integration/EPC-002-other";
 pub(super) const THIRD: &str = "integration/EPC-003-third";
@@ -625,4 +715,76 @@ fn a_same_destination_own_move_still_judges_mains_moves() {
     fixture.land(LINE, &[(&path, &own)]);
     fixture.sync();
     passes(&fixture, "a planning move beside the line's own");
+}
+
+/// Withhold remote names from refusal text: the default branch tracks a
+/// remote whose name holds a URL with a credential. Its remote-tracking ref
+/// is not a valid ref name, so libgit2's refusal quotes it, and the refusal
+/// a finding is made from shows the withheld form, never the name.
+#[test]
+fn a_home_refusal_withholds_remote_names_from_refusal_text() {
+    const TOKEN: &str = "secret-token-1396";
+    let name = format!("https://user:{TOKEN}@example.test/repo");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
+    fixture.land("main", &[(&path_of("TSK-001"), &moved("TSK-001", "main"))]);
+    fixture.git(&[
+        "config",
+        &format!("remote.{name}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", &name]);
+    fixture.git(&["config", "branch.main.merge", "refs/heads/main"]);
+    fixture.sync();
+    let said = match fixture.judge() {
+        Ok(found) => panic!(
+            "an unreadable home was accepted, importing {:?}",
+            found.keys().collect::<Vec<_>>()
+        ),
+        Err(said) => said,
+    };
+    assert!(!said.contains(TOKEN), "the credential is shown: {said}");
+    assert!(!said.contains(&name), "the remote name is shown: {said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "the refusal does not show the withheld form: {said}"
+    );
+}
+
+/// Withhold remote names from refusal text on a line range whose merge
+/// changes no task record: the receiving-merge check reads the home tip
+/// itself, and its refusal shows the withheld form, never the name.
+#[test]
+fn a_line_merge_refusal_withholds_remote_names_from_refusal_text() {
+    const TOKEN: &str = "secret-token-416";
+    let name = format!("https://user:{TOKEN}@example.test/repo");
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
+    let base = fixture.oid(LINE);
+    let head = fixture.land(LINE, &[("docs/notes.md", "A note.\n")]);
+    fixture.git(&[
+        "config",
+        &format!("remote.{name}.url"),
+        "file:///nonexistent/repo.git",
+    ]);
+    fixture.git(&["config", "branch.main.remote", &name]);
+    fixture.git(&["config", "branch.main.merge", "refs/heads/main"]);
+    let repo = Repository::open(fixture.root()).unwrap();
+    let graph = Graph::from_revision(&repo, &head.to_string()).unwrap();
+    let said = match super::super::receiving_merges::findings(
+        &repo,
+        base,
+        head,
+        Some(LINE),
+        &graph,
+        &[],
+        None,
+    ) {
+        Ok(found) => panic!("an unreadable home was accepted: {found:?}"),
+        Err(said) => said,
+    };
+    assert!(!said.contains(TOKEN), "the credential is shown: {said}");
+    assert!(!said.contains(&name), "the remote name is shown: {said}");
+    assert!(
+        said.contains(crate::security::git::WITHHELD_REMOTE),
+        "the refusal does not show the withheld form: {said}"
+    );
 }

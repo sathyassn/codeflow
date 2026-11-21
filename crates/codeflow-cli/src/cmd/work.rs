@@ -42,7 +42,9 @@ pub enum WorkCommand {
     Claim {
         /// Stable task id.
         task_id: String,
-        /// Reviewed predecessor pin, repeat once per code dependency.
+        /// Reviewed predecessor pin, repeat once per code dependency. A copy
+        /// of the predecessor branch behind the pin is accepted; a copy ahead
+        /// of it or diverged from it is refused.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
@@ -53,7 +55,9 @@ pub enum WorkCommand {
         /// Non-task branch/ref this task will merge into.
         #[arg(long = "into", value_name = "REF")]
         target: Option<String>,
-        /// Reviewed predecessor pin already contained in HEAD.
+        /// Reviewed predecessor pin already contained in HEAD. Its code
+        /// dependency edge may be on the target or added by this task's own
+        /// committed record.
         #[arg(long, value_name = "TSK-NNN@SHA")]
         on: Vec<String>,
     },
@@ -87,13 +91,16 @@ fn status() -> i32 {
     };
     match codeflow_core::worktree_inventory::inventory(&cwd) {
         Ok(inventory) => {
-            print_block!(codeflow_core::worktree_inventory::render(&inventory));
+            print_block!(super::shown_block(
+                &cwd,
+                &codeflow_core::worktree_inventory::render(&inventory)
+            ));
             0
         }
         Err(error) => {
             eprintln!(
                 "work status: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&cwd, &error))
             );
             1
         }
@@ -113,7 +120,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         Err(error) => {
             eprintln!(
                 "work next: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -164,10 +171,10 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
         }
     }
     if as_json {
-        // JSON keeps each value exact; its bytes hold no hidden character
+        // JSON withholds remote identities and escapes hidden characters
         // (`display_json`, TSK-388).
         println_block!(codeflow_core::git::TextBlock::json(
-            &next_json(&backlog).to_string()
+            &next_json(&root, &backlog).to_string()
         ));
         return 0;
     }
@@ -187,7 +194,7 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     }
     for state in listed {
         for entry in backlog.in_state(state) {
-            println!("{}", entry_line(entry));
+            println!("{}", entry_line(&root, entry));
         }
     }
     let active = backlog.in_state(State::Active).count();
@@ -197,8 +204,8 @@ fn next(epic: Option<&str>, as_json: bool) -> i32 {
     0
 }
 
-fn entry_line(entry: &Entry) -> String {
-    use codeflow_core::git::{display_message, display_text};
+fn entry_line(root: &std::path::Path, entry: &Entry) -> String {
+    use codeflow_core::git::display_message;
     let scope = entry.epic_id.as_deref().unwrap_or("standalone");
     // A title is record text and a target a branch name: shown escaped,
     // with a further line of either indented (TSK-388).
@@ -207,7 +214,10 @@ fn entry_line(entry: &Entry) -> String {
         entry.state.as_str(),
         entry.task_id,
         display_message(&entry.title),
-        display_text(&entry.target)
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &codeflow_core::security::git::shown_ref(root, &entry.target)
+        )
     );
     if !entry.reason.is_empty() {
         line.push_str("\n         ");
@@ -231,7 +241,7 @@ fn entry_line(entry: &Entry) -> String {
     line
 }
 
-fn next_json(backlog: &Backlog) -> serde_json::Value {
+fn next_json(root: &std::path::Path, backlog: &Backlog) -> serde_json::Value {
     json!({
         "snapshot": backlog.snapshots.iter().map(|snapshot| json!({
             "target": snapshot.target,
@@ -244,10 +254,14 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "id": entry.task_id,
             "title": entry.title,
             "epic": entry.epic_id,
-            "target": entry.target,
+            "target": codeflow_core::security::git::without_remote_names(
+                root,
+                &codeflow_core::security::git::shown_escaped_ref(root, &entry.target)
+            ),
             "state": entry.state.as_str(),
             "reason": entry.reason,
-            // The names git stores; `display_json` escapes them on output.
+            // Exact names except where a withheld remote name is replaced;
+            // `display_json` escapes them on output.
             "branches": entry.branch_names,
             // Set on a `landed` task: the branches whose work reached the
             // target and the command that settles the record (TSK-1038).
@@ -282,7 +296,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         if let Err(error) = readiness::refresh_claim(&root, task_id) {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -292,7 +306,7 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         Err(error) => {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -301,7 +315,8 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
         Ok(claim) => {
             println!(
                 "work claim: {task_id} -> {} from {}",
-                claim.branch, claim.from
+                codeflow_core::security::git::without_remote_names(&root, &claim.branch),
+                claim.from
             );
             if !claim.omitted_words.is_empty() {
                 println!(
@@ -319,14 +334,14 @@ fn claim(task_id: &str, on: &[String]) -> i32 {
             }
             println!(
                 "  next: check out {} and run `codeflow work start {task_id}`",
-                claim.branch
+                codeflow_core::security::git::without_remote_names(&root, &claim.branch)
             );
             0
         }
         Err(error) => {
             eprintln!(
                 "work claim: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             1
         }
@@ -371,7 +386,10 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     // Fetch before resolving pins, as `work claim` does, so a replacement pin
     // is judged against the pushed predecessor head.
     if let Err(error) = readiness::refresh_claim(&root, task_id) {
-        eprintln!("work start: error: {}", crate::cmd::shown(&error));
+        eprintln!(
+            "work start: error: {}",
+            crate::cmd::shown(&super::shown_in(&root, &error))
+        );
         return 1;
     }
     // Explicit review evidence is required even when planning findings warn.
@@ -381,7 +399,7 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
         Err(error) => {
             eprintln!(
                 "work start: error: {error}",
-                error = crate::cmd::shown(&error)
+                error = crate::cmd::shown(&super::shown_in(&root, &error))
             );
             return 1;
         }
@@ -401,7 +419,7 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
                 Err(error) => {
                     eprintln!(
                         "work start: error: recording reviewed claim base failed: {}",
-                        crate::cmd::shown(&error)
+                        crate::cmd::shown(&super::shown_in(&root, &error))
                     );
                     return 1;
                 }
@@ -413,7 +431,10 @@ fn start(task_id: &str, target: Option<&str>, on: &[String]) -> i32 {
     let warn = level == PolicyLevel::Warn;
     let label = if warn { "warning" } else { "error" };
     for finding in &findings {
-        eprintln!("work start: {label}: {}", crate::cmd::shown(finding));
+        eprintln!(
+            "work start: {label}: {}",
+            crate::cmd::shown(&super::shown_in(&root, finding))
+        );
     }
     if warn {
         eprintln!(
@@ -449,18 +470,26 @@ fn plan_check(
 
     let declared = match target {
         Some(target) => Some(target.to_string()),
-        None => declared_work_target(root, task_id).map_err(|error| vec![error.to_string()])?,
+        None => declared_work_target(root, task_id).map_err(|error| vec![error.shown(root)])?,
     };
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
-        Err(error) => return Err(vec![error.to_string()]),
+        Err(error) => return Err(vec![error.shown(root)]),
     };
     let report =
         codeflow_core::workgraph::work_start::check_work_start_on(root, task_id, &target, pins)
-            .map_err(|error| vec![error.to_string()])?;
+            .map_err(|error| vec![error.shown(root)])?;
     println!(
         "work start: {} anchored at {} for {} -> {}",
-        report.task_id, report.merge_base, report.branch, report.target
+        report.task_id,
+        report.merge_base,
+        codeflow_core::security::git::without_remote_names(root, &report.branch),
+        // A fork's tracking ref holds its remote's name, shown only when
+        // plain (TSK-416 review round 7).
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &codeflow_core::security::git::shown_ref(root, &report.target)
+        )
     );
     if let Some(note) = report.base_note {
         println!("  {}", crate::cmd::shown(&note));
@@ -482,15 +511,19 @@ fn plan_check(
             "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
             others.join(", ")
         ),
-        Err(error) => println!(
-            "  note: other branches were not checked: {error}",
-            error = crate::cmd::shown(&error)
-        ),
+        Err(error) => println!("{}", other_branches_note(root, &error)),
     }
     Ok(VerifiedClaim {
         branch: report.branch,
         target: report.target,
     })
+}
+
+fn other_branches_note(root: &std::path::Path, error: &str) -> String {
+    format!(
+        "  note: other branches were not checked: {}",
+        crate::cmd::shown(&crate::cmd::shown_in(root, error))
+    )
 }
 
 fn resolve_pins(
@@ -571,6 +604,80 @@ fn reviewed(
     Ok(false)
 }
 
+/// Why the review provider failed, from the first line it wrote to stderr
+/// (issue 547): the cause (no pull request, authentication or network),
+/// then the provider's own words, redacted (URL userinfo and secret-shaped
+/// text) and cut to one bounded terminal line.
+fn provider_failure(stderr: &str) -> String {
+    let first = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    let lower = first.to_ascii_lowercase();
+    let cause = if lower.contains("no pull requests found")
+        || lower.contains("no open pull requests")
+        || lower.contains("could not resolve to a pullrequest")
+    {
+        "no pull request has this branch as its head"
+    } else if [
+        "auth",
+        "401",
+        "403",
+        "credential",
+        "token",
+        "logged in",
+        "login",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+    {
+        "the provider could not authenticate; check `gh auth status`"
+    } else if [
+        "could not connect",
+        "connecting",
+        "connection",
+        "network",
+        "timeout",
+        "timed out",
+        "dial tcp",
+        "no such host",
+        "resolve host",
+        "unreachable",
+    ]
+    .iter()
+    .any(|word| lower.contains(word))
+    {
+        "the provider could not reach the host"
+    } else {
+        "the provider gave another error"
+    };
+    // A secret-shaped line becomes a marker, then the text is one terminal
+    // line. Built from the scanner and git's display escaping, so this gate
+    // command does not name the coordination module (ledger_free_cli).
+    let urls = codeflow_core::git::remote_query::display_urls(first);
+    let flat = urls
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line))
+        .map(|line| {
+            if codeflow_core::hooks::scan::scan_line(line).is_some() {
+                "[redacted]"
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+        .replace('\t', " ");
+    let shown = codeflow_core::git::display_message(&flat);
+    let shown: String = shown.chars().take(300).collect();
+    if shown.is_empty() {
+        format!("cannot verify review for this pin: provider failed: {cause} (it wrote no error message)")
+    } else {
+        format!("cannot verify review for this pin: provider failed: {cause}: {shown}")
+    }
+}
+
 /// Bound provider lifetime and response size; a regular output file means a
 /// descendant retaining stdout cannot hold an output-reader thread open.
 fn pr_review(
@@ -582,6 +689,7 @@ fn pr_review(
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     let mut output = tempfile::tempfile().map_err(|error| error.to_string())?;
+    let mut errors = tempfile::tempfile().map_err(|error| error.to_string())?;
     let mut command = Command::new("gh");
     command
         .args([
@@ -596,7 +704,7 @@ fn pr_review(
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(output.try_clone().map_err(|error| error.to_string())?)
-        .stderr(Stdio::null());
+        .stderr(errors.try_clone().map_err(|error| error.to_string())?);
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
@@ -626,6 +734,14 @@ fn pr_review(
                 ));
             }
         }
+        if errors
+            .metadata()
+            .is_ok_and(|metadata| metadata.len() > 1_048_576)
+        {
+            break Err(
+                "cannot verify review for this pin: provider error output too large".to_string(),
+            );
+        }
         match child.try_wait() {
             Ok(Some(status)) => break Ok(status),
             Ok(None) => std::thread::sleep(Duration::from_millis(20)),
@@ -648,7 +764,10 @@ fn pr_review(
     let _ = child.kill();
     let _ = child.wait();
     if !status?.success() {
-        return Err("cannot verify review for this pin: provider failed".into());
+        let mut said = Vec::new();
+        let _ = errors.rewind();
+        let _ = (&mut errors).take(4096).read_to_end(&mut said);
+        return Err(provider_failure(&String::from_utf8_lossy(&said)));
     }
     output.rewind().map_err(|error| error.to_string())?;
     let mut bytes = Vec::new();
@@ -661,4 +780,32 @@ fn pr_review(
     }
     serde_json::from_slice(&bytes)
         .map_err(|error| format!("cannot parse predecessor review: {error}"))
+}
+
+#[cfg(test)]
+mod output_tests {
+    #[test]
+    fn branch_scan_note_withholds_missing_object_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        for remote in ["cred@SECRETVALUE", "ordinary"] {
+            repo.remote(remote, "/unused").unwrap();
+            let name = format!("refs/remotes/{remote}/task/TSK-001-other");
+            let path = repo.path().join(&name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, "1111111111111111111111111111111111111111\n").unwrap();
+            let error = repo
+                .find_reference(&name)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap_err();
+            assert!(error.to_string().contains(&name), "{error}");
+            let said = super::other_branches_note(dir.path(), &error.to_string());
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            assert!(said.contains("other branches were not checked"), "{said}");
+            if remote == "ordinary" {
+                assert!(said.contains(&name), "{said}");
+            }
+        }
+    }
 }

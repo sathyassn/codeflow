@@ -222,9 +222,47 @@ fn violation(
 }
 
 /// How to clear a push-set check: rerun it by hand after fixing its findings.
-fn check_remedy(args: &[&str]) -> codeflow_core::remedy::Remedy {
+/// Each argument is one shell word rendered from its raw value, so a ref
+/// holding `$(…)` or a quote pastes back as itself (TSK-416 review round 2).
+/// When one has no printed form, no command is built from the arguments:
+/// the remedy is the plain `codeflow ci` by hand, which names no value
+/// (TSK-416 review round 3).
+fn check_remedy(root: &Path, args: &[&str]) -> codeflow_core::remedy::Remedy {
     let rest = args.split_first().map_or(args, |(_, rest)| rest);
-    codeflow_core::remedy::PUSH_SET_CI.with(&[("args", &rest.join(" "))])
+    // The whole line is judged, so a withheld name holding a space cannot
+    // span two arguments (TSK-416 review).
+    let words = codeflow_core::git::pasted::argv(root, "codeflow ci", rest);
+    match words
+        .as_deref()
+        .and_then(|line| line.strip_prefix("codeflow ci"))
+        // `argv` joins its words with one ASCII space.
+        .map(|words| words.strip_prefix(' ').unwrap_or(words))
+    {
+        Some(words) => codeflow_core::remedy::PUSH_SET_CI.with(&[("args", words)]),
+        None => codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
+    }
+}
+
+/// What the push output calls a check it ran: the step name for the timing
+/// report, and the name its findings and failures carry. With a printed
+/// form, both are the rerun line, the name in backticks. Without one,
+/// because an argument holds a character a terminal does not show as
+/// itself, neither holds any argument: no text built from the arguments
+/// can paste back as them, and a display form joined into a line would
+/// still carry shell syntax such as `$(…)` (TSK-416 review round 3).
+fn check_names(root: &Path, rerun: &[&str]) -> (String, String) {
+    if let Some(line) = codeflow_core::git::pasted::argv(root, "codeflow", rerun) {
+        let named = format!("`{line}`");
+        return (line, named);
+    }
+    let verb = rerun
+        .first()
+        .and_then(|verb| codeflow_core::git::pasted::word(root, verb))
+        .map_or_else(|| "codeflow".to_string(), |verb| format!("codeflow {verb}"));
+    let named = format!(
+        "the `{verb}` check of this push (an argument holds a character a terminal does not show as itself, or a remote name codeflow withholds, so its command is not printed)"
+    );
+    (verb, named)
 }
 
 /// What judges a push under [`Judged::Target`]: the policy at the
@@ -408,11 +446,13 @@ fn ci_target(
             dropped = true;
             report.status.push(format!(
                 "declared target '{}' is a protected branch other than the destination's default; the check uses the destination's default target",
-                display_text(&target)
+                super::ci::shown_reference(root, &target)
             ));
             None
         }
         Some(Declared::Rejected { target, reason }) => {
+            let target = super::ci::shown_reference(root, &target);
+            let reason = super::shown_in(root, &reason);
             report.status.push(format!(
                 "declared target '{target}' {reason}; the check uses the destination's default target"
             ));
@@ -437,10 +477,17 @@ fn ci_target(
         if !codeflow_core::workgraph::is_stable_work_target(target) {
             return Err(format!(
                 "target '{}' must name a stable non-task branch",
-                display_text(target)
+                super::ci::shown_reference(root, target)
             ));
         }
-        codeflow_core::hooks::git_guard::read_branch_name(root, None, target)?;
+        codeflow_core::hooks::git_guard::read_branch_name(root, None, target).map_err(
+            |reason| {
+                super::shown_in(
+                    root,
+                    &reason.replace(target, &super::ci::shown_reference(root, target)),
+                )
+            },
+        )?;
     }
     Ok(target)
 }
@@ -604,9 +651,14 @@ fn ci_base(
         Scoped::Ordinary => {
             let mut notices = Vec::new();
             let range = range_base(root, r, destination, &mut notices)?;
-            report
-                .status
-                .extend(notices.into_iter().map(|text| format!("note: {text}")));
+            report.status.extend(notices.into_iter().map(|text| {
+                // A target named in a notice can hold a withheld remote
+                // name (TSK-416 review).
+                format!(
+                    "note: {}",
+                    codeflow_core::security::git::without_remote_names(root, &text)
+                )
+            }));
             if let Some(RangeBase { base, note }) = range {
                 report.notes.extend(note);
                 Some(base)
@@ -633,6 +685,7 @@ fn release_preflight(
 ) {
     let branch = pushed.remote_branch().unwrap_or_default();
     let shown_branch = display_text(branch);
+    let branch_option = branch_option(root, branch);
     let started = Instant::now();
     let result =
         codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote, exe);
@@ -652,7 +705,7 @@ fn release_preflight(
                         line,
                         remedy::RELEASE_PREFLIGHT_NOTE.with(&[
                             ("script", codeflow_core::release_local::SCRIPT),
-                            ("branch", branch),
+                            ("branch_option", &branch_option),
                         ]),
                     ));
                 }
@@ -663,7 +716,7 @@ fn release_preflight(
                     format!("release preflight ({shown_branch}): this push breaks the release tree"),
                     codeflow_core::remedy::RELEASE_PREFLIGHT.with(&[
                         ("script", codeflow_core::release_local::SCRIPT),
-                        ("branch", branch),
+                        ("branch_option", &branch_option),
                     ]),
                 ));
             }
@@ -672,7 +725,7 @@ fn release_preflight(
             format!(
                 "release preflight could not complete for '{shown_branch}': {error}; the pull request job checks it"
             ),
-            remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch", branch)]),
+            remedy::RELEASE_PREFLIGHT_UNRUN.with(&[("branch_option", &branch_option)]),
         )),
     }
 }
@@ -700,14 +753,10 @@ fn run_check_with(
             **arg != "--advertisement-stdin"
                 && run_level.is_none_or(|level| *at != level && *at != level + 1)
         })
-        .map(|(_, arg)| match arg.strip_prefix("--into=") {
-            // The destination's default branch, which it names itself.
-            Some(into) => std::borrow::Cow::Owned(format!("--into={}", display_text(into))),
-            None => remote_query::display_url(arg),
-        })
+        .map(|(_, arg)| remote_query::display_url(arg))
         .collect();
     let rerun: Vec<&str> = displayed.iter().map(AsRef::as_ref).collect();
-    let shown = format!("codeflow {}", rerun.join(" "));
+    let (step_name, shown) = check_names(root, &rerun);
     // `codeflow ci` names its blocking rules in a file of its own, for the
     // refusal record; its printed findings can quote operation content.
     let rules_out = (args.first() == Some(&"ci"))
@@ -724,7 +773,7 @@ fn run_check_with(
         input.unwrap_or_default().as_bytes(),
     );
     steps.push(PushStep {
-        name: shown.clone(),
+        name: step_name,
         duration: started.elapsed(),
     });
     match output {
@@ -740,7 +789,7 @@ fn run_check_with(
             report.relayed.extend(
                 relayed_findings(&relayed_text(&printed))
                     .into_iter()
-                    .map(|finding| format!("`{shown}`: {finding}")),
+                    .map(|finding| format!("{shown}: {finding}")),
             );
         }
         Ok(out) => {
@@ -758,8 +807,8 @@ fn run_check_with(
             let kept_block = run_level.is_some() && matches!(out.status.code(), Some(1 | 2));
             let mut failed = violation(
                 policy,
-                format!("push set check failed: `{shown}` (output above)"),
-                check_remedy(&rerun),
+                format!("push set check failed: {shown} (output above)"),
+                check_remedy(root, &rerun),
             );
             if kept_block && policy.test_gate_on_push != codeflow_core::hooks::PolicyLevel::Block {
                 failed.level = codeflow_core::hooks::PolicyLevel::Block;
@@ -779,7 +828,7 @@ fn run_check_with(
         }
         Err(error) => report.violations.push(violation(
             policy,
-            format!("push set check could not run: `{shown}`: {error}"),
+            format!("push set check could not run: {shown}: {error}"),
             codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
@@ -886,6 +935,33 @@ fn tracking_namespace(root: &Path, remote: &str) -> Result<Option<String>, Strin
     }))
 }
 
+/// The release preflight's `--branch` option for a printed command,
+/// rendered from the raw pushed name: a name holding `$(…)` stays one
+/// argument and one starting with `-` is joined with `=`. A name with no
+/// printed form leaves a placeholder for the reader to fill, since the
+/// finding names the branch escaped (TSK-416 review round 2).
+fn branch_option(root: &Path, branch: &str) -> String {
+    codeflow_core::git::pasted::option(root, "--branch", branch)
+        .unwrap_or_else(|| "--branch <branch>".to_string())
+}
+
+/// "run `git fetch --prune <remote>`", rendered from the raw remote name: a
+/// name holding `$(…)` stays one argument and one starting with `-`
+/// follows `--` (TSK-416 review round 2). A remote whose name messages
+/// withhold, since configuration text can be a URL with a credential
+/// (review round 7), gets no command, only a fresh clone or a rename
+/// through a Git client (review rounds 9 and 10).
+fn prune_step(root: &Path, remote: &str) -> String {
+    let unnamed = || codeflow_core::security::git::withheld_remote_step(root, remote);
+    if !codeflow_core::security::git::remote_name_shown(root, remote) {
+        return unnamed();
+    }
+    codeflow_core::git::Pasted::new(root, "git fetch --prune")
+        .value(remote)
+        .render()
+        .map_or_else(unnamed, |command| format!("run {command}"))
+}
+
 /// The first tracking ref this clone holds for `remote`, under
 /// `refs/remotes/<remote>/` or any destination of its fetch refspecs,
 /// exact or glob (a glob is read up to its last `/` before the `*`, a
@@ -913,10 +989,17 @@ fn held_tracking_ref(root: &Path, remote: &str) -> Result<Option<String>, String
                 None => dst,
             };
             if !pattern.starts_with("refs/") {
+                // The key and the destination hold the remote's name, shown
+                // only when plain (TSK-416 review round 7).
                 return Err(format!(
-                    "{key} stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; run git fetch --prune {}",
-                    display_text(dst),
-                    display_text(remote)
+                    "remote.{}.fetch stores into {}, which is not a full ref name, so whether this clone still tracks the destination cannot be read; {}",
+                    codeflow_core::security::git::shown_remote(root, remote),
+                    codeflow_core::security::git::without_remote_name(
+                        root,
+                        remote,
+                        &display_text(dst)
+                    ),
+                    prune_step(root, remote)
                 ));
             }
             patterns.push(pattern.to_string());
@@ -1055,9 +1138,9 @@ fn judged_by(
             return Ok(Judged::Initialization);
         };
         return Err(format!(
-            "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; run git fetch --prune {}",
-            display_text(&held),
-            display_text(remote)
+            "the destination advertises no branches while this clone still holds its tracking ref {}, so no default branch can judge the push; {}",
+            codeflow_core::security::git::shown_ref(root, &held),
+            prune_step(root, remote)
         ));
     }
     let anchor = match destination.anchor(root, steps) {
@@ -1553,6 +1636,7 @@ fn target_base(
             }
             super::ci::Declared::Eligible(target)
             | super::ci::Declared::Rejected { target, .. } => {
+                let target = super::ci::shown_reference(root, &target);
                 let Some((name, _)) = default else {
                     return Err(format!(
                         "declared target '{target}' cannot bound the range and the destination has no default target"
@@ -1560,7 +1644,7 @@ fn target_base(
                 };
                 notices.push(format!(
                     "declared target '{target}' cannot bound the range; using the destination's default target '{}'",
-                    display_text(name)
+                    super::ci::shown_reference(root, name)
                 ));
                 name.clone()
             }

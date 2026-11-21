@@ -52,6 +52,11 @@ pub enum Identity {
 
 /// What due derivation reads from outside the ledger.
 pub trait Observer {
+    /// Display-only text. Repository observers withhold remote names;
+    /// observers without a repository have no configured names to hide.
+    fn without_remote_names(&self, text: &str) -> String {
+        text.to_owned()
+    }
     /// The task on its target tip.
     fn task(&mut self, id: &str) -> Option<TaskView>;
     /// The pull request; `None` when it cannot be observed (offline).
@@ -118,6 +123,10 @@ impl RepoObserver {
 }
 
 impl Observer for RepoObserver {
+    fn without_remote_names(&self, text: &str) -> String {
+        crate::security::git::without_remote_names(&self.root, text)
+    }
+
     fn task(&mut self, id: &str) -> Option<TaskView> {
         let root = self.root.clone();
         let limit = self.limits.records;
@@ -590,8 +599,20 @@ fn repository_matches(repository: &str, observer: &mut dyn Observer) -> bool {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 fn judge(link: &Link, observer: &mut dyn Observer) -> Judged {
+    match judge_exact(link, observer) {
+        Judged::Met(mut evidence) => {
+            evidence.reference = observer.without_remote_names(&evidence.reference);
+            evidence.source = observer.without_remote_names(&evidence.source);
+            Judged::Met(evidence)
+        }
+        Judged::Unmet(text) => Judged::Unmet(observer.without_remote_names(&text)),
+        Judged::Unknown => Judged::Unknown,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn judge_exact(link: &Link, observer: &mut dyn Observer) -> Judged {
     let now = super::format_time(observer.now());
     match &link.target {
         Target::Record {
@@ -778,5 +799,83 @@ pub fn capped_next_check(item: &Item, requested: u64, now: u64) -> u64 {
         requested.min(now + super::MAX_RECHECK_SECS)
     } else {
         requested
+    }
+}
+
+#[cfg(test)]
+mod stale_copy_tests {
+    #[test]
+    fn branch_evidence_withholds_remote_names_and_keeps_exact_targets() {
+        use super::{Identity, Judged, Link, LinkKind, Observer, RepoObserver, Target};
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        for remote in ["cred@SECRETVALUE", "ordinary"] {
+            repo.remote(remote, "/unused").unwrap();
+            for deleted in [true, false] {
+                let mut observer = RepoObserver::new(dir.path(), true);
+                observer.repository.get((), || Some("example/repo".into()));
+                observer
+                    .branches
+                    .get((remote.into(), "topic".into()), || Some(deleted));
+                assert_eq!(
+                    observer.repository(),
+                    Identity::Known("example/repo".into())
+                );
+                let link = Link {
+                    kind: LinkKind::Fulfils,
+                    target: Target::Branch {
+                        name: "topic".into(),
+                        remote: remote.into(),
+                        repository: "example/repo".into(),
+                    },
+                };
+                let text = match super::judge(&link, &mut observer) {
+                    Judged::Met(evidence) if deleted => {
+                        assert_eq!(evidence.target.as_deref(), Some(remote));
+                        assert_eq!(evidence.revision.as_deref(), Some("absent"));
+                        evidence.reference
+                    }
+                    Judged::Unmet(text) if !deleted => text,
+                    _ => panic!("branch judgment did not match its observed deletion state"),
+                };
+                assert!(!text.contains("SECRETVALUE"), "{text}");
+                if remote == "ordinary" {
+                    let expected = if deleted {
+                        "branch topic absent from ordinary"
+                    } else {
+                        "branch topic is present on ordinary"
+                    };
+                    assert_eq!(text, expected);
+                }
+            }
+        }
+    }
+
+    /// TSK-416 AC-3: a commit landed on `origin/main` is on the target beside
+    /// a local `main` behind it; a local copy never decides the verdict.
+    #[test]
+    fn a_commit_on_the_fetched_line_is_on_target_beside_a_stale_local_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.com").unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let stale = repo
+            .commit(None, &signature, &signature, "stale", &tree, &[])
+            .unwrap();
+        let parent = repo.find_commit(stale).unwrap();
+        let fetched = repo
+            .commit(None, &signature, &signature, "fetched", &tree, &[&parent])
+            .unwrap();
+        repo.reference("refs/heads/main", stale, true, "test")
+            .unwrap();
+        repo.reference("refs/remotes/origin/main", fetched, true, "test")
+            .unwrap();
+        let (contained, target, tip) =
+            super::commit_on_target(dir.path(), &fetched.to_string()).unwrap();
+        assert!(contained);
+        assert_eq!(target, "origin/main");
+        assert_eq!(tip, fetched.to_string());
     }
 }
