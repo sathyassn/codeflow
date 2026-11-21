@@ -10086,10 +10086,12 @@ fn shell_directory_chain(count: usize, join: &str) -> String {
 }
 
 /// Bound the real CLI route, including both directory readers.
+///
+/// Each chain and its shorter control run interleaved, several rounds each,
+/// and the bound compares their medians, so one slow sample on a loaded host
+/// does not decide the verdict while real growth with chain length still does.
 #[test]
 fn shell_expansion_chains_have_bounded_guard_time() {
-    use std::io::Write as _;
-    use std::time::{Duration, Instant};
     let tmp = tempfile::tempdir().unwrap();
     enforced_repo(tmp.path());
     // Load the binary before timing commands. A freshly linked executable can
@@ -10101,11 +10103,10 @@ fn shell_expansion_chains_have_bounded_guard_time() {
         .unwrap()
         .success());
     let mut failures = Vec::new();
-    let mut controls = std::collections::HashMap::new();
     let routes = [
         " || ", " && ", "eval", "eval-or", "here", "process", "pipe", "source",
     ];
-    let cases = [
+    let groups = [
         ("git-guard", "rm -rf $PWD/x"),
         ("exec-guard", "rm -rf $PWD/x"),
     ]
@@ -10113,63 +10114,158 @@ fn shell_expansion_chains_have_bounded_guard_time() {
     .flat_map(|(guard, tail)| {
         routes
             .into_iter()
-            .flat_map(move |join| [20, 80].map(|count| (guard, count, join, tail, 20)))
-    });
-    let cases = cases
-        .chain([10, 20].map(|count| ("exec-guard", count, " || ", "python3 tool.py $PWD/x", 10)));
-    for (guard, count, join, tail, control_count) in cases {
-        let chain = shell_directory_chain(count, join);
-        let payload = serde_json::json!({
-            "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
-            "cwd": tmp.path()
-        })
-        .to_string();
-        let trace = tmp.path().join(format!("{guard}-{count}.stderr"));
-        let stderr = std::fs::File::create(&trace).unwrap();
-        let mut command = expansion_codeflow();
-        // Four times the input may take six times the adjacent 20-command
-        // control plus two seconds of scheduling slack. This catches the old
-        // quadratic eval growth without a load-sensitive two-second deadline.
-        let limit = controls
-            .get(&(guard, join, tail))
-            .map_or(Duration::from_secs(30), |control: &Duration| {
-                *control * 6 + Duration::from_secs(2)
-            });
-        let start = Instant::now();
-        let mut child = command
-            .args(["hook", guard, "--contract", "3"])
-            .current_dir(tmp.path())
-            .env_remove("CDPATH")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(stderr)
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
-        while child.try_wait().unwrap().is_none() && start.elapsed() < limit {
-            std::thread::sleep(Duration::from_millis(5));
+            .map(move |join| (guard, join, tail, 20, 80))
+    })
+    .chain([("exec-guard", " || ", "python3 tool.py $PWD/x", 10, 20)]);
+    for (guard, join, tail, control_count, chain_count) in groups {
+        let mut control_times = Vec::new();
+        let mut chain_times = Vec::new();
+        'rounds: for round in 0..GUARD_TIME_ROUNDS {
+            // Alternate which size goes first, so a change in host load
+            // during the group falls on both sizes alike.
+            let order = if round % 2 == 0 {
+                [control_count, chain_count]
+            } else {
+                [chain_count, control_count]
+            };
+            for count in order {
+                let Some(elapsed) = time_guard_chain(tmp.path(), guard, join, tail, count) else {
+                    failures.push(format!(
+                        "{guard}: {count} commands joined by {join:?} did not finish within \
+                         {GUARD_TIME_HANG_CAP:?}"
+                    ));
+                    break 'rounds;
+                };
+                if count == control_count {
+                    control_times.push(elapsed);
+                } else {
+                    chain_times.push(elapsed);
+                }
+            }
         }
-        if child.try_wait().unwrap().is_none() {
-            child.kill().unwrap();
-            child.wait().unwrap();
+        if chain_times.len() < GUARD_TIME_ROUNDS || control_times.len() < GUARD_TIME_ROUNDS {
+            continue;
+        }
+        let control = median_duration(&mut control_times);
+        let chain = median_duration(&mut chain_times);
+        let limit = guard_time_bound(control);
+        println!(
+            "{guard} {join:?} N={control_count}->{chain_count}: medians {control:?} -> {chain:?}, \
+             growth {:.2}x, limit {limit:?}, tail={tail}",
+            chain.as_secs_f64() / control.as_secs_f64().max(f64::EPSILON)
+        );
+        if chain > limit {
             failures.push(format!(
-                "{guard}: {count} commands joined by {join:?} exceeded {limit:?}\n{}",
-                std::fs::read_to_string(&trace).unwrap()
+                "{guard}: {chain_count} commands joined by {join:?} took a median {chain:?}, \
+                 over {limit:?} from the {control_count}-command median {control:?}"
             ));
         }
-        child.wait().unwrap();
-        let elapsed = start.elapsed();
-        if count == control_count {
-            controls.insert((guard, join, tail), elapsed);
-        }
-        println!("{guard} {join:?} N={count}: {elapsed:?}, limit={limit:?}, tail={tail}");
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Rounds each chain size runs; the bound reads the median of these.
+const GUARD_TIME_ROUNDS: usize = 3;
+
+/// A run that has not finished by now has hung, whatever its control took.
+const GUARD_TIME_HANG_CAP: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The longest median a chain may take, given the median of its control.
+/// Four times the input may take six times the control plus two seconds of
+/// scheduling slack: linear growth stays well inside it, and the old
+/// quadratic eval growth, sixteen times the control, does not.
+fn guard_time_bound(control: std::time::Duration) -> std::time::Duration {
+    control * 6 + std::time::Duration::from_secs(2)
+}
+
+fn median_duration(times: &mut [std::time::Duration]) -> std::time::Duration {
+    times.sort_unstable();
+    times[times.len() / 2]
+}
+
+/// Time one guard call on a chain of `count` directory changes, or `None`
+/// when it is still running at the hang cap.
+fn time_guard_chain(
+    root: &Path,
+    guard: &str,
+    join: &str,
+    tail: &str,
+    count: usize,
+) -> Option<std::time::Duration> {
+    use std::io::Write as _;
+    use std::time::{Duration, Instant};
+    let chain = shell_directory_chain(count, join);
+    let payload = serde_json::json!({
+        "tool_name": "Bash", "tool_input": {"command": format!("{chain}; {tail}")},
+        "cwd": root
+    })
+    .to_string();
+    let start = Instant::now();
+    let mut child = expansion_codeflow()
+        .args(["hook", guard, "--contract", "3"])
+        .current_dir(root)
+        .env_remove("CDPATH")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    while child.try_wait().unwrap().is_none() && start.elapsed() < GUARD_TIME_HANG_CAP {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    if child.try_wait().unwrap().is_none() {
+        child.kill().unwrap();
+        child.wait().unwrap();
+        return None;
+    }
+    Some(start.elapsed())
+}
+
+/// The bound still catches quadratic growth at the sizes the timing test
+/// measures, and the medians absorb the one slow sample that failed a loaded
+/// coverage run.
+#[test]
+fn guard_time_bound_separates_linear_from_quadratic_growth() {
+    use std::time::Duration;
+    let launch = Duration::from_millis(50);
+    // 1466 ms is the eval control recorded on the loaded coverage host.
+    for control in [Duration::from_millis(1466), Duration::from_millis(400)] {
+        let per_step = control.checked_sub(launch).unwrap();
+        let linear = launch + per_step * 4;
+        let quadratic = launch + per_step * 16;
+        assert!(linear <= guard_time_bound(control), "linear at {control:?}");
+        assert!(
+            quadratic > guard_time_bound(control),
+            "quadratic at {control:?}"
+        );
+    }
+    // The failing coverage sample, 10.8035 s against 1.4657 s, was one run;
+    // the median of three with two ordinary chain runs stays inside.
+    let control = median_duration(&mut [
+        Duration::from_micros(1_465_700),
+        Duration::from_millis(1_420),
+        Duration::from_millis(1_510),
+    ]);
+    let chain = median_duration(&mut [
+        Duration::from_micros(10_803_500),
+        Duration::from_millis(6_100),
+        Duration::from_millis(6_400),
+    ]);
+    assert!(chain <= guard_time_bound(control));
+    // Quadratic growth in every round still fails.
+    let per_step = control.checked_sub(launch).unwrap();
+    let chain = median_duration(&mut [
+        launch + per_step * 16,
+        launch + per_step * 15,
+        launch + per_step * 17,
+    ]);
+    assert!(chain > guard_time_bound(control));
 }
 
 fn expansion_codeflow() -> Command {

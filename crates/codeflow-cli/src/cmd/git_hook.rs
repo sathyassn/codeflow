@@ -62,8 +62,13 @@ pub fn run(args: &GitHookArgs) -> i32 {
         // Notifications cannot cancel a transaction and need no repository.
         return 0;
     }
+    // A prepared transaction finds its repository twice and changes nothing
+    // while it is judged, so it keeps one set of repository facts, as a
+    // guard call does (TSK-1275). Nothing is kept past this invocation.
+    let _facts = matches!(args.stage, StageName::ReferenceTransaction)
+        .then(codeflow_core::hooks::edit_guard::RepoFactsScope::enter);
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let root = match super::project_root(&cwd) {
+    let root = match hook_root(&cwd) {
         Ok(root) => root,
         Err(error) => {
             if matches!(args.stage, StageName::ReferenceTransaction) {
@@ -247,6 +252,14 @@ fn sync_pending_ids(
                 "repair the Git repository and registry state, then push again",
             )),
     }
+}
+
+/// The project root, found with one set of repository facts so the linked
+/// checkouts it validates share one full open (TSK-1275). Outside a
+/// reference-transaction nothing is kept past this lookup.
+fn hook_root(cwd: &Path) -> Result<PathBuf, String> {
+    let _discovery = codeflow_core::hooks::edit_guard::RepoFactsScope::enter();
+    super::project_root(cwd)
 }
 
 /// Handle `git-hook reference-transaction <state>`. Exit 1 on the `prepared`
