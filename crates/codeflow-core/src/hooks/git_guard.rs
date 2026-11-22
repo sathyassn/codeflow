@@ -18888,18 +18888,14 @@ mod tests {
                 "sh -c \"FOO=1 env -S 'git config --global user.name Probe'\"",
                 &["git.policy_authority"][..],
             ),
-            (
-                "hooksPath assignment",
-                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/hooks env -S 'git config --global user.name Probe'",
-                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'",
-                &[][..],
-            ),
         ] {
             let got = rules(refused);
             if got.iter().any(|rule| rule == "git.hook_integrity") {
                 eprintln!("{case}: refused by git.hook_integrity");
             } else {
-                wrong.push(format!("{case}: not refused by git.hook_integrity: {got:?}"));
+                wrong.push(format!(
+                    "{case}: not refused by git.hook_integrity: {got:?}"
+                ));
             }
             let got = rules(removed);
             if got == removed_rules {
@@ -18909,6 +18905,17 @@ mod tests {
                     "{case} removal control: {got:?}, expected {removed_rules:?}"
                 ));
             }
+        }
+        // The hooksPath assignment refusal is the "runner configuration
+        // assignment" row of `leading_assignment_before_split_string_preserves_refusal_rule`;
+        // its removal control sets a harmless key with the same assignments.
+        let got = rules(
+            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'",
+        );
+        if got.is_empty() {
+            eprintln!("hooksPath assignment removal control: {got:?}");
+        } else {
+            wrong.push(format!("hooksPath assignment removal control: {got:?}"));
         }
         // An unclosed quote in the split string is an error for env's
         // grammar after a leading assignment too, so the exec guard takes
