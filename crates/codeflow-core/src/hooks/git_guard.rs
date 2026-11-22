@@ -8974,7 +8974,8 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// it. env splits that string into the words it runs, at blanks and at the
 /// `\_` escape, and they may hold more env options, assignments or a shell
 /// `-c`, so the text is expanded like any other command. `None` when no
-/// launcher in front uses `-S`.
+/// launcher in front uses `-S`. The words in front keep their reading
+/// ([`quote_leading_words`]).
 pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
     let (at, operand, after) = env_split_at(tokens)?;
     // env reads `\_` in the string as a field separator, which the shell
@@ -8983,9 +8984,28 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
     let rest = tokens.get(after..).unwrap_or_default();
     Some(format!(
         "{} {operand} {}",
-        quote_words(&tokens[..at]),
+        quote_leading_words(&tokens[..at]),
         quote_words(rest)
     ))
+}
+
+/// [`quote_words`] for the words in front of an `env -S` option, read as
+/// [`env_split_at`] read them. A word that reads as an assignment keeps its
+/// name and `=` unquoted, with only its value quoted: the shell runs a word
+/// whose name or `=` is quoted as the program (TSK-1456), so quoting the
+/// whole word would make the rebuilt text run a program the line does not.
+/// How the line itself wrote that word is judged on the line.
+fn quote_leading_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| match word.split_once('=') {
+            Some((name, value)) if leading_word(word, Taker::Shell) == LeadingWord::Assignment => {
+                format!("{name}={}", quote_words(&[value.to_string()]))
+            }
+            _ => quote_words(std::slice::from_ref(word)),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The `-S` option of the `env` the launcher grammar finds holding the
@@ -19976,6 +19996,7 @@ mod tests {
         for cmd in [
             "env -S 'echo hi'",
             "env -S 'git config --global user.name Test'",
+            "FOO=1 env -S 'git config --global user.name Test'",
             "bash -c \"bash -c 'git status'\"",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -19988,6 +20009,16 @@ mod tests {
             expand_commands("env -S 'git status'")[1..],
             ["\"env\" git status".to_string()]
         );
+        // An assignment in front keeps its reading in the rebuilt text: a
+        // quoted `NAME=` would be a program to the shell (TSK-1456). The
+        // shell's reading of a quoted one is still judged on the line.
+        assert_eq!(
+            expand_commands("FOO=1 env -S 'git status'")[1..],
+            ["FOO=\"1\" \"env\" git status".to_string()]
+        );
+        let quoted = "\"FOO=1\" env -S 'git config --global user.name Test'";
+        let v = evaluate(quoted, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.hook_integrity"), "{quoted}: {v:?}");
         // A body nested past the limit refuses instead of passing unread.
         let mut deep = "git status".to_string();
         for _ in 0..12 {

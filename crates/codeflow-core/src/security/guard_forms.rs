@@ -2142,6 +2142,7 @@ pub const LAUNCHER_ORDINARY: &[&str] = &[
     "env -S 'git status'",
     "taskset -c 0 git status",
     "taskset -c 0 env -S 'git status'",
+    "FOO=1 env -S 'git config --global user.name Probe'",
     "chrt -r 5 git status",
     "nice -n 5 sh -c 'git status'",
     "exec -a sudo sh <<< 'git status'",
