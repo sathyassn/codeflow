@@ -18909,9 +18909,8 @@ mod tests {
         // The hooksPath assignment refusal is the "runner configuration
         // assignment" row of `leading_assignment_before_split_string_preserves_refusal_rule`;
         // its removal control sets a harmless key with the same assignments.
-        let got = rules(
-            "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'",
-        );
+        let removed = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'";
+        let got = rules(removed);
         if got.is_empty() {
             eprintln!("hooksPath assignment removal control: {got:?}");
         } else {
