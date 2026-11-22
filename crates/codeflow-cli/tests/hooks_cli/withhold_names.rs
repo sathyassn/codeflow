@@ -166,12 +166,28 @@ fn withholding_case_8() {
     // The git guard refuses this command by its remote authority rule first.
     let (code, text) = judge(&root, "git-guard", command);
     assert_eq!(code, Some(2), "git-guard must refuse:\n{text}");
+    assert!(
+        text.contains("policy rule git.policy_authority"),
+        "git-guard must refuse by its remote authority rule:\n{text}"
+    );
     assert!(!text.contains(TOKEN), "git-guard prints the token:\n{text}");
     refuses_withholding(
         &root,
         &["exec-guard"],
         command,
         "adding a remote with an option the guard does not read",
+        &[TOKEN],
+    );
+}
+
+#[test]
+fn withholding_case_9() {
+    let (_temp, root) = landed(b"");
+    refuses_withholding(
+        &root,
+        &HOOKS,
+        "git archive --add=OPAQUECANARY HEAD",
+        "an incomplete or ambiguous option",
         &[TOKEN],
     );
 }

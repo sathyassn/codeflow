@@ -393,10 +393,15 @@ fn checked_mode<'a>(
         let known =
             parsed.missing.contains(word) || (word.starts_with("--") && !candidates.is_empty());
         if known {
+            // The word is never echoed: an attached value may carry a
+            // credential. The candidates are the table's own option names.
             return Err(format!(
-                "incomplete or ambiguous option `{}`; use {} with an explicit readable value or command",
-                shown_word(word),
-                if candidates.is_empty() { shown_word(word) } else { candidates.join(" or ") }
+                "an incomplete or ambiguous option; use {} with an explicit readable value or command",
+                if candidates.is_empty() {
+                    "the option's full spelling".to_string()
+                } else {
+                    candidates.join(" or ")
+                }
             ));
         }
     }

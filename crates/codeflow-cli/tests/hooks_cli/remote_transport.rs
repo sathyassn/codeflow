@@ -966,7 +966,11 @@ fn both_guards_read_every_spelling_that_turns_nested_contacts_on() {
         let out = plain.judge(hook, "git clone --recurs https://127.0.0.1:9/r copy");
         let err = stderr(&out);
         assert_eq!(out.status.code(), Some(2), "{hook}: {err}");
-        assert!(err.contains("ambiguous option `--recurs`"), "{hook}: {err}");
+        assert!(
+            err.contains("an incomplete or ambiguous option"),
+            "{hook}: {err}"
+        );
+        assert!(!err.contains("`--recurs`"), "{hook}: {err}");
     }
     let listed = Scratch::landed(None);
     listed.write(".gitmodules", b"");
