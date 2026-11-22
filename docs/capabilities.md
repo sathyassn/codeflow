@@ -338,7 +338,7 @@ area: engine
 status: shipped
 verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs", "codeflow-cli tests/test_gate_cli.rs", "cargo test testing::delivery", "cargo test testing::evidence"]
 epics: [EPC-001, EPC-022, EPC-023, EPC-024]
-adrs: [ADR-0021, ADR-0031, ADR-0085]
+adrs: [ADR-0021, ADR-0031, ADR-0085, ADR-0103]
 ```
 
 `codeflow test [--mode full|quick|essential] [--strict] [--since <rev>] [--all] [--only <targets>]`
@@ -350,6 +350,10 @@ or a detected stack.
 - With a stack it is a real gate, re-run in CI. Coverage thresholds count toward
   the verdict (ADR-0021); rules in `defaults.coverage` judge every target
   whose coverage block sets none.
+- The explicit-base [changed-line report](test-gate.md#changed-line-coverage)
+  states an 80% floor and 90% target, validates shard bindings and uses one
+  exemption list. Its hosted activation is the TSK-1261 operator patch;
+  whole-file and aggregate evaluation stay independent (ADR-0103).
 - Every run executes every eligible target: no local run record earns
   selection credit (ADR-0089). The [test-gate reference](test-gate.md)
   defines the fields a record holds.

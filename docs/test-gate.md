@@ -325,9 +325,74 @@ target has a coverage block?
   `custom`) or that declares a test `report`.
 - A `changed_files` rule needs a comparison base that standalone
   `codeflow test` lacks, so the loader refuses one in a target's own rules
-  and in defaults that a target would inherit.
+  and in defaults that a target would inherit. The explicit-base changed-line
+  report below supplies the separate per-line contract (ADR-0103).
 - Quick and essential runs measure no coverage, so neither the rules nor
   the warning apply there.
+
+### Changed-line coverage
+
+`scripts/changed-coverage.py report` measures the added executable lines of
+an explicit base-to-head diff. It states an 80% floor and 90% target, names
+each measured line, and exits 1 below the floor. It does not alter the
+aggregate gate's 90% floor or the targets selected by `codeflow test`.
+
+The caller resolves both commits and supplies a zero-context diff and a
+NUL-separated inventory of added, copied, modified, renamed or type-changed
+head paths. Git's `--find-renames` must be used for both. Deleted files have
+no head lines. Pure renames and deletion-only edits add no lines to measure.
+A missing coverage file, an empty diff for a changed code path, or added code
+with no mapped executable line fails with its cause. Headers alone do not
+establish a changed set. Rust (`.rs`) is the default source scope; each
+`--code-suffix` argument declares another producer's source scope explicitly.
+
+| Caller | Comparison base | Result without a usable base |
+|---|---|---|
+| Pull request | event `pull_request.base.sha`; head is the tested merge checkout (`github.sha`) | Fail |
+| Push | event `before`; head is event `after` | Fail, including a new branch's zero base |
+| Local | explicitly supplied `--since`, resolved and passed as `--base` | No supplied base prints `unavailable: no comparison base`; nothing enforced. An invalid supplied base fails |
+
+The report never invokes git and never infers a base. Caller-side resolution
+must fail before reporting when the supplied commit is unavailable. The
+TSK-1190 environment hints are informational; `unknown` is not a base and a
+changed-path list does not replace the line diff. ADR-0089's selection rule
+still holds.
+
+A standalone no-base report needs no shard identity or coverage input:
+
+```sh
+python3 -B scripts/changed-coverage.py report --event local
+```
+
+It still validates the project's exemption list. A report with a comparison
+base also requires the tested `--head`, `--run` and `--attempt` identifiers.
+
+The `bind` subcommand records the tested revision, run, attempt, target,
+shard number/count, format, source root and SHA-256 of the coverage file.
+The consumer compares that binding with its expected inputs and the
+`rust-coverage` target and coverage shard plan. A failed, stale, duplicate,
+missing or unexpected shard, a digest mismatch or a mismatched roster fails.
+These bindings identify bytes and attempts; they do not authenticate reports
+produced by head code. The hosted job results remain necessary evidence.
+LCOV `DA`, Cobertura class line records and llvm-cov function regions supply
+per-line hits. The aggregate merger retains its own existing counting rules.
+
+`.codeflow/coverage-exemptions.json` is the sole changed-line exemption list.
+Its version is `1`; each entry in `exemptions` requires an exact normalized
+`path`, `owner`, `reason` and `remove_when`. Empty fields, unknown fields,
+duplicates, traversal and non-normalized paths are refused. The report prints
+each applied exemption. The list is validated even when a local run has no
+comparison base.
+
+The operator patch under `scripts/operator/TSK-1261/` adds the report to the
+coverage report job and pins its steps in the parity checker. It reports in
+the Actions run summary and leaves coverage placement unchanged. Once the
+line takes the planned CI-placement sync, pull requests into integration
+lines have no coverage run and no changed-line report. Drafts likewise have
+no coverage run. Scheduled and manual runs keep aggregate coverage without
+inventing a changed-line comparison base.
+
+### Coverage setup
 
 `codeflow test setup` writes a coverage block for each target it detects,
 only when it creates the config. The detected target's full command runs

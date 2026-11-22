@@ -1,0 +1,124 @@
+--- a/.github/workflows/codeflow-ci.yml
++++ b/.github/workflows/codeflow-ci.yml
+@@ -643,11 +643,16 @@
+           cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+           eval "$(cargo llvm-cov show-env --sh)"
+           CARGO_TARGET_DIR=target/llvm-cov-target cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
++      - name: Bind this shard's coverage to this attempt
++        shell: bash
++        run: python3 -B scripts/changed-coverage.py bind --directory target/coverage-data --source-root "$GITHUB_WORKSPACE" --head "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --shard ${{ matrix.shard }} --shards 2
+       - name: Keep this shard's coverage for the report
+         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+         with:
+           name: coverage-data-${{ matrix.shard }}
+-          path: target/coverage-data/coverage.json
++          path: |
++            target/coverage-data/coverage.json
++            target/coverage-data/record.json
+           if-no-files-found: error
+           retention-days: 1
+       - name: Keep this shard's results for the report
+@@ -671,6 +676,8 @@
+     timeout-minutes: 10
+     steps:
+       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
++        with:
++          fetch-depth: 0
+ 
+       - name: Begin journey check
+         shell: bash
+@@ -697,6 +704,32 @@
+         run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards 2 target/coverage/data
+ 
+       # The journey-gate target's command, on the shards' results.
++      - name: Coverage of changed executable lines
++        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
++        shell: bash
++        env:
++          CODEFLOW_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
++          CODEFLOW_HEAD: ${{ github.sha }}
++          CODEFLOW_EVENT: ${{ github.event_name }}
++        run: |
++          if ! git cat-file -e "$CODEFLOW_BASE^{commit}"; then
++            echo "Changed-line coverage FAILED: comparison base is unavailable"
++            exit 1
++          fi
++          git cat-file -e "$CODEFLOW_HEAD^{commit}"
++          git diff --no-ext-diff --no-textconv --no-color --unified=0 --find-renames "$CODEFLOW_BASE" "$CODEFLOW_HEAD" -- > target/coverage/range.diff
++          git diff --name-only -z --diff-filter=ACMRT --find-renames "$CODEFLOW_BASE" "$CODEFLOW_HEAD" -- > target/coverage/changed-paths
++          python3 -B scripts/changed-coverage.py report --event "$CODEFLOW_EVENT" --base "$CODEFLOW_BASE" --head "$CODEFLOW_HEAD" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --diff target/coverage/range.diff --paths target/coverage/changed-paths --directory target/coverage/data --output target/coverage/changed-lines.txt
++      - name: Show changed-line coverage in the run summary
++        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
++        shell: bash
++        run: |
++          if test -f target/coverage/changed-lines.txt; then
++            sed 's/^/    /' target/coverage/changed-lines.txt >> "$GITHUB_STEP_SUMMARY"
++          else
++            echo "Changed-line coverage failed before producing a report; see the step logs." >> "$GITHUB_STEP_SUMMARY"
++            exit 1
++          fi
+       - name: journey gate
+         if: ${{ !cancelled() }}
+         shell: bash
+--- a/scripts/gate-parity.py
++++ b/scripts/gate-parity.py
+@@ -301,11 +301,16 @@
+           cargo llvm-cov report --json --output-path target/coverage-data/coverage.json
+           eval "$(cargo llvm-cov show-env --sh)"
+           CARGO_TARGET_DIR=target/llvm-cov-target cargo nextest list --workspace --profile codeflow --message-format json > target/nextest/codeflow/tests.json
++      - name: Bind this shard's coverage to this attempt
++        shell: bash
++        run: python3 -B scripts/changed-coverage.py bind --directory target/coverage-data --source-root "$GITHUB_WORKSPACE" --head "$GITHUB_SHA" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --shard ${{ matrix.shard }} --shards @COUNT@
+       - name: Keep this shard's coverage for the report
+         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+         with:
+           name: coverage-data-${{ matrix.shard }}
+-          path: target/coverage-data/coverage.json
++          path: |
++            target/coverage-data/coverage.json
++            target/coverage-data/record.json
+           if-no-files-found: error
+           retention-days: 1
+       - name: Keep this shard's results for the report
+@@ -327,6 +332,8 @@
+     timeout-minutes: 10
+     steps:
+       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
++        with:
++          fetch-depth: 0
+       - name: Begin journey check
+         shell: bash
+         run: |
+@@ -345,6 +352,32 @@
+       - name: Line coverage of the whole suite
+         shell: bash
+         run: python3 -B scripts/test_coverage_merge.py && python3 -B scripts/coverage-merge.py --floor-from .codeflow/test-config.json --shards @COUNT@ target/coverage/data
++      - name: Coverage of changed executable lines
++        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
++        shell: bash
++        env:
++          CODEFLOW_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
++          CODEFLOW_HEAD: ${{ github.sha }}
++          CODEFLOW_EVENT: ${{ github.event_name }}
++        run: |
++          if ! git cat-file -e "$CODEFLOW_BASE^{commit}"; then
++            echo "Changed-line coverage FAILED: comparison base is unavailable"
++            exit 1
++          fi
++          git cat-file -e "$CODEFLOW_HEAD^{commit}"
++          git diff --no-ext-diff --no-textconv --no-color --unified=0 --find-renames "$CODEFLOW_BASE" "$CODEFLOW_HEAD" -- > target/coverage/range.diff
++          git diff --name-only -z --diff-filter=ACMRT --find-renames "$CODEFLOW_BASE" "$CODEFLOW_HEAD" -- > target/coverage/changed-paths
++          python3 -B scripts/changed-coverage.py report --event "$CODEFLOW_EVENT" --base "$CODEFLOW_BASE" --head "$CODEFLOW_HEAD" --run "$GITHUB_RUN_ID" --attempt "$GITHUB_RUN_ATTEMPT" --diff target/coverage/range.diff --paths target/coverage/changed-paths --directory target/coverage/data --output target/coverage/changed-lines.txt
++      - name: Show changed-line coverage in the run summary
++        if: ${{ !cancelled() && (github.event_name == 'pull_request' || github.event_name == 'push') }}
++        shell: bash
++        run: |
++          if test -f target/coverage/changed-lines.txt; then
++            sed 's/^/    /' target/coverage/changed-lines.txt >> "$GITHUB_STEP_SUMMARY"
++          else
++            echo "Changed-line coverage failed before producing a report; see the step logs." >> "$GITHUB_STEP_SUMMARY"
++            exit 1
++          fi
+       - name: journey gate
+         if: ${{ !cancelled() }}
+         shell: bash
