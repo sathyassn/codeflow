@@ -18832,6 +18832,105 @@ mod tests {
         }
     }
 
+    /// TSK-1536 on main: a leading assignment before `env -S` no longer
+    /// changes the verdict, so each form gets the verdict the same form gets
+    /// without the assignment. The forms are ones the EPC-022 line judges
+    /// more strictly (an expanding string, a `!` in double quotes, a
+    /// non-ASCII launcher word); this pins the interim verdict on main.
+    #[test]
+    fn leading_assignment_before_split_string_keeps_the_bare_verdict() {
+        let p = default_policy();
+        let verdict = |command: &str| {
+            evaluate(command, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|violation| (violation.rule, violation.level))
+                .collect::<Vec<_>>()
+        };
+        for form in [
+            "env -S 'echo $X'",
+            "env -S 'echo \"a!b\"'",
+            "env -S 'n\u{456}ce git config --global user.name Probe'",
+            "env -S 'cat \"x'",
+        ] {
+            let bare = verdict(form);
+            let assigned = verdict(&format!("FOO=1 {form}"));
+            assert_eq!(assigned, bare, "{form}");
+            eprintln!("{form}: {bare:?} with and without FOO=1");
+        }
+    }
+
+    /// TSK-1536 on main: split strings refused on their own stay refused
+    /// after a leading assignment. Each refusal has a removal control that
+    /// differs only in the refused part and carries no `git.hook_integrity`
+    /// refusal, so the refusal comes from that part and not from the
+    /// assignment. Inside `sh -c` the assignment is a variable change in a
+    /// nested command, which `git.policy_authority` refuses on its own.
+    #[test]
+    fn leading_assignment_before_split_string_refuses_split_string_controls() {
+        let p = default_policy();
+        let rules = |command: &str| {
+            evaluate(command, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect::<Vec<_>>()
+        };
+        let mut wrong = Vec::new();
+        for (case, refused, removed, removed_rules) in [
+            (
+                "alias operand",
+                "FOO=1 env -S 'git config --global alias.x !id'",
+                "FOO=1 env -S 'git config --global user.name Probe'",
+                &[][..],
+            ),
+            (
+                "alias operand inside sh -c",
+                "sh -c \"FOO=1 env -S 'git config --global alias.x !id'\"",
+                "sh -c \"FOO=1 env -S 'git config --global user.name Probe'\"",
+                &["git.policy_authority"][..],
+            ),
+            (
+                "hooksPath assignment",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/hooks env -S 'git config --global user.name Probe'",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'",
+                &[][..],
+            ),
+        ] {
+            let got = rules(refused);
+            if got.iter().any(|rule| rule == "git.hook_integrity") {
+                eprintln!("{case}: refused by git.hook_integrity");
+            } else {
+                wrong.push(format!("{case}: not refused by git.hook_integrity: {got:?}"));
+            }
+            let got = rules(removed);
+            if got == removed_rules {
+                eprintln!("{case} removal control: {got:?}");
+            } else {
+                wrong.push(format!(
+                    "{case} removal control: {got:?}, expected {removed_rules:?}"
+                ));
+            }
+        }
+        // An unclosed quote in the split string is an error for env's
+        // grammar after a leading assignment too, so the exec guard takes
+        // its refusing path; the closed quote is its removal control.
+        let words = |line: &str| command_argv(line);
+        if matches!(
+            env_split_argv(&words("FOO=1 env -S 'cat \"x'")),
+            Some(Err(_))
+        ) {
+            eprintln!("unclosed quote: unread by env's grammar");
+        } else {
+            wrong.push("unclosed quote: read by env's grammar".to_string());
+        }
+        match env_split_argv(&words("FOO=1 env -S 'cat \"x\"'")) {
+            Some(Ok(read)) if read == ["FOO=1", "env", "cat", "x"] => {
+                eprintln!("unclosed quote removal control: read as {read:?}");
+            }
+            other => wrong.push(format!("unclosed quote removal control: {other:?}")),
+        }
+        assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
+    }
+
     #[test]
     fn launcher_table_forms_carry_their_command_string() {
         // Review round fourteen sweep: every launcher in the walker's table
