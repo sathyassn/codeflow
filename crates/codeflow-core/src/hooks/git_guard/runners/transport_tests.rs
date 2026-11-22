@@ -1760,15 +1760,19 @@ fn an_empty_word_reads_as_git_reads_it() {
     ));
     let error = section.helpers_of(&["fetch", ""]).unwrap_err();
     assert!(
-        error.starts_with(UNPROVEN) && error.contains("`remote..url`"),
+        error.starts_with(UNPROVEN) && error.contains(EMPTY_SECTION),
         "{error}"
     );
+    assert!(!error.contains("remote..url"), "{error}");
 }
+
+/// The refusal for a remote section with an empty name, which names no key.
+const EMPTY_SECTION: &str = "a setting under a remote section with an empty name";
 
 #[test]
 fn an_unnamed_remote_definition_refuses_every_contact() {
     // A definition the guard cannot resolve refuses every contact that reads
-    // the configuration's remotes, naming the key.
+    // the configuration's remotes, without naming the key.
     const CONTACTS: &[&str] = &[
         "fetch origin",
         "ls-remote origin",
@@ -1794,7 +1798,7 @@ fn an_unnamed_remote_definition_refuses_every_contact() {
     ] {
         let scratch = Scratch::new(&format!("{HTTPS}[remote \"\"]\n{line}"));
         for command in selecting.iter().chain(CONTACTS) {
-            scratch.unproven(command, &format!("`{key}`"));
+            scratch.unproven(command, EMPTY_SECTION);
         }
         // A command that contacts no remote is not judged by it.
         assert_eq!(scratch.helpers("status"), Ok(vec![]), "{key}");
@@ -1807,7 +1811,7 @@ fn an_unnamed_remote_definition_refuses_every_contact() {
         ("", "remote update"),
     ] {
         let scratch = Scratch::new(&format!("{HTTPS}{SECTION}{config}"));
-        scratch.unproven(command, "`remote..url`");
+        scratch.unproven(command, EMPTY_SECTION);
     }
     // A section whose name starts with a dot is an ordinary remote.
     let dotted = Scratch::new(&format!("{HTTPS}[remote \".a\"]\n\turl = fixture::x\n"));

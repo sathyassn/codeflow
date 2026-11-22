@@ -344,14 +344,12 @@ fn remote_add_fetches(rest: &[String]) -> bool {
 /// The values of the option that selects the one remote the command
 /// contacts, read through the one reading every reader of that command's
 /// options shares ([`super::archive_checked`]). An option reading the guard
-/// cannot prove refuses.
+/// cannot prove refuses, without echoing the option word, which may carry
+/// an attached value.
 fn remote_values(rest: &[String]) -> Result<Vec<&str>, String> {
     let parsed = super::archive_checked(rest).map_err(unproven)?;
-    if let Some(word) = parsed.unread.first() {
-        return Err(unproven(format!(
-            "`archive` with the option `{}`, which the guard does not read",
-            shown_word(word)
-        )));
+    if !parsed.unread.is_empty() {
+        return Err(unproven("`archive` with an option the guard does not read"));
     }
     Ok(parsed.values_of('\0', "--remote"))
 }
@@ -737,20 +735,19 @@ impl<'a> Resolver<'a> {
     /// Refuse when a key defines a remote under a section with an empty
     /// name. The guard does not resolve the remotes Git defines from such a
     /// key, so every contact that reads the configuration's remotes
-    /// refuses, naming the key, whose subsection is empty and so withholds
-    /// nothing.
+    /// refuses, without naming the key, whose variable name the
+    /// configuration chooses.
     fn no_empty_section(&self) -> Result<(), String> {
-        let empty = self.keys.iter().find(|key| {
+        let empty = self.keys.iter().any(|key| {
             key.strip_prefix("remote..")
                 .is_some_and(|variable| !variable.contains('.'))
         });
-        match empty {
-            None => Ok(()),
-            Some(key) => Err(unproven(format!(
-                "the configuration defines `{}` under a remote section with an empty name; remove the section or give it a name",
-                shown_word(key)
-            ))),
+        if empty {
+            return Err(unproven(
+                "the configuration defines a setting under a remote section with an empty name; remove the section or give it a name",
+            ));
         }
+        Ok(())
     }
 
     /// Whether the configuration has any setting under the remote's own name.
@@ -938,10 +935,9 @@ impl<'a> Resolver<'a> {
         match named.as_slice() {
             [] => Ok("origin".to_string()),
             [name] if !name.is_empty() => Ok(name.clone()),
-            _ => Err(unproven(format!(
-                "the remote of branch `{}` has more than one value or an empty one",
-                shown_word(&branch)
-            ))),
+            _ => Err(unproven(
+                "the remote of the current branch has more than one value or an empty one",
+            )),
         }
     }
 
@@ -1222,10 +1218,9 @@ impl<'a> Resolver<'a> {
                     .is_some_and(|name| !name.is_empty() && "fetch".starts_with(name));
                 let known = fetch || matches!(word.as_str(), "-f" | "--tags" | "--no-tags");
                 if !known {
-                    return Err(unproven(format!(
-                        "adding a remote with `{}` fetches with settings the guard does not resolve; add the remote, then fetch it by name",
-                        shown_word(word)
-                    )));
+                    return Err(unproven(
+                        "adding a remote with an option the guard does not read fetches with settings the guard does not resolve; add the remote, then fetch it by name",
+                    ));
                 }
             } else {
                 operands.push(word);

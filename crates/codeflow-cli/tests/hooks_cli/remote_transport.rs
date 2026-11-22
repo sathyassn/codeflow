@@ -516,9 +516,12 @@ fn both_guards_refuse_every_contact_beside_an_unnamed_remote_definition() {
 }
 
 /// A refusal by this task's rule for a remote section with an empty name,
-/// naming the key it reads.
+/// which names no key.
 fn section_refusal(out: &Output) -> bool {
-    unproven_refusal(out) && stderr(out).contains("`remote..")
+    let said = stderr(out);
+    unproven_refusal(out)
+        && said.contains("a setting under a remote section with an empty name")
+        && !said.contains("`remote..")
 }
 
 /// Replace the legacy remote folder `folder` of `scratch` with `form`.
