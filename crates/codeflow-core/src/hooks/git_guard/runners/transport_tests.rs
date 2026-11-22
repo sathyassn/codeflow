@@ -1276,7 +1276,10 @@ fn a_program_chosen_by_remote_settings_refuses() {
         with_url.unproven("push fixture HEAD", "helper through its configuration");
     }
     let without_url = Scratch::new("[remote \"fixture\"]\n\tvcs = fixture\n");
-    without_url.unproven("fetch fixture", "remote `fixture`");
+    without_url.unproven(
+        "fetch fixture",
+        "a configured remote selects a helper through its configuration",
+    );
     let clone = Scratch::new("[remote \"other\"]\n\tvcs = fixture\n");
     clone.unproven("clone https://example.test/r copy", "a new copy would use");
 }
@@ -1307,7 +1310,7 @@ fn an_implicit_contact_with_no_remote_contacts_nothing() {
     none.unproven("push", "legacy remote file");
 
     let named = Scratch::new("[branch \"main\"]\n\tremote = elsewhere\n");
-    named.unproven("fetch", "remote `elsewhere` is not configured");
+    named.unproven("fetch", "names is not configured");
     named.unproven("push", "names no remote");
     let pushed = Scratch::new("[remote]\n\tpushDefault = elsewhere\n");
     pushed.unproven("push", "names no remote");
@@ -1329,11 +1332,11 @@ fn an_implicit_contact_refuses_each_state_it_cannot_prove() {
     detached.unproven("fetch", "current branch");
 
     let missing = Scratch::new(&format!("{HTTPS}[branch \"main\"]\n\tremote = gone\n"));
-    missing.unproven("fetch", "remote `gone` is not configured");
+    missing.unproven("fetch", "names is not configured");
 
     let no_origin = Scratch::new("[remote \"other\"]\n\turl = https://example.test/r\n");
-    no_origin.unproven("fetch", "remote `origin` is not configured");
-    no_origin.unproven("pull", "remote `origin` is not configured");
+    no_origin.unproven("fetch", "names is not configured");
+    no_origin.unproven("pull", "names is not configured");
 
     for value in ["true", "yes", "1"] {
         let all = Scratch::new(&format!("{HTTPS}[fetch]\n\tall = {value}\n"));
@@ -1609,10 +1612,14 @@ fn address_changes_apply_in_git_order() {
 }
 
 #[test]
-fn an_unresolved_selection_refuses_naming_the_remote() {
+fn an_unresolved_selection_refuses_without_naming_the_remote() {
     let bytes = Scratch::bytes(b"[remote \"fixture\"]\n\turl = https://example.test/\xff\n");
     let error = bytes.helpers("fetch fixture").unwrap_err();
-    assert!(error.contains("remote `fixture`"), "{error}");
+    assert!(
+        error.contains("a configured remote: a `remote.*.url` setting is not UTF-8"),
+        "{error}"
+    );
+    assert!(!error.contains("fixture"), "{error}");
     for folder in ["remotes", "branches"] {
         let legacy = Scratch::new(HTTPS);
         std::fs::create_dir_all(legacy.root().join(".git").join(folder)).unwrap();
@@ -1703,7 +1710,7 @@ fn remotes_any_command_may_contact_pass_the_same_rule() {
     ));
     set.unproven("status", "helper through its configuration");
     let missing = Scratch::new(&format!("{HTTPS}[extensions]\n\tpartialClone = gone\n"));
-    missing.unproven("status", "remote `gone` is not configured");
+    missing.unproven("status", "names is not configured");
 }
 
 #[test]
@@ -1903,7 +1910,7 @@ fn indirect_contact_paths_refuse_unless_proven() {
         "remote add --fe fresh https://example.test/r",
         "remote add --no-fetch fresh https://example.test/r",
     ] {
-        helper.unproven(command, "already holds settings for remote `fresh`");
+        helper.unproven(command, "already holds settings for the remote being added");
     }
     assert_eq!(
         helper.helpers("remote add fresh https://example.test/r"),

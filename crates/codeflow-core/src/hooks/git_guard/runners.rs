@@ -341,10 +341,9 @@ fn helper_programs(
                 let program = format!("git-remote-{name}");
                 if !admitted.admits(&program) {
                     return Err(format!(
-                        "{}: Git starts `{}` for remote `{}`, and `git.admitted_helpers` in the landed policy does not name it",
+                        "{}: Git starts `{}` for a remote the command contacts, and `git.admitted_helpers` in the landed policy does not name it",
                         transport::HELPER_REFUSAL,
-                        shown_word(&program),
-                        shown_word(&contact.remote)
+                        shown_word(&program)
                     ));
                 }
                 if !programs.iter().any(|(known, _, _)| *known == program) {

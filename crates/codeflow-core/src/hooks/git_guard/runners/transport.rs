@@ -5,9 +5,13 @@
 //! admitted by the landed policy and judged as a program word, or refused.
 //!
 //! The resolution admits only the forms it can prove Git resolves the same
-//! way, and refuses every other form, naming the remote or the setting, so a
-//! gap between this reading and Git's refuses instead of passing. The
-//! admitted forms are an address the command names, a remote the command
+//! way, and refuses every other form, so a gap between this reading and
+//! Git's refuses instead of passing. A refusal names the kind of remote or
+//! setting, never a configured remote's name, a setting's subsection or a
+//! value, since any of them may carry a credential, such as an address
+//! with a password.
+//!
+//! The admitted forms are an address the command names, a remote the command
 //! names whose configuration has one clear reading, the remotes Git picks
 //! for a command that names none, and the remotes any command may contact.
 //! Each function below names the Git behaviour it follows.
@@ -647,8 +651,7 @@ fn legacy(word: &str, probe: &mut dyn Probe) -> Result<(), String> {
     for folder in ["remotes", "branches"] {
         if !absent(&location.common.join(folder).join(word)) {
             return Err(unproven(format!(
-                "remote `{}` may be defined in a legacy remote file in the repository's `{folder}` directory",
-                shown_word(word)
+                "a remote the command or configuration names may be defined in a legacy remote file in the repository's `{folder}` directory"
             )));
         }
     }
@@ -734,7 +737,8 @@ impl<'a> Resolver<'a> {
     /// Refuse when a key defines a remote under a section with an empty
     /// name. The guard does not resolve the remotes Git defines from such a
     /// key, so every contact that reads the configuration's remotes
-    /// refuses, naming the key.
+    /// refuses, naming the key, whose subsection is empty and so withholds
+    /// nothing.
     fn no_empty_section(&self) -> Result<(), String> {
         let empty = self.keys.iter().find(|key| {
             key.strip_prefix("remote..")
@@ -784,25 +788,24 @@ impl<'a> Resolver<'a> {
         if !self.configured(name) {
             return Ok(None);
         }
-        let shown = shown_word(name);
         let key = |variable: &str| format!("remote.{name}.{variable}");
         let unread =
-            |why: String| format!("cannot resolve the transport of remote `{shown}`: {why}");
+            |why: String| format!("cannot resolve the transport of a configured remote: {why}");
         if !self.config.get_all(&key("vcs")).is_empty() {
-            return Err(unproven(format!(
-                "remote `{shown}` selects a helper through its configuration"
-            )));
+            return Err(unproven(
+                "a configured remote selects a helper through its configuration",
+            ));
         }
         let urls = values_raw(self.config, &key("url")).map_err(unread)?;
         let url = match urls.as_slice() {
             [url] if !url.is_empty() => url.clone(),
             [] => {
-                return Err(unproven(format!("remote `{shown}` has no address")));
+                return Err(unproven("a configured remote has no address"));
             }
             _ => {
-                return Err(unproven(format!(
-                    "remote `{shown}` has more than one address value or an empty one"
-                )));
+                return Err(unproven(
+                    "a configured remote has more than one address value or an empty one",
+                ));
             }
         };
         let pushurls = values_raw(self.config, &key("pushurl")).map_err(unread)?;
@@ -810,9 +813,9 @@ impl<'a> Resolver<'a> {
             [] => None,
             [pushurl] if !pushurl.is_empty() => Some(pushurl.clone()),
             _ => {
-                return Err(unproven(format!(
-                    "remote `{shown}` has more than one push address value or an empty one"
-                )));
+                return Err(unproven(
+                    "a configured remote has more than one push address value or an empty one",
+                ));
             }
         };
         Ok(Some(Remote { url, pushurl }))
@@ -828,10 +831,9 @@ impl<'a> Resolver<'a> {
         probe: &mut dyn Probe,
     ) -> Result<(), String> {
         if self.group(word) {
-            return Err(unproven(format!(
-                "`{}` names a remote group",
-                shown_word(word)
-            )));
+            return Err(unproven(
+                "a remote the command or configuration names is a remote group",
+            ));
         }
         if let Some(remote) = self.remote(word)? {
             self.destinations(word, &remote, direction, found);
@@ -853,16 +855,14 @@ impl<'a> Resolver<'a> {
         found: &mut Vec<Contact>,
     ) -> Result<(), String> {
         if self.group(name) {
-            return Err(unproven(format!(
-                "`{}` names a remote group",
-                shown_word(name)
-            )));
+            return Err(unproven(
+                "a remote the command or configuration names is a remote group",
+            ));
         }
         let Some(remote) = self.remote(name)? else {
-            return Err(unproven(format!(
-                "remote `{}` is not configured",
-                shown_word(name)
-            )));
+            return Err(unproven(
+                "a remote the command or configuration names is not configured",
+            ));
         };
         self.destinations(name, &remote, direction, found);
         Ok(())
@@ -1187,12 +1187,17 @@ impl<'a> Resolver<'a> {
         let mut skips = Vec::new();
         for variable in ["skipdefaultupdate", "skipfetchall"] {
             let key = format!("remote.{name}.{variable}");
-            if let Some(value) = self.config.get(&key)? {
+            let value = self.config.get(&key).map_err(|_| {
+                format!(
+                    "cannot verify Git configuration: {} is not UTF-8",
+                    shown_key(&key)
+                )
+            })?;
+            if let Some(value) = value {
                 let Some(skip) = crate::security::git::config_boolean(value) else {
-                    return Err(unproven(format!(
-                        "the setting that makes a fetch of every remote skip remote `{}` cannot be read",
-                        shown_word(name)
-                    )));
+                    return Err(unproven(
+                        "the setting that makes a fetch of every remote skip a configured remote cannot be read",
+                    ));
                 };
                 skips.push(skip);
             }
@@ -1232,10 +1237,9 @@ impl<'a> Resolver<'a> {
             ));
         };
         if self.configured(name) || self.group(name) {
-            return Err(unproven(format!(
-                "the configuration already holds settings for remote `{}`, which the fetch that adds it would use",
-                shown_word(name)
-            )));
+            return Err(unproven(
+                "the configuration already holds settings for the remote being added, which the fetch that adds it would use",
+            ));
         }
         if remote_nick(name) {
             legacy(name, probe)?;
@@ -1298,9 +1302,23 @@ fn values_raw(config: &EffectiveConfig, key: &str) -> Result<Vec<String>, String
         .map(|(_, _, bytes)| {
             std::str::from_utf8(bytes)
                 .map(str::to_string)
-                .map_err(|_| format!("`{}` is not UTF-8", shown_word(key)))
+                .map_err(|_| format!("{} is not UTF-8", shown_key(key)))
         })
         .collect()
+}
+
+/// A configuration key as a refusal names it: its section and variable
+/// name, with any subsection withheld, since a subsection such as a
+/// rewrite's address or a remote's name may carry a credential.
+fn shown_key(key: &str) -> String {
+    match (key.split_once('.'), key.rsplit_once('.')) {
+        (Some((section, rest)), Some((_, variable))) if rest.contains('.') => format!(
+            "a `{}.*.{}` setting",
+            shown_word(section),
+            shown_word(variable)
+        ),
+        _ => format!("`{}`", shown_word(key)),
+    }
 }
 
 #[cfg(test)]
