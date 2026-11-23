@@ -187,15 +187,14 @@ or CI runs.**
 
 Nothing polls by default: the builder's pull request carries its cited
 evidence, and the primary reads hosted results once at batch assembly. The
-pull request cites the full gate by run id and revision, and the review
-verdict lives on the pull request, so the evidence survives the cleanup of
-worktrees and build directories.
+full gate's run id and revision and the review verdict live on the pull
+request, so the evidence survives worktree and build cleanup.
 
 ### Completed work imported from another line
 
 An ordinary merge can bring completed work from `main` or a verified epic
 line. CI and pre-push bind an unchanged imported completion at its home,
-so later receiving-line commits do not require that source task to reopen.
+so later receiving-line commits need no reopening of that source task.
 A task branch can carry the same imports while delivering its own work.
 A receiver's first push still proves its own task landings.
 
@@ -217,8 +216,8 @@ A receiver's first push still proves its own task landings.
   when that merge was clean and came from the home line. A task reopened
   before its first landing keeps the criteria accepted at that landing.
 - Criteria amendments, reopenings and records brought unchanged from the
-  target stay attributed to its history. A task PR does not claim those
-  records as its own additions.
+  target stay attributed to its history; a task PR never claims them as its
+  own additions.
 - Receiving-line record edits and competing criteria introductions still
   need their own judgment. A source landing with an unreviewed resolution,
   an unavailable home without a proven default-target landing, or an
@@ -226,16 +225,16 @@ A receiver's first push still proves its own task landings.
   The receiver's own completion still binds all its product work. A line
   merge that adds product changes outside verified source history and
   reviewed task heads refuses even when no task completes in that range.
-  A pull request from a task branch into an epic line judges the merges
-  it carries against that line in the same way, so a sync that hand-edits
+  A task branch's pull request into an epic line judges its merges
+  against that line the same way, so a sync that hand-edits
   a source task's file blocks there too. A merge that edits a completed
   task's acceptance block, which neither of its parents holds, is refused
   for that edit.
-  The push of that task branch is the one exception: a merge whose other
+  That task branch's push is the one exception: a merge whose other
   parents are all already on the line's tip, as the destination
   advertises it, is the branch's own sync of its line, and its
   hand-resolved hunks do not stop the push. The pull request check at
-  ready and at landing still refuses them until a review of the head is
+  ready and landing still refuses them until the head's review is
   recorded. A sync of anything the line does not hold, a branch that
   carries no task, a protected branch and the line's own push are judged
   as before.
@@ -243,10 +242,10 @@ A receiver's first push still proves its own task landings.
   until the completion record lands, even if the work was reviewed earlier.
 
 When `work.import_authority` refuses, fetch the named home and its full
-history, or the default target's history if the home has been retired.
+history, or, for a retired home, the default target's history.
 Repair invalid source acceptance through that task's pull request on its
-home, then merge the reviewed result. A refusal naming target history does
-not ask the receiver to reopen an unrelated task. Pass the intended
+home, then merge the reviewed result. A refusal naming target history never
+asks the receiver to reopen an unrelated task. Pass the intended
 `--branch` and `--base` when checking a detached or historical range; naming
 the same base by ref or commit id does not change the proof.
 
@@ -275,25 +274,23 @@ Each task or epic record has one home, where it changes:
 - an epic's home is its own line, or the line its `parent_line` names.
 
 A sync takes `main`'s version only of records whose home is not the line,
-and never changes a record whose home is the line: the epic's record, the
-record of an epic that lands on the line, or the record of a task that
-targets the line. A task with no declared target is judged by its epic, and
-stays frozen when the line does not hold that epic's record. Removing or
-moving such a record is a change too.
+and never changes one whose home is the line: the epic's record, or that of
+an epic that lands on the line or a task that targets the line. A task with
+no declared target is judged by its epic, and stays frozen when the line
+does not hold that epic's record. Removing or moving such a record is a
+change too.
 Because each record changes only at its home, `main` never holds a newer
 change to a record whose home is the line, so the refusal applies only when
 that rule was broken. A records-only sync that already passes as a planning
 amendment keeps that class.
 
-Exception, 2026-11-20 (operator ruling, narrow, for the `main_landing` field
-only): `main_landing` is set and changed only on `main`, by a records pull
-request to `main`, and each line takes it through its next sync of `main`.
-A line-side edit of the field has no effect, and the marker gates refuse
-one. Reason: the gate on a line's pull request to `main` reads `main`'s tip,
-so a marker held only on the line is not there when the gate judges and a
-line change could drop it, while a marker on the base branch is one the
-requester cannot change. Every other field of an epic record keeps its home
-as above.
+Exception (operator ruling, 2026-11-20, for the `main_landing` field only):
+the field is set and changed only on `main`, by a records pull request to
+`main`; each line takes it through its next sync of `main`. A line-side edit
+of it has no effect, and the marker gates refuse one. Reason: the gate on a
+line's pull request to `main` reads `main`'s tip, where a marker only the
+line holds is missing and a line change could drop it; the requester cannot
+change the base branch's marker.
 
 When `main` moved a task's home, the sync keeps that home only if every
 move was a reviewed planning merge of records on `main`, and the line
@@ -328,37 +325,35 @@ original SHA-256 digest, source commit and separate redaction review.
 - Status, criterion identifiers and tags, every result, `reviewed`, original
   review provenance and verdict remain unchanged. Superseded blocks can be
   redacted too, and unrelated commits already on the line do not prevent it.
-- A reviewer confirms unchanged meaning. The original text remains in Git
-  history; the command removes it from the current record only.
+- A reviewer confirms unchanged meaning. The original text stays in Git
+  history, removed from the current record only.
 
 A waiver is different: `AC-N: waived | <full amendment commit SHA>` under
 `acceptance.criteria` records a changed criterion result. The amendment
-changes that criterion and planning records only, and the completion
-contains it. Other planning records in the same commit, such as the epic
-record, the epic plan or other task records, do not disqualify it. A
+changes only that criterion and planning records (such as the epic record,
+the epic plan or other task records), and the completion contains it. A
 planning record is a file under `project-management/` or `docs/plan/` that
 is not hidden, not a harness instruction file and not an adopter-facing path
 under the target's policy. The waiver accepts the commit for this criterion
 only: its other changes stay under their own rules, so a task pull request
 still changes no other task's criteria. A criterion the amendment removes
-leaves the record, so the completion has no row for it and needs no waiver.
+leaves the record, so the completion needs no row or waiver for it.
 A task may name an amendment on its target. Before its first landing, its
 own amendment, under the same test, may also be after the range's
 merge-base and strictly before `reviewed` in ancestry, never equal to either
 endpoint. In `codeflow task status`, a task whose declared integration line
 is not recorded at the default target's tip has no own range unless `--base`
 and `--into` pin that line. A range that reopens a completion that never landed keeps that
-own-range allowance, whatever caused the reopen; a range that reopens a
+own-range allowance, whatever caused the reopen; one that reopens a
 landed completion does not. A waiver refused as not on the target says what
-that requires: a receiving line the run pins holds the commit (the pull
-request's base in `codeflow ci`, `--base` in `task status`). The refusal also
-names the route: amend the criterion through a planning pull request into
-the target, merge the target into the branch before the review, and name
-that planning commit.
+that requires (a receiving line the run pins holds the commit: the pull
+request's base in `codeflow ci`, `--base` in `task status`) and names the
+route: amend the criterion through a planning pull request into the target,
+merge the target into the branch before the review, and name that planning
+commit.
 
 The installed `cf-method/references/project-organization.md` section
 "Acceptance waivers and redactions" owns the field definitions and workflow.
-ADR-0084 records the redaction exception to the frozen-record rule.
 
 ### When something changes midway
 
