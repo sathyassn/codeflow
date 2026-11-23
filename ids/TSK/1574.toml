@@ -1,0 +1,11 @@
+id = "TSK-1574"
+uid = "bbc6ae76-d510-4369-ace7-4c6c7c1748b8"
+kind = "TSK"
+title = "New projects get the default permission preset, and a switch to it drops the mode CodeFlow wrote"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-23T04:10:23Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
