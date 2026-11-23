@@ -1,0 +1,11 @@
+id = "TSK-1575"
+uid = "d349db5f-c0d5-422f-b869-595a2567fd5b"
+kind = "TSK"
+title = "The binding refusal names an unpublished line head as its cause"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-23T05:45:45Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
