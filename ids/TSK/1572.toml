@@ -1,0 +1,11 @@
+id = "TSK-1572"
+uid = "e440f8cf-7a5a-42b3-b1da-d7119bbcf4fe"
+kind = "TSK"
+title = "A journey that expects the guard to allow a command fails when the guard refuses it"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-23T03:05:23Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
