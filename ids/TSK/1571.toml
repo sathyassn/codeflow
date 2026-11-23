@@ -1,0 +1,11 @@
+id = "TSK-1571"
+uid = "9e9b13b1-a024-45af-8806-4dbd87e62c7b"
+kind = "TSK"
+title = "docs/delivery.md keeps its Technical prose within the 1500-word limit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-23T01:40:51Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
