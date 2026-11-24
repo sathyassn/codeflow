@@ -1,0 +1,11 @@
+id = "TSK-1598"
+uid = "b07aa6c3-2c8f-4776-8136-d9bad497bd8f"
+kind = "TSK"
+title = "A local engine warns on person names in changed prose before push, within a time budget"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:51Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
