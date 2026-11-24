@@ -1,0 +1,11 @@
+id = "TSK-1583"
+uid = "1b14b643-e083-4cb3-988a-4faf35945b9d"
+kind = "TSK"
+title = "The privacy check has policy levels, findings that never show the value, and fails closed"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:13Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
