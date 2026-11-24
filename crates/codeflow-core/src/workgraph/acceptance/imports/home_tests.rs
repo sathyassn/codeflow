@@ -694,3 +694,46 @@ fn main_filed_mixed_planning_merge_syncs_to_declared_home_line() {
         &["TSK-009", NO_SOURCE],
     );
 }
+
+/// TSK-1605 Part 3: `git.import_authority_settled_before` in trusted `main`'s
+/// policy marks historical default-branch completions at or before that exact
+/// first-parent SHA as settled on a sync, while completions after it still
+/// undergo full completion proof, and non-first-parent values fail closed.
+#[test]
+fn settled_before_cutover_covers_prior_main_completions_only() {
+    let p1 = path_of("TSK-010");
+    let p2 = path_of("TSK-011");
+
+    // Without cutover: a completion on main whose acceptance block cannot be
+    // proven (synthetic unreviewed SHA) is refused on sync.
+    let fixture = Fixture::new(&[
+        ("TSK-010", todo("TSK-010", "main")),
+        ("TSK-011", todo("TSK-011", "main")),
+    ]);
+    let settled_merge = fixture.land("main", &[(&p1, &complete("TSK-010", "main", "Settled."))]);
+    fixture.sync();
+    refused(&fixture, "unset cutover still refuses", &["TSK-010"]);
+
+    // With cutover set in trusted main policy to `settled_merge`: TSK-010 (at
+    // cutover) passes on sync, while TSK-011 (landed AFTER cutover) still refuses.
+    let policy_with_cutover = format!(
+        "{{\n  \"schema_version\": 1,\n  \"git\": {{\"product_paths\": [\"src/**\"], \"import_authority_settled_before\": \"{settled_merge}\"}}\n}}\n"
+    );
+    fixture.land("main", &[(".codeflow/policy.json", &policy_with_cutover)]);
+    fixture.sync();
+    passes(&fixture, "completion at cutover passes with trusted policy");
+
+    fixture.land("main", &[(&p2, &complete("TSK-011", "main", "After cutover."))]);
+    fixture.sync();
+    refused(&fixture, "completion after cutover still refuses", &["TSK-011"]);
+
+    // Non-first-parent / unknown SHA fails closed.
+    let bad_policy = "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"], \"import_authority_settled_before\": \"0123456789abcdef0123456789abcdef01234567\"}\n}\n";
+    fixture.land("main", &[(".codeflow/policy.json", bad_policy)]);
+    fixture.sync();
+    refused(
+        &fixture,
+        "non-first-parent cutover fails closed",
+        &["import_authority_settled_before", "first-parent"],
+    );
+}

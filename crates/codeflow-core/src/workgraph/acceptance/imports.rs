@@ -124,6 +124,7 @@ fn compute_imports(
         Err(error) => return Err(unenumerated(error)),
     };
     let syncs = home::takes_default(repo, anchor, head, default_tip).map_err(unenumerated)?;
+    let settled_before = settled_before_cutover(repo, default_tip).map_err(unenumerated)?;
     // Each refusal names its record; the check never stops at the first.
     let mut refusals = Vec::new();
     let refuse = |id: &str, place: &str, reason: &str| refusal(&default.name, id, place, reason);
@@ -278,6 +279,7 @@ fn compute_imports(
                 base,
                 head,
                 walk,
+                settled_before,
             ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
@@ -888,6 +890,7 @@ fn prove_retired_record(
         base,
         head,
         None,
+        None,
     )?;
     Ok(Some(ImportedRecord {
         path: record.path.clone(),
@@ -961,6 +964,43 @@ struct Walk {
     default_tip: Oid,
 }
 
+/// Read and validate `git.import_authority_settled_before` from the trusted
+/// default tip's policy (TSK-1605). Returns `Ok(None)` when absent. Fails
+/// closed if the policy is unreadable, the SHA is not 40 lowercase hex, or
+/// the commit is not on `default_tip`'s first-parent history.
+fn settled_before_cutover(repo: &Repository, default_tip: Oid) -> Result<Option<Oid>, String> {
+    if home::entry_at(repo, default_tip, ".codeflow/policy.json")?.is_none() {
+        return Ok(None);
+    }
+    let policy = crate::hooks::landed_policy::checked_policy_at(repo, default_tip)?;
+    let Some(raw) = policy.git.import_authority_settled_before.as_deref() else {
+        return Ok(None);
+    };
+    let valid_hex =
+        raw.len() == 40 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !valid_hex {
+        return Err(format!(
+            "git.import_authority_settled_before '{raw}' is not 40 lowercase hex digits"
+        ));
+    }
+    let cutover = Oid::from_str(raw).map_err(|error| {
+        format!("git.import_authority_settled_before '{raw}' is invalid: {error}")
+    })?;
+    let mut at = default_tip;
+    loop {
+        if at == cutover {
+            return Ok(Some(cutover));
+        }
+        let Some(parent) = first_parent(repo, at)? else {
+            break;
+        };
+        at = parent;
+    }
+    Err(format!(
+        "git.import_authority_settled_before {cutover} is not on the default target's first-parent history at {default_tip}"
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -972,6 +1012,7 @@ fn prove_record(
     base: Oid,
     head: Oid,
     walk: Option<Walk>,
+    settled_before: Option<Oid>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
         .find_commit(landed)
@@ -1016,18 +1057,28 @@ fn prove_record(
             origin,
             source,
             None,
+            None,
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
-        Some(prove_task_completion(
-            repo,
-            record,
-            home,
-            tip,
-            default_tip,
-            landed,
-            &parents,
-        )?)
+        let settled_default_landing = walk.is_some()
+            && settled_before
+                .map(|cutover| is_ancestor_or_same(repo, landed, cutover))
+                .transpose()?
+                .unwrap_or(false);
+        if settled_default_landing {
+            None
+        } else {
+            Some(prove_task_completion(
+                repo,
+                record,
+                home,
+                tip,
+                default_tip,
+                landed,
+                &parents,
+            )?)
+        }
     } else {
         if record.kind == RecordKind::Epic {
             let origin = active_block(record)

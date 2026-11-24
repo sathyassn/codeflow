@@ -603,6 +603,12 @@ pub struct GitPolicy {
     /// default target or an epic line (`integration/EPC-*`) is refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub release_branch_pattern: Option<String>,
+    /// Optional 40-hex commit SHA on the default target's first-parent history
+    /// at or before which historical completions are treated as settled when
+    /// synced into a line (TSK-1605). Read only from the policy at the trusted
+    /// default tip, never from the receiving branch or head. Absent by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub import_authority_settled_before: Option<String>,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
@@ -791,6 +797,7 @@ impl Default for GitPolicy {
             automation_profiles: Vec::new(),
             pr_section_mapping: None,
             release_branch_pattern: None,
+            import_authority_settled_before: None,
             branch_naming: PolicyLevel::Block,
             branch_prefixes: DEFAULT_BRANCH_PREFIXES
                 .iter()
