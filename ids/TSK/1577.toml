@@ -1,0 +1,11 @@
+id = "TSK-1577"
+uid = "7fdc6a2a-7a7b-40ef-a3bc-0feff21f4199"
+kind = "TSK"
+title = "EPC-057 completion amendment follow-up"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T12:20:06Z"
+target = "integration/EPC-057-hosted-ci-runs-once-per-epic-and-main-reuses-tha"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
