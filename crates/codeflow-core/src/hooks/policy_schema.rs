@@ -1910,13 +1910,14 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 12] = [
+        const OPTIONAL: [&str; 13] = [
             "security.text_guard",
             "git.pr_section_mapping",
             "git.ignored_files",
             "git.max_file_bytes",
             "git.release_branch_pattern",
             "git.clean_regenerable",
+            "git.import_authority_settled_before",
             "security.interpreter_scan",
             "security.enforcement_baseline",
             "security.workflow_pushes",
