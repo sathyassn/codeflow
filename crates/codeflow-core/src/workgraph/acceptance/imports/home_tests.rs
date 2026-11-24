@@ -684,7 +684,7 @@ fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() 
 /// TSK-1605 Part 2 (AC-2): a task filed on `main` via a reviewed mixed
 /// planning merge carrying `docs/` and an ADR alongside task records (the
 /// PR #925 shape) syncs cleanly onto its declared home line, while a merge
-/// carrying product code still refuses with NO_SOURCE.
+/// carrying product code still refuses with `NO_SOURCE`.
 #[test]
 fn main_filed_mixed_planning_merge_syncs_to_declared_home_line() {
     let path = path_of("TSK-009");
