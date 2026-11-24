@@ -1,0 +1,11 @@
+id = "TSK-1579"
+uid = "dd692fa1-d198-45e0-90da-c45818dfef13"
+kind = "TSK"
+title = "Every branch name CodeFlow creates or suggests passes its branch policy and one shared task rule"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T12:23:34Z"
+target = "integration/EPC-022-the-3-2-0-milestone-fixes"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
