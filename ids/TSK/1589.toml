@@ -1,0 +1,11 @@
+id = "TSK-1589"
+uid = "4d68f562-14a8-4533-bc68-f44dffafebf7"
+kind = "TSK"
+title = "Every tier installs the pattern layer at its default, and CodeFlow's own repository runs it at block"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:28Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
