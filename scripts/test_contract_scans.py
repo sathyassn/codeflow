@@ -139,6 +139,52 @@ class ContractScanJourneys(unittest.TestCase):
             output,
         )
 
+    def test_empty_core_target_alongside_passing_target_is_named_and_refused(self):
+        self.write("crates/codeflow-core/tests/empty_scan.rs", "")
+        result = self.run_scans()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("ran no passing tests", output)
+        self.assertIn("contract-scans: summary: 5 targets ran, 1 failed", output)
+        self.assertIn("contract-scans: failing targets: empty_scan", output)
+
+    def test_multiple_empty_core_targets_are_all_named_and_refused(self):
+        self.write("crates/codeflow-core/tests/empty_alpha.rs", "")
+        self.write("crates/codeflow-core/tests/empty_zeta.rs", "")
+        result = self.run_scans()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("ran no passing tests", output)
+        self.assertIn("contract-scans: summary: 6 targets ran, 2 failed", output)
+        self.assertIn("contract-scans: failing targets: empty_alpha, empty_zeta", output)
+
+    def test_compile_failure_reports_unrun_targets_without_fabricating_failed_target_count(self):
+        self.write(
+            "crates/codeflow-core/tests/broken_compile.rs",
+            "fn not_valid_rust( { }\n",
+        )
+        result = self.run_scans()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("derived_lookup", output)
+        self.assertIn(
+            "contract-scans: summary: 3 targets ran, 0 failed, 1 command failed (2 targets not run)",
+            output,
+        )
+        self.assertIn("contract-scans: targets not run: broken_compile, existing_contract", output)
+        self.assertNotIn("contract-scans: failing targets:", output)
+
+    def test_aborted_test_binary_is_named_and_counted_as_failed(self):
+        self.write(
+            "crates/codeflow-core/tests/aborting_scan.rs",
+            "#[test] fn aborts_process() { std::process::abort(); }\n",
+        )
+        result = self.run_scans()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("contract-scans: summary: 5 targets ran, 1 failed", output)
+        self.assertIn("contract-scans: failing targets: aborting_scan", output)
+
 
 if __name__ == "__main__":
     unittest.main()
