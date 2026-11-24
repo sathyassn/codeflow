@@ -1,0 +1,11 @@
+id = "TSK-1581"
+uid = "b28647e6-d212-41eb-95f5-324ae15955b3"
+kind = "TSK"
+title = "The guards match a heredoc's closing delimiter after joining backslash-newline continuations"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:34:58Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
