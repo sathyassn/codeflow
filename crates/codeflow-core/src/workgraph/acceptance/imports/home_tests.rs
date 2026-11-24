@@ -518,6 +518,18 @@ pub(super) fn docs_move(fixture: &Fixture, after: &str) -> git2::Oid {
     )
 }
 
+/// The record as `main` moves it in a merge that carries a product file
+/// (inadmissible as a planning landing under both narrow and aligned sets).
+pub(super) fn non_planning_move(fixture: &Fixture, after: &str) -> git2::Oid {
+    fixture.land(
+        "main",
+        &[
+            (&path_of("TSK-001"), after),
+            ("src/non_planning.rs", "pub fn side_effect() {}\n"),
+        ],
+    )
+}
+
 /// AC-13 (2): an adoption by a direct commit on the line sets no anchor,
 /// and the sync then judges `main`'s move.
 #[test]
@@ -535,7 +547,7 @@ fn an_adoption_by_a_direct_commit_is_refused() {
 fn an_adoption_in_a_docs_bearing_landing_is_refused() {
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
     let after = moved("TSK-001", "main");
-    docs_move(&fixture, &after);
+    non_planning_move(&fixture, &after);
     fixture.land(
         LINE,
         &[
@@ -568,7 +580,10 @@ fn an_introduction_used_as_an_adoption_is_refused() {
     let after = moved("TSK-006", "main");
     fixture.land(
         "main",
-        &[(&path, &after), ("docs/decision.md", "A decision.\n")],
+        &[
+            (&path, &after),
+            ("src/non_planning.rs", "pub fn side_effect() {}\n"),
+        ],
     );
     fixture.land(LINE, &[(&path, &after)]);
     fixture.sync();
@@ -640,11 +655,19 @@ fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() 
     // while main amends the criteria and moves it to main. LINE's criteria
     // match the merge base, so sync passes.
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
-    // Create a branch from before TSK-001 existed (empty root) or a side merge
-    // on LINE that re-homes TSK-001 without touching AC-1.
     fixture.land("main", &[(&path, main_amended)]);
     fixture.land(LINE, &[(&path, &todo("TSK-001", "main"))]);
-    fixture.sync();
+    fixture.git(&["switch", "-q", "-C", "sync", LINE]);
+    fixture.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-X",
+        "theirs",
+        "-m",
+        "chore(merge): take main",
+        "main",
+    ]);
     passes(&fixture, "line re-homed without criteria change");
 
     // Case 2: LINE independently amends AC-1 on its own branch. Its criteria
@@ -653,7 +676,17 @@ fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() 
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
     fixture.land("main", &[(&path, main_amended)]);
     fixture.land(LINE, &[(&path, line_amended)]);
-    fixture.sync();
+    fixture.git(&["switch", "-q", "-C", "sync", LINE]);
+    fixture.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-X",
+        "theirs",
+        "-m",
+        "chore(merge): take main",
+        "main",
+    ]);
     refused(
         &fixture,
         "line independently amended criteria",
