@@ -1,0 +1,11 @@
+id = "TSK-1599"
+uid = "a6f602d5-974e-468f-85b8-605c5a664176"
+kind = "TSK"
+title = "An adopter can install the pinned name engine and doctor checks it"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:53Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
