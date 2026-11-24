@@ -42,17 +42,99 @@ def commands(root: Path) -> list[list[str]]:
     scans = sorted(discovered - OUTSIDE_SCANS.keys())
     if not scans:
         raise ValueError("no core integration scans discovered")
-    core = ["cargo", "test", "-p", "codeflow-core"]
+    core = ["cargo", "test", "-p", "codeflow-core", "--no-fail-fast"]
     for scan in scans:
         core.extend(["--test", scan])
     return [
         core + ["--quiet"],
-        ["cargo", "test", "-p", "codeflow-cli", "--test", "remedy_clearing",
+        ["cargo", "test", "-p", "codeflow-cli", "--no-fail-fast", "--test", "remedy_clearing",
          "every_catalogued_row_is_proven_or_excluded_at_a_boundary", "--", "--exact"],
-        ["cargo", "test", "-p", "codeflow-cli", "--test", "test_gate_cli",
+        ["cargo", "test", "-p", "codeflow-cli", "--no-fail-fast", "--test", "test_gate_cli",
          "every_tracked_path_is_classified_by_the_conservative_partition", "--", "--exact"],
-        ["cargo", "test", "-p", "codeflow-cli", "--bin", "codeflow", "derived_lookup"],
+        ["cargo", "test", "-p", "codeflow-cli", "--no-fail-fast", "--bin", "codeflow", "derived_lookup"],
     ]
+
+
+def command_targets(command: list[str]) -> list[str]:
+    targets: list[str] = []
+    index = 0
+    while index < len(command) - 1:
+        if command[index] in ("--test", "--bin"):
+            targets.append(command[index + 1])
+            index += 2
+            continue
+        index += 1
+    return targets
+
+
+def parse_command_output(
+    output: bytes,
+    selected_targets: list[str],
+    returncode: int,
+) -> tuple[int, int, list[str], list[str], bool, bool]:
+    text = output.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    targets_ran = 0
+    targets_failed = 0
+    failing_targets: list[str] = []
+    failing_tests: list[str] = []
+    has_passing = False
+    ran_no_passing = False
+
+    for index, line in enumerate(lines):
+        if re.match(r"^test result: ok\. [1-9][0-9]* passed;", line):
+            targets_ran += 1
+            has_passing = True
+        elif re.match(r"^test result: ok\. 0 passed;", line):
+            targets_ran += 1
+            targets_failed += 1
+            ran_no_passing = True
+        elif line.startswith("test result: FAILED."):
+            targets_ran += 1
+            targets_failed += 1
+            cursor = index - 1
+            while cursor >= 0 and lines[cursor].strip() == "":
+                cursor -= 1
+            block: list[str] = []
+            while cursor >= 0 and lines[cursor].startswith("    "):
+                name = lines[cursor].strip()
+                if name:
+                    block.append(name)
+                cursor -= 1
+            if cursor >= 0 and lines[cursor].strip() == "failures:":
+                for name in reversed(block):
+                    if name not in failing_tests:
+                        failing_tests.append(name)
+        else:
+            match = re.match(
+                r"^(?:error: test failed, to rerun pass |\s+)[`']-p \S+ --(?:test|bin) (\S+)[`']$",
+                line,
+            )
+            if match:
+                target_name = match.group(1)
+                if target_name not in failing_targets:
+                    failing_targets.append(target_name)
+
+    if returncode == 0 and not has_passing:
+        ran_no_passing = True
+
+    command_failed = returncode != 0 or ran_no_passing
+    if command_failed:
+        if targets_failed == 0:
+            targets_failed = max(1, len(failing_targets))
+        elif targets_failed < len(failing_targets):
+            targets_failed = len(failing_targets)
+        if not failing_targets and len(selected_targets) == 1:
+            failing_targets.append(selected_targets[0])
+
+    return (
+        targets_ran,
+        targets_failed,
+        failing_targets,
+        failing_tests,
+        command_failed,
+        ran_no_passing,
+    )
 
 
 def main() -> int:
@@ -62,6 +144,13 @@ def main() -> int:
     except ValueError as error:
         print(f"contract-scans: {error}", file=sys.stderr)
         return 1
+
+    total_ran = 0
+    total_failed = 0
+    all_failing_targets: list[str] = []
+    all_failing_tests: list[str] = []
+    any_failed = False
+
     for command in selected:
         print("contract-scans: " + " ".join(command), flush=True)
         start = time.monotonic()
@@ -71,14 +160,37 @@ def main() -> int:
         sys.stdout.flush()
         print(f"contract-scans: exit {result.returncode}, {time.monotonic() - start:.3f}s",
               flush=True)
-        if result.returncode:
-            return 1
-        if (not re.search(rb"test result: ok\. [1-9][0-9]* passed;", result.stdout)
-                or b"test result: ok. 0 passed;" in result.stdout):
+        (
+            ran,
+            failed,
+            failing_targets,
+            failing_tests,
+            command_failed,
+            ran_no_passing,
+        ) = parse_command_output(result.stdout, command_targets(command), result.returncode)
+        total_ran += ran
+        total_failed += failed
+        for target in failing_targets:
+            if target not in all_failing_targets:
+                all_failing_targets.append(target)
+        for test_name in failing_tests:
+            if test_name not in all_failing_tests:
+                all_failing_tests.append(test_name)
+        if ran_no_passing:
             print("contract-scans: a selected suite or filter ran no passing tests",
                   file=sys.stderr)
-            return 1
-    return 0
+        if command_failed:
+            any_failed = True
+
+    print(f"contract-scans: summary: {total_ran} targets ran, {total_failed} failed",
+          flush=True)
+    if all_failing_targets:
+        print("contract-scans: failing targets: " + ", ".join(all_failing_targets),
+              flush=True)
+    if all_failing_tests:
+        print("contract-scans: failing tests: " + ", ".join(all_failing_tests),
+              flush=True)
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":
