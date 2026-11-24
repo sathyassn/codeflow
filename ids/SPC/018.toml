@@ -1,0 +1,11 @@
+id = "SPC-018"
+uid = "64806913-ecab-46df-ab6c-646916c6b373"
+kind = "SPC"
+title = "Personal and identifying information stays out of repositories"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:04Z"
+target = "none"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
