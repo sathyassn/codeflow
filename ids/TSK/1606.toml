@@ -1,0 +1,11 @@
+id = "TSK-1606"
+uid = "3db46c1f-92ca-4bc8-ab65-9adeacc9b275"
+kind = "TSK"
+title = "Cache first-parent walks and record lookups across the range in workgraph import authority"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T17:27:25Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
