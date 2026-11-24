@@ -1,0 +1,11 @@
+id = "TSK-1597"
+uid = "de503872-ffae-499d-9565-3937f3d76dbc"
+kind = "TSK"
+title = "Every prompt and template CodeFlow ships holds synthetic values only"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:48Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
