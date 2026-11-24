@@ -1,0 +1,11 @@
+id = "TSK-1602"
+uid = "8318ecc0-fe5f-471d-9232-a6244c5d10f7"
+kind = "TSK"
+title = "Every existing exemption route is shown in every run and can move to the register"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:36:01Z"
+target = "integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
