@@ -731,10 +731,22 @@ fn lands_planned(fixture: &Fixture, branch: &str) {
     fixture.land(branch, &[(&path_of("TSK-001"), &version)]);
 }
 
-/// Land a second record on the line that carries TSK-001's uid.
-fn line_adds_a_copy(fixture: &Fixture) {
+/// Land a second record on `branch` that carries TSK-001's uid.
+fn adds_a_copy(fixture: &Fixture, branch: &str) {
     let copy = todo("TSK-002", "main").replace("uid: uid-TSK-002", "uid: uid-TSK-001");
-    fixture.land(LINE, &[(&path_of("TSK-002"), &copy)]);
+    fixture.land(branch, &[(&path_of("TSK-002"), &copy)]);
+}
+
+/// Land a record that does not parse and names TSK-001 on `branch`.
+fn adds_an_unreadable_record(fixture: &Fixture, branch: &str) {
+    let broken = "---\nid: TSK-001\nstatus: [unclosed\n---\n";
+    fixture.land(branch, &[(&path_of("TSK-002"), broken)]);
+}
+
+/// Land product work on the line, so it diverges from `main` and leaves
+/// every record as it inherited it.
+fn line_diverges(fixture: &Fixture) {
+    fixture.land(LINE, &[("src/line.rs", "pub fn line() {}\n")]);
 }
 
 /// TSK-1605 AC-3: a line that amended the criteria competes with `main`.
@@ -808,7 +820,7 @@ fn a_line_where_two_records_match_still_competes() {
     let fixture = planned_fixture();
     main_amends(&fixture);
     fixture.sync();
-    line_adds_a_copy(&fixture);
+    adds_a_copy(&fixture, LINE);
     refused(
         &fixture,
         "two records match at the line",
@@ -821,7 +833,7 @@ fn a_line_where_two_records_match_still_competes() {
 #[test]
 fn a_line_whose_history_matched_two_records_still_competes() {
     let fixture = planned_fixture();
-    line_adds_a_copy(&fixture);
+    adds_a_copy(&fixture, LINE);
     remove(&fixture, LINE, &path_of("TSK-002"));
     main_amends(&fixture);
     fixture.sync();
@@ -836,19 +848,48 @@ fn a_line_whose_history_matched_two_records_still_competes() {
 /// is never set aside.
 #[test]
 fn a_line_whose_history_holds_an_unreadable_record_still_competes() {
-    let second = path_of("TSK-002");
-
     let fixture = planned_fixture();
-    fixture.land(
-        LINE,
-        &[(&second, "---\nid: TSK-001\nstatus: [unclosed\n---\n")],
-    );
-    remove(&fixture, LINE, &second);
+    adds_an_unreadable_record(&fixture, LINE);
+    remove(&fixture, LINE, &path_of("TSK-002"));
     main_amends(&fixture);
     fixture.sync();
     refused(
         &fixture,
         "an unreadable record in the line's history",
+        &["TSK-001", UNRESOLVED, "does not parse"],
+    );
+}
+
+/// TSK-1605 AC-3: `main` held two records for the task before the landing.
+/// The line only inherits, and the doubt in `main`'s history still refuses.
+#[test]
+fn a_landing_whose_history_matched_two_records_is_refused() {
+    let fixture = planned_fixture();
+    line_diverges(&fixture);
+    adds_a_copy(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "two records matched in main's history",
+        &["TSK-001", UNRESOLVED, "holds 2 records"],
+    );
+}
+
+/// TSK-1605 AC-3: `main` held a record that does not parse before the
+/// landing. The line only inherits, and the doubt still refuses.
+#[test]
+fn a_landing_whose_history_holds_an_unreadable_record_is_refused() {
+    let fixture = planned_fixture();
+    line_diverges(&fixture);
+    adds_an_unreadable_record(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "an unreadable record in main's history",
         &["TSK-001", UNRESOLVED, "does not parse"],
     );
 }
@@ -1025,6 +1066,30 @@ fn a_cutover_policy_that_cannot_be_read_is_refused() {
     let objects = fixture.root().join(".git/objects");
     std::fs::remove_file(objects.join(&blob[..2]).join(&blob[2..])).unwrap();
     refused(&fixture, "a missing object", &["cannot read policy source"]);
+}
+
+/// TSK-1605 AC-3: a cutover outside the default tip's first-parent history
+/// refuses nothing in a range that imports no record.
+#[test]
+fn a_cutover_outside_main_refuses_no_range_without_imports() {
+    let fixture = planned_fixture();
+    let policy = cutover_policy("0123456789abcdef0123456789abcdef01234567");
+    fixture.land("main", &[(".codeflow/policy.json", &policy)]);
+    fixture.sync();
+    let found = passes(&fixture, "a cutover outside main's history");
+    assert!(found.is_empty(), "{found:?}");
+}
+
+/// TSK-1605 AC-3: a policy at the default tip that cannot be read refuses
+/// nothing in a range that imports no record.
+#[test]
+fn an_unreadable_cutover_policy_refuses_no_range_without_imports() {
+    let fixture = planned_fixture();
+    let truncated = "{\n  \"schema_version\": 1,\n";
+    fixture.land("main", &[(".codeflow/policy.json", truncated)]);
+    fixture.sync();
+    let found = passes(&fixture, "a truncated policy");
+    assert!(found.is_empty(), "{found:?}");
 }
 
 /// TSK-1605 AC-3: only the policy at the trusted default tip sets the

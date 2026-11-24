@@ -104,6 +104,10 @@ pub(super) struct TaskJudgement {
     pub(super) criteria: Authority,
     /// The source of the criteria, kept apart from the run's policy authority.
     pub(super) criteria_source: String,
+    /// Whether the criteria are unknown only because the judged points hold
+    /// competing versions, with no doubt in the history of any version
+    /// ([`Disagreement::Diverged`], TSK-1605).
+    pub(super) diverged: bool,
 }
 
 impl TaskJudgement {
@@ -113,6 +117,7 @@ impl TaskJudgement {
             landing: Landing::Unreadable(reason.clone()),
             criteria_source: format!("criteria authority unreadable: {reason}"),
             criteria: Authority::Unknown(reason),
+            diverged: false,
         }
     }
 
@@ -220,6 +225,16 @@ struct Held {
     /// Why the tree's answer cannot be trusted, when it cannot: a record
     /// that may be the task does not parse, or the identity is ambiguous.
     doubt: Option<String>,
+}
+
+/// Why the judged points agree on no version ([`RecordStore::agreed`]).
+enum Disagreement {
+    /// The points hold competing versions, and the whole history of each
+    /// holder was read with no unreadable or ambiguous record.
+    Diverged(String),
+    /// Anything else: a doubt, history that cannot be read, or a point that
+    /// no longer holds the record.
+    Unproved(String),
 }
 
 /// One task file as the store parsed it, shared by every tree and task
@@ -556,6 +571,7 @@ impl<'r> RecordStore<'r> {
                 break;
             }
         }
+        let mut diverged = false;
         let at_points = if let Some((_, held)) = newest {
             match (&held.doubt, held.records.first()) {
                 (Some(doubt), _) => Err(doubt.clone()),
@@ -563,7 +579,14 @@ impl<'r> RecordStore<'r> {
                 (None, None) => Ok(None),
             }
         } else {
-            self.agreed(task, &points)
+            match self.agreed(task, &points) {
+                Ok(version) => Ok(version),
+                Err(Disagreement::Unproved(reason)) => Err(reason),
+                Err(Disagreement::Diverged(reason)) => {
+                    diverged = true;
+                    Err(reason)
+                }
+            }
         };
         let criteria = match at_points {
             Ok(Some(record)) => Authority::Held(Box::new(record)),
@@ -581,6 +604,7 @@ impl<'r> RecordStore<'r> {
                 landing: Landing::Landed { witness },
                 criteria,
                 criteria_source,
+                diverged,
             };
         }
         let landing = match history.doubt {
@@ -591,6 +615,7 @@ impl<'r> RecordStore<'r> {
             landing,
             criteria,
             criteria_source,
+            diverged,
         }
     }
 
@@ -609,13 +634,19 @@ impl<'r> RecordStore<'r> {
     /// Returns why the criteria cannot be told: a point's doubt, held
     /// versions with different criteria, or an absent point whose history
     /// holds a version with other criteria or cannot prove which version
-    /// it keeps ([`Self::recovered`]).
+    /// it keeps ([`Self::recovered`]). Held versions that compete after every
+    /// differing holder's whole history was read are
+    /// [`Disagreement::Diverged`]; every other reason is
+    /// [`Disagreement::Unproved`], an absent point's earlier version
+    /// included, since [`Self::recovered`] reads only the absent points.
     fn agreed(
         &mut self,
         task: &Identity,
         points: &[(Oid, Held)],
-    ) -> Result<Option<RecordView>, String> {
+    ) -> Result<Option<RecordView>, Disagreement> {
         let context = held_context(points);
+        let unproved =
+            |reason: String| Disagreement::Unproved(format!("{reason}; judged points: {context}"));
         let differ = || {
             format!("the judged points hold different versions of this task, and none of them is newer than the others: {context}")
         };
@@ -623,7 +654,7 @@ impl<'r> RecordStore<'r> {
         let mut absent: Vec<Oid> = Vec::new();
         for (point, held) in points {
             if let Some(doubt) = &held.doubt {
-                return Err(format!("{doubt}; judged points: {context}"));
+                return Err(unproved(doubt.clone()));
             }
             match held.records.first() {
                 Some((blob, record)) => versions.push((*point, *blob, record)),
@@ -647,9 +678,7 @@ impl<'r> RecordStore<'r> {
                 for &(other, other_blob, version) in &versions {
                     let newer = Holding::new(other, other_blob, Version::criteria(version));
                     if held.version != newer.version
-                        && self
-                            .yields(task, &held, &newer)
-                            .map_err(|reason| format!("{reason}; judged points: {context}"))?
+                        && self.yields(task, &held, &newer).map_err(unproved)?
                     {
                         older = true;
                         break;
@@ -662,22 +691,19 @@ impl<'r> RecordStore<'r> {
             versions = remaining;
         }
         let Some((_, _, first)) = versions.first() else {
-            return Err(differ());
+            return Err(Disagreement::Unproved(differ()));
         };
         let signature = first.criteria.signature();
         if versions
             .iter()
             .any(|(_, _, record)| record.criteria.signature() != signature)
         {
-            return Err(differ());
+            return Err(Disagreement::Diverged(differ()));
         }
         if !absent.is_empty() {
-            if let Some(earlier) = self
-                .recovered(task, &absent)
-                .map_err(|reason| format!("{reason}; judged points: {context}"))?
-            {
+            if let Some(earlier) = self.recovered(task, &absent).map_err(unproved)? {
                 if earlier.criteria.signature() != signature {
-                    return Err(differ());
+                    return Err(Disagreement::Unproved(differ()));
                 }
             }
         }

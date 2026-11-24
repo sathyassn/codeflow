@@ -124,7 +124,7 @@ fn compute_imports(
         Err(error) => return Err(unenumerated(error)),
     };
     let syncs = home::takes_default(repo, anchor, head, default_tip).map_err(unenumerated)?;
-    let settled_before = settled_before_cutover(repo, default_tip).map_err(unenumerated)?;
+    let cutover = Cutover::new(repo, default_tip);
     // Each refusal names its record; the check never stops at the first.
     let mut refusals = Vec::new();
     let refuse = |id: &str, place: &str, reason: &str| refusal(&default.name, id, place, reason);
@@ -279,7 +279,7 @@ fn compute_imports(
                 base,
                 head,
                 walk,
-                settled_before,
+                Some(&cutover),
             ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
@@ -1015,6 +1015,39 @@ fn settled_before_cutover(repo: &Repository, default_tip: Oid) -> Result<Option<
     ))
 }
 
+/// The settled-history cutover of one import run (TSK-1605), read only when
+/// a completion could use it and at most once, its error included.
+struct Cutover<'r> {
+    repo: &'r Repository,
+    default_tip: Oid,
+    read: std::cell::OnceCell<Result<Option<Oid>, String>>,
+}
+
+impl<'r> Cutover<'r> {
+    fn new(repo: &'r Repository, default_tip: Oid) -> Self {
+        Self {
+            repo,
+            default_tip,
+            read: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Whether `landed` is at or before the cutover; never, when none is set.
+    ///
+    /// # Errors
+    /// The cutover or the history cannot be read ([`settled_before_cutover`]).
+    fn settles(&self, landed: Oid) -> Result<bool, String> {
+        let read = self
+            .read
+            .get_or_init(|| settled_before_cutover(self.repo, self.default_tip));
+        match read {
+            Ok(Some(cutover)) => is_ancestor_or_same(self.repo, landed, *cutover),
+            Ok(None) => Ok(false),
+            Err(reason) => Err(reason.clone()),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -1026,7 +1059,7 @@ fn prove_record(
     base: Oid,
     head: Oid,
     walk: Option<Walk>,
-    settled_before: Option<Oid>,
+    cutover: Option<&Cutover<'_>>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
         .find_commit(landed)
@@ -1076,13 +1109,13 @@ fn prove_record(
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
         // The cutover settles the completion's proof only: the landing must
-        // still carry its source's exact record.
+        // still carry its source's exact record. A cutover that cannot be
+        // read refuses the record and never counts as no cutover.
         let span = exact_source(repo, record, landed, &parents)?;
-        let settled_default_landing = walk.is_some()
-            && settled_before
-                .map(|cutover| is_ancestor_or_same(repo, landed, cutover))
-                .transpose()?
-                .unwrap_or(false);
+        let settled_default_landing = match (walk, cutover) {
+            (Some(_), Some(cutover)) => cutover.settles(landed)?,
+            _ => false,
+        };
         if settled_default_landing {
             None
         } else {
@@ -1171,12 +1204,12 @@ fn verify_record_home(
     }
     // Divergent, independently introduced criteria do not become stale just
     // because the source has the same record as the receiving head.
-    // The receiving base is set aside only when the full judgement gives no
-    // answer and the base is proved to inherit its criteria (TSK-1605): a
-    // merge of a branch that lacked the record is no decision of the base.
-    // A base that amended and restored them, whose task identity is
-    // ambiguous or whose history cannot be read is not proved, so the full
-    // judgement's refusal stands.
+    // The receiving base is set aside only when the full judgement finds
+    // competing versions with no doubt in either history, and the base is
+    // proved to inherit its criteria (TSK-1605): a merge of a branch that
+    // lacked the record is no decision of the base. Any other unknown, an
+    // ambiguous or unreadable record in either history included, refuses,
+    // and so does a base that amended and restored the criteria.
     if record.kind == RecordKind::Task {
         use super::super::landing::{Authority, Identity, Outside, RecordStore};
         let identity = Identity::of(record);
@@ -1188,8 +1221,9 @@ fn verify_record_home(
             replaced: None,
         };
         let mut store = RecordStore::new(repo);
-        let mut criteria = store.judge(&identity, &[base, landed], &outside).criteria;
-        if matches!(criteria, Authority::Unknown(_))
+        let full = store.judge(&identity, &[base, landed], &outside);
+        let mut criteria = full.criteria;
+        if full.diverged
             && store
                 .inherits_criteria(&identity, base, landed)
                 .unwrap_or(false)
