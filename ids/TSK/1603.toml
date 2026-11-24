@@ -1,0 +1,11 @@
+id = "TSK-1603"
+uid = "3971c1a2-9f90-44a2-976f-8a02f83a25a1"
+kind = "TSK"
+title = "Every managed check has a policy level with a documented default, and the non-relaxable operations are named once"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:36:03Z"
+target = "integration/EPC-024-quality-defaults-local-scan-parity-and-seat-capa"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
