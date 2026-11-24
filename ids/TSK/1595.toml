@@ -1,0 +1,11 @@
+id = "TSK-1595"
+uid = "9d27150e-8798-4f48-867d-9abb00763b7f"
+kind = "TSK"
+title = "The identity layer is proven on Linux and macOS and documented for adopters"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:43Z"
+target = "integration/EPC-060-commits-never-carry-the-contributor-s-own-machin"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
