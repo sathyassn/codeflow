@@ -1,0 +1,11 @@
+id = "TSK-1578"
+uid = "c3bdec48-23f8-4f7c-b7fc-9c1a040697e1"
+kind = "TSK"
+title = "Fix the gates job timeout line in the ci README"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T12:20:08Z"
+target = "integration/EPC-057-hosted-ci-runs-once-per-epic-and-main-reuses-tha"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
