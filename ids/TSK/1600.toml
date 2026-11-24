@@ -1,0 +1,11 @@
+id = "TSK-1600"
+uid = "b9008747-3428-49bf-9712-60ffee24ffb9"
+kind = "TSK"
+title = "A project can refuse its own organisation terms without publishing them"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:56Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
