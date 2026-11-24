@@ -911,9 +911,10 @@ impl<'r> RecordStore<'r> {
     /// commit that `base` reaches and `landed` does not decided them
     /// ([`Self::inherited`]). An amendment is a decision even when a later
     /// commit restored the earlier wording, so equal criteria at the two
-    /// ends never prove this alone. Only the commits outside `landed`'s
-    /// history and their parents are read here; a judgement that `diverged`
-    /// read all of `landed`'s.
+    /// ends never prove this alone. This reads `landed`, the merge base, the
+    /// commits outside `landed`'s history, their parents and the merge bases
+    /// of merged parents; a judgement that `diverged` read all of
+    /// `landed`'s history.
     ///
     /// # Errors
     ///
