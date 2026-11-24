@@ -1,0 +1,11 @@
+id = "TSK-1593"
+uid = "8c958b19-5f4f-4e7b-87cd-bb54bb88bcb8"
+kind = "TSK"
+title = "Added content that holds the contributor's own identity is a privacy finding"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:38Z"
+target = "integration/EPC-060-commits-never-carry-the-contributor-s-own-machin"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
