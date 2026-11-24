@@ -1,0 +1,11 @@
+id = "TSK-1596"
+uid = "a63b0484-51ff-4ec6-ac79-d04f750a2248"
+kind = "TSK"
+title = "The reviewers ask on every review whether a change adds personal or identifying data"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:46Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
