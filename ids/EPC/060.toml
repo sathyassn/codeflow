@@ -1,0 +1,11 @@
+id = "EPC-060"
+uid = "ea9487dc-68ad-4f24-8480-8e0881801e4a"
+kind = "EPC"
+title = "Commits never carry the contributor's own machine identity"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:09Z"
+target = "none"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
