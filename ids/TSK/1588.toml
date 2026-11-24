@@ -1,0 +1,11 @@
+id = "TSK-1588"
+uid = "3eab1fbe-6873-4eff-968e-bf2a52745087"
+kind = "TSK"
+title = "A privacy finding is exempted only by an authority-held register entry bound to one path and value"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:26Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
