@@ -1,0 +1,11 @@
+id = "TSK-1576"
+uid = "05ca71d0-8697-400f-bc23-deca9ecaa37f"
+kind = "TSK"
+title = "Shipped CI steps refuse a missing or malformed base commit"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T12:20:03Z"
+target = "integration/EPC-057-hosted-ci-runs-once-per-epic-and-main-reuses-tha"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
