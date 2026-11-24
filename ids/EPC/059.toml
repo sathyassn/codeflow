@@ -1,0 +1,11 @@
+id = "EPC-059"
+uid = "130934ca-9f0b-43d6-9515-65f0081766f5"
+kind = "EPC"
+title = "Commits and pushes refuse personal data that a pattern can find"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:06Z"
+target = "none"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
