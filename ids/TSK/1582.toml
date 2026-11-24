@@ -1,0 +1,11 @@
+id = "TSK-1582"
+uid = "b3b5a736-82b0-4f6b-89b7-1a0ce39b5334"
+kind = "TSK"
+title = "Make the remedy_clearing test independent of the caller's agent session"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:01Z"
+target = "integration/EPC-055-a-task-lands-on-its-epic-s-line-without-a-pull-r"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
