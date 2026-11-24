@@ -1,0 +1,11 @@
+id = "TSK-1584"
+uid = "cc2be861-eddc-4f3a-bc8e-1d67f960d0a2"
+kind = "TSK"
+title = "Email addresses and phone numbers in added content are privacy findings"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:16Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
