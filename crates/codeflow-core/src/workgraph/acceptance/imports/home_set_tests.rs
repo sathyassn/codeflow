@@ -18,10 +18,10 @@ fn docs_admitted() -> bool {
     PLANNING_LANDING_PATHS.contains(&AmendmentPath::Doc)
 }
 
-/// AC-11: production admits records only until the operator decides.
+/// AC-11 / TSK-1605: production admits records and docs (the aligned set).
 #[test]
-fn the_live_set_is_records_only() {
-    assert_eq!(PLANNING_LANDING_PATHS, NARROW);
+fn the_live_set_is_records_and_docs() {
+    assert_eq!(PLANNING_LANDING_PATHS, ALIGNED);
 }
 
 /// AC-11: each landing moves the record beside one other path. Records

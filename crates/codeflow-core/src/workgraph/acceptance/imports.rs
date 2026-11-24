@@ -32,11 +32,10 @@ pub struct ImportedRecord {
 }
 
 /// The path classes a planning landing may carry when it moves a task's
-/// home (TSK-1378 AC-11): records and plans only, until the operator
-/// decides otherwise. The line's own planning move and the walk of the
-/// default branch's moves use it; a line's adoption anchor and a shared
-/// planning introduction always admit records only.
-pub const PLANNING_LANDING_PATHS: &[AmendmentPath] = &[AmendmentPath::Record];
+/// home or introduces a task on `main` targeting a line (TSK-1378 AC-11,
+/// TSK-1605): records and docs. A line's adoption anchor and a shared
+/// planning introduction stay records-only.
+pub const PLANNING_LANDING_PATHS: &[AmendmentPath] = &[AmendmentPath::Record, AmendmentPath::Doc];
 
 /// Why the import check refuses, before it can name each record.
 const UNENUMERATED: &str = "the imported records could not be enumerated, so this refusal may not name every refused record";

@@ -734,11 +734,11 @@ pub(super) fn judge_arrival(
     }
     let found = moves_of(repo, &who, default_tip, start, head)?;
     if let Some((at, parent)) = found.introduced {
-        let admitted = admissible_planning_landing_with(repo, at, &[AmendmentPath::Record])?
+        let admitted = admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)?
             == Some(parent)
             && permitted_at(repo, at, record);
         if !admitted {
-            return Err(format!("{NO_SOURCE}: it was introduced at {at}, which is not a reviewed records-only planning merge of a todo or blocked task"));
+            return Err(format!("{NO_SOURCE}: it was introduced at {at}, which is not a reviewed planning merge of a todo or blocked task"));
         }
     } else if found.moves.is_empty() {
         return Err(format!("{NO_SOURCE}: no planning merge on the default branch introduced it or moved it there since the line last took the default branch"));

@@ -660,3 +660,37 @@ fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() 
         &["TSK-001", "accepted criteria cannot be resolved"],
     );
 }
+
+/// TSK-1605 Part 2 (AC-2): a task filed on `main` via a reviewed mixed
+/// planning merge carrying `docs/` and an ADR alongside task records (the
+/// PR #925 shape) syncs cleanly onto its declared home line, while a merge
+/// carrying product code still refuses with NO_SOURCE.
+#[test]
+fn main_filed_mixed_planning_merge_syncs_to_declared_home_line() {
+    let path = path_of("TSK-009");
+    let record = todo("TSK-009", LINE);
+
+    let fixture = Fixture::new(&[]);
+    fixture.land(
+        "main",
+        &[
+            (&path, &record),
+            ("docs/delivery.md", "Delivery update.\n"),
+            ("docs/decisions/ADR-0102.md", "# ADR-0102\n"),
+        ],
+    );
+    fixture.sync();
+    passes(&fixture, "PR #925 mixed planning merge syncs to home line");
+
+    let fixture_bad = Fixture::new(&[]);
+    fixture_bad.land(
+        "main",
+        &[(&path, &record), ("src/lib.rs", "pub fn sneaky() {}\n")],
+    );
+    fixture_bad.sync();
+    refused(
+        &fixture_bad,
+        "product-bearing arrival on main still refuses",
+        &["TSK-009", NO_SOURCE],
+    );
+}
