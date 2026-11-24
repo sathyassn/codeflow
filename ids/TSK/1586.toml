@@ -1,0 +1,11 @@
+id = "TSK-1586"
+uid = "7bad14d0-40a5-49ab-98ac-b0ff8dfcdf83"
+kind = "TSK"
+title = "Home paths with a user name in added content and paths are privacy findings"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:21Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
