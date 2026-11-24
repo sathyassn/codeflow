@@ -976,8 +976,7 @@ fn settled_before_cutover(repo: &Repository, default_tip: Oid) -> Result<Option<
     let Some(raw) = policy.git.import_authority_settled_before.as_deref() else {
         return Ok(None);
     };
-    let valid_hex =
-        raw.len() == 40 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let valid_hex = raw.len() == 40 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if !valid_hex {
         return Err(format!(
             "git.import_authority_settled_before '{raw}' is not 40 lowercase hex digits"

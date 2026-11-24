@@ -756,9 +756,16 @@ fn settled_before_cutover_covers_prior_main_completions_only() {
     fixture.sync();
     passes(&fixture, "completion at cutover passes with trusted policy");
 
-    fixture.land("main", &[(&p2, &complete("TSK-011", "main", "After cutover."))]);
+    fixture.land(
+        "main",
+        &[(&p2, &complete("TSK-011", "main", "After cutover."))],
+    );
     fixture.sync();
-    refused(&fixture, "completion after cutover still refuses", &["TSK-011"]);
+    refused(
+        &fixture,
+        "completion after cutover still refuses",
+        &["TSK-011"],
+    );
 
     // Non-first-parent / unknown SHA fails closed.
     let bad_policy = "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"], \"import_authority_settled_before\": \"0123456789abcdef0123456789abcdef01234567\"}\n}\n";
