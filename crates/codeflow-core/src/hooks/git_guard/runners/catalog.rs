@@ -18,16 +18,14 @@ use Source::{
 };
 
 /// Verbs that may contact a remote, so its transport programs and credential
-/// helpers run. `remote` is judged by [`source_verb`]; `maintenance` (its
-/// prefetch task) and `request-pull` (its `ls-remote`) contact one too
-/// (TSK-1479).
+/// helpers run. The remote-management verb is judged by [`source_verb`]; two
+/// more contact one through a task or a command of their own (TSK-1479).
 pub(super) const REMOTE: &str = "clone fetch pull push ls-remote fetch-pack send-pack submodule archive credential remote maintenance request-pull";
 
-/// The verb the source inventory judges a call by. `git remote` contacts a
-/// remote for `update`, `prune`, `show` without `-n`, `add` with a fetch and
-/// `set-head` with `-a`; a `git remote` call that only reads or writes local
-/// configuration reads as `remote --local`, which no source names. Anything
-/// this cannot read as local stays `remote` (TSK-1479).
+/// The verb the source inventory judges a call by. Some remote-management
+/// subcommands contact a remote; a call that only reads or writes local
+/// configuration reads as a local form, which no source names. Anything this
+/// cannot read as local stays the contacting verb (TSK-1479).
 pub(super) fn source_verb<'a>(verb: &'a str, rest: &[String]) -> &'a str {
     if verb == "remote" && remote_stays_local(rest) {
         "remote --local"
@@ -36,7 +34,7 @@ pub(super) fn source_verb<'a>(verb: &'a str, rest: &[String]) -> &'a str {
     }
 }
 
-/// Whether the `git remote` arguments `rest` name a subcommand that never
+/// Whether the remote-management arguments `rest` name a subcommand that never
 /// contacts a remote. Unknown options and subcommands read as contacting.
 fn remote_stays_local(rest: &[String]) -> bool {
     let mut words = rest.iter().map(String::as_str).peekable();
@@ -47,16 +45,16 @@ fn remote_stays_local(rest: &[String]) -> bool {
         words.next();
     }
     let Some(subcommand) = words.next() else {
-        // `git remote` and `git remote -v` list the configured remotes.
+        // A bare or listing-only call reads local configuration.
         return true;
     };
     let rest: Vec<&str> = words.collect();
     // Only plain operands, and the options each subcommand lists here that
-    // never fetch; `--` ends the options.
+    // never fetch. Every word is read, so a terminator never ends the reading
+    // (TSK-1489).
     let only = |allowed: &[&str]| {
         rest.iter()
-            .take_while(|word| **word != "--")
-            .all(|word| !word.starts_with('-') || allowed.contains(word))
+            .all(|word| !word.starts_with('-') || *word == "--" || allowed.contains(word))
     };
     match subcommand {
         "get-url" => only(&["--push", "--all"]),

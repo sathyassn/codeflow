@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 84] = [
+pub const SCHEMA: [KeySpec; 85] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -405,6 +405,29 @@ pub const SCHEMA: [KeySpec; 84] = [
                 shell grammar, so a path built by interpreter code, such as \
                 Python adjacent string literals or a node `+` concatenation, \
                 is part of that residual.",
+    },
+    KeySpec {
+        path: "git.admitted_helpers",
+        kind: KeyKind::StringList,
+        valid: "an array of helper programs, each written as the command Git runs, so that a remote helper and a credential helper each have one written form; an empty array admits none",
+        purpose: "Helper programs the guards admit when Git starts them for a command that contacts a remote: a remote helper the remote's address or configuration selects, and a credential helper.",
+        notes: "Read only from the landed policy at the remote's default \
+                branch, so an uncommitted or branch-local edit, or a value a \
+                command line sets, admits nothing until a reviewed policy \
+                naming it lands there. A command that selects its repository \
+                with a location option or variable admits nothing. Default empty: the guards refuse a \
+                command whose remote selects a helper program, and \
+                exec-guard keeps the account finding on a credential helper \
+                the account rules match. A named remote helper is judged as a \
+                program word instead; a named credential helper's account \
+                finding is skipped on a command that contacts a remote, \
+                never on a command that reads the stored credential \
+                directly, and every other finding on it stands. An entry \
+                must equal the command byte for byte. The guards read a value \
+                that is not an array of non-empty strings without a control \
+                character as empty, and validation reports a value that is \
+                not an array of strings. The git hooks do not read the key. \
+                The shipped policy file does not list it, so an older binary never meets the key.",
     },
     KeySpec {
         path: "git.line_sync_interval",

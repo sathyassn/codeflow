@@ -881,9 +881,9 @@ fn capability_query(root: &Path, args: &[&str]) -> Result<std::process::Output, 
         .map_err(|error| format!("git did not run: {error}"))
 }
 
-/// The git version text, and whether the repository has a promisor remote
-/// (`extensions.partialClone` or a `remote.<name>.promisor`). Git's exit 1
-/// from `git config` means no match; any other failure is an error, so an
+/// The git version text, and whether the repository has a promisor remote,
+/// read from its whole configuration by the reader the guards use
+/// ([`promisor_in_list`]). A failed configuration read is an error, so an
 /// undecidable repository is never taken as a plain one.
 fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
     let version = capability_query(root, &["version"])?;
@@ -894,23 +894,32 @@ fn version_and_promisor(root: &Path) -> Result<(String, bool), String> {
         .map_err(|_| "`git version` printed text that is not UTF-8".to_string())?;
     let version = version.strip_suffix('\n').unwrap_or(version);
     let version = version.strip_suffix('\r').unwrap_or(version).to_string();
-    let config = capability_query(
-        root,
-        &[
-            "config",
-            "--get-regexp",
-            r"^(extensions\.partialclone|remote\..*\.promisor)$",
-        ],
-    )?;
-    match config.status.code() {
-        Some(0) => Ok((version, !config.stdout.is_empty())),
-        Some(1) => Ok((version, false)),
-        _ => Err(format!(
+    let config = capability_query(root, &["config", "--null", "--list"])?;
+    if !config.status.success() {
+        return Err(format!(
             "cannot tell whether this repository fetches missing objects on \
-             demand: `git config` exited with {}",
+             demand: `git config --list` exited with {}",
             config.status
-        )),
+        ));
     }
+    Ok((version, promisor_in_list(&config.stdout)))
+}
+
+/// Whether the configuration `git config --null --list` printed registers a
+/// promisor remote, as [`crate::security::git_config::promisor_remotes`]
+/// reads it. Each record is `key`, then a newline and the value when the
+/// key has one, ended by a NUL byte.
+fn promisor_in_list(listed: &[u8]) -> bool {
+    let entries = listed
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+        .map(
+            |record| match record.iter().position(|byte| *byte == b'\n') {
+                Some(at) => (&record[..at], Some(&record[at + 1..])),
+                None => (record, None),
+            },
+        );
+    !crate::security::git_config::promisor_remotes(entries).is_empty()
 }
 
 /// Refuse before any git object read when the repository fetches missing
@@ -1233,6 +1242,90 @@ mod tests {
         assert!(promisor_refusal("not git", false).is_none());
         assert!(git_refusal("git version 2.40.1", false).is_some());
         assert!(git_refusal("not git", false).is_some());
+    }
+
+    /// Every promisor registration Git reads marks the repository as one
+    /// that fetches missing objects on demand, and nothing else does.
+    #[test]
+    fn every_registration_marks_the_repository() {
+        for (config, promisor) in [
+            ("", false),
+            ("[remote \"origin\"]\n\turl = /srv/r.git\n", false),
+            ("[remote \"origin\"]\n\tpromisor = false\n", false),
+            ("[remote \"origin\"]\n\tpromisor = true\n", true),
+            (
+                "[remote \"origin\"]\n\tpromisor = false\n\tpromisor = true\n",
+                true,
+            ),
+            (
+                "[remote \"origin\"]\n\tpromisor = true\n\tpromisor = false\n",
+                true,
+            ),
+            (
+                "[remote \"origin\"]\n\tpartialCloneFilter = blob:none\n",
+                true,
+            ),
+            (
+                "[remote \"origin\"]\n\tpromisor = false\n\tpartialCloneFilter = blob:none\n",
+                true,
+            ),
+            ("[remote \"\"]\n\tpartialCloneFilter = blob:none\n", true),
+            ("[remote]\n\tpartialCloneFilter = blob:none\n", true),
+            ("[remote]\n\tpromisor\n", true),
+            ("[extensions]\n\tpartialClone = origin\n", true),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            git2::Repository::init(dir.path()).unwrap();
+            let file = dir.path().join(".git/config");
+            let mut bytes = std::fs::read(&file).unwrap();
+            bytes.extend_from_slice(b"\n");
+            bytes.extend_from_slice(config.as_bytes());
+            std::fs::write(&file, bytes).unwrap();
+            let (_, found) = version_and_promisor(dir.path()).unwrap();
+            assert_eq!(found, promisor, "{config}");
+        }
+    }
+
+    /// Each configuration shape decides the scan through the shared
+    /// promisor reader: a git below 2.46 refuses a promisor repository and
+    /// scans a plain one; 2.46 or later scans both.
+    #[test]
+    fn every_registration_shape_decides_the_scan_at_each_git_version() {
+        let shapes: [(&[u8], bool); 13] = [
+            (b"", false),
+            (b"remote.origin.url\n/srv/r.git\0", false),
+            (b"remote.origin.promisor\nfalse\0", false),
+            (b"remote.origin.promisor\n\0", false),
+            (b"remote.origin.promisor\ntrue\0", true),
+            (b"remote.origin.promisor\0", true),
+            (
+                b"remote.origin.promisor\nfalse\0remote.origin.promisor\ntrue\0",
+                true,
+            ),
+            (
+                b"remote.origin.promisor\ntrue\0remote.origin.promisor\nfalse\0",
+                true,
+            ),
+            (b"remote.origin.partialclonefilter\nblob:none\0", true),
+            (b"extensions.partialclone\norigin\0", true),
+            (b"remote..partialclonefilter\nblob:none\0", true),
+            (b"remote..promisor\ntrue\0", true),
+            (b"remote.promisor\0", true),
+        ];
+        for (listed, promisor) in shapes {
+            let shown = String::from_utf8_lossy(listed);
+            assert_eq!(promisor_in_list(listed), promisor, "{shown}");
+            for old in ["git version 2.41.0", "git version 2.45.2"] {
+                let refusal = git_refusal(old, promisor_in_list(listed));
+                assert_eq!(refusal.is_some(), promisor, "{old} {shown}");
+            }
+            for new in ["git version 2.46.0", "git version 2.53.0"] {
+                assert!(
+                    git_refusal(new, promisor_in_list(listed)).is_none(),
+                    "{new} {shown}"
+                );
+            }
+        }
     }
 
     #[test]

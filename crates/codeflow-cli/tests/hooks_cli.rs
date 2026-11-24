@@ -19,6 +19,9 @@ use host_isolation::{git_command, isolate_clone, isolate_git};
 #[path = "hooks_cli/path_writers.rs"]
 mod path_writers;
 
+#[path = "hooks_cli/remote_transport.rs"]
+mod remote_transport;
+
 #[path = "hooks_cli/target_repository.rs"]
 mod target_repository;
 
@@ -33,6 +36,9 @@ mod program_word;
 
 #[path = "hooks_cli/skipped_commit.rs"]
 mod skipped_commit;
+
+#[path = "hooks_cli/withhold_names.rs"]
+mod withhold_names;
 
 /// TSK-397: under the strict text rule, the default this suite runs in,
 /// once a line's directory is unknown, the exec guard refuses a word filled in at
@@ -11958,7 +11964,7 @@ fn git_wrapper(folder: &Path, version: Option<&str>, fail_config: bool) -> std::
         format!("  version) echo 'git version {found}'; exit 0;;\n")
     });
     let config_case = if fail_config {
-        "  config\\ --get-regexp*) echo 'config unreadable' >&2; exit 128;;\n"
+        "  config\\ --null\\ --list*) echo 'config unreadable' >&2; exit 128;;\n"
     } else {
         ""
     };
@@ -12186,6 +12192,10 @@ fn inherited_promisor_settings_never_reach_the_attribute_reader() {
         // The repository's own configuration has no promisor designation.
         git(&work, &["config", "--unset", "remote.origin.promisor"]);
         git(&work, &["config", "--unset", "extensions.partialClone"]);
+        git(
+            &work,
+            &["config", "--unset", "remote.origin.partialCloneFilter"],
+        );
         let wrapper = git_wrapper(keep.path(), Some("2.45.2"), false);
         let out = promisor_hook(&work, &wrapper, false, false, env);
         let stderr = String::from_utf8_lossy(&out.stderr);

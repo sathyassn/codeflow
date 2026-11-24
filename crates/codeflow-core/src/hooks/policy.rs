@@ -316,6 +316,29 @@ where
     Ok(read.unwrap_or_default())
 }
 
+/// `git.admitted_helpers` as written, or an empty list when the value is not
+/// an array of non-empty strings without a control character: a value the
+/// guards cannot read admits no helper (TSK-1489 AC-7), and never stops the
+/// rest of the policy loading.
+fn admitted_helpers<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let read = value.as_array().and_then(|entries| {
+        entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .filter(|helper| !helper.is_empty() && !helper.chars().any(char::is_control))
+                    .map(str::to_string)
+            })
+            .collect::<Option<Vec<_>>>()
+    });
+    Ok(read.unwrap_or_default())
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -386,6 +409,17 @@ pub struct GitPolicy {
     /// stay the hard line (charter D19). Suspended only in the
     /// pre-first-commit bootstrap window.
     pub hook_integrity: PolicyLevel,
+    /// Helper programs the guards admit when Git starts them for a command
+    /// that contacts a remote (TSK-1489), each written as the command Git
+    /// runs, so that a remote helper and a credential helper each have one
+    /// written form. An admitted remote helper is judged as a program word
+    /// instead of refused; an admitted credential helper's account finding
+    /// is skipped on a command that contacts a remote. The guards read the
+    /// list only from the policy landed at the remote's default branch.
+    /// Default empty, which admits none; a value that is not an array of
+    /// non-empty strings without a control character reads as empty.
+    #[serde(deserialize_with = "admitted_helpers")]
+    pub admitted_helpers: Vec<String>,
     /// The branch the root checkout holds: the repository's main working
     /// tree, where no task work happens. Empty (the default) means the
     /// repository's default branch. Change it only for an umbrella
@@ -731,6 +765,7 @@ impl Default for GitPolicy {
             landed_default_branch: None,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
+            admitted_helpers: Vec::new(),
             root_branch: String::new(),
             root_checkout_commits: PolicyLevel::Block,
             worktree_locations: crate::root_checkout::DEFAULT_WORKTREE_LOCATIONS

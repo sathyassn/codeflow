@@ -4675,6 +4675,41 @@ fn git_output_options_cannot_write_enforcement_files() {
     }
 }
 
+// The command option and the output option of one verb are judged wherever
+// the word stands, and an option reading the guard cannot prove refuses.
+#[test]
+fn an_option_word_a_value_may_consume_is_still_read() {
+    let f = Fixture::new();
+    let root = shell_path(&f.root);
+    for hook in ["exec-guard", "git-guard"] {
+        for command in [
+            "git archive --format --exec='rm -rf .claude' --remote=/source HEAD".to_string(),
+            "git archive --prefix --exec=prog --remote=/source HEAD".to_string(),
+            "git archive -9o --exec=prog --remote=/source HEAD".to_string(),
+            "git archive --format -o .git/hooks/pre-commit HEAD".to_string(),
+            "git archive --prefix --output=.git/hooks/pre-commit HEAD".to_string(),
+            "git archive --mtime --out .git/hooks/pre-commit HEAD".to_string(),
+            format!("git archive --format --output={root}/.claude/settings.json HEAD"),
+        ] {
+            let out = f.command(&f.root, hook, &command);
+            assert!(refused(&out), "{hook} {command}: {out:?}");
+            assert!(
+                String::from_utf8_lossy(&out.stderr)
+                    .contains("an option word may be read as another option's value"),
+                "{hook} {command}: {out:?}"
+            );
+        }
+        // Controls in the same directory: a provable reading passes.
+        for command in [
+            "git archive --format tar -o build/x.tar HEAD",
+            "git archive --prefix p/ --output=build/x.tar HEAD",
+        ] {
+            let out = f.command(&f.root, hook, command);
+            assert_eq!(out.status.code(), Some(0), "{hook} {command}: {out:?}");
+        }
+    }
+}
+
 // Codex review round 9, C1 and C4: builtin wrappers, appends and sourced
 // files change HOME too. Ordinary read-only calls pass; TSK-1002 AC-6
 // requires secret-store file operands to refuse regardless of the program.
