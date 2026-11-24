@@ -643,7 +643,7 @@ fn an_adoption_or_move_reachable_only_by_a_second_parent_is_refused() {
     non_planning_move(&fixture, &after);
     fixture.git(&["branch", "plan/adopt", LINE]);
     fixture.land("plan/adopt", &[(&path, &after)]);
-    fixture.direct("plan/adopt", &[("docs/line.md", "The line's note.\n")]);
+    fixture.direct("plan/adopt", &[("src/line.rs", "pub fn line() {}\n")]);
     fixture.git(&["switch", "-q", LINE]);
     fixture.git(&[
         "merge",

@@ -651,42 +651,29 @@ fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() 
     let path = path_of("TSK-001");
     let main_amended = "---\nid: TSK-001\nuid: uid-TSK-001\nstatus: todo\nintegration_target: main\n---\n\n# TSK-001: work\n\n## Description\n\nRe-scoped on main.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n- AC-2 Main added a second requirement.\n\n## Closeout\n\nPending.\n";
 
-    // Case 1: LINE re-homes TSK-001 to main without changing its criteria,
-    // while main amends the criteria and moves it to main. LINE's criteria
-    // match the merge base, so sync passes.
+    // Case 1: `sync` branches from LINE and cleanly merges `main` (which
+    // amended criteria and moved TSK-001 to `main`), while LINE advances
+    // independently to re-home TSK-001 to `main` without changing criteria.
+    // LINE's criteria still match the merge base, so sync passes and imports
+    // TSK-001.
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
     fixture.land("main", &[(&path, main_amended)]);
+    fixture.sync();
     fixture.land(LINE, &[(&path, &todo("TSK-001", "main"))]);
-    fixture.git(&["switch", "-q", "-C", "sync", LINE]);
-    fixture.git(&[
-        "merge",
-        "--no-ff",
-        "-q",
-        "-X",
-        "theirs",
-        "-m",
-        "chore(merge): take main",
-        "main",
-    ]);
-    passes(&fixture, "line re-homed without criteria change");
+    let found = passes(&fixture, "line re-homed without criteria change");
+    assert!(
+        found.contains_key("TSK-001"),
+        "expected TSK-001 to be imported: {found:?}"
+    );
 
-    // Case 2: LINE independently amends AC-1 on its own branch. Its criteria
-    // now differ from the merge base, so it still competes and refuses.
+    // Case 2: same sync topology, except LINE independently amends the
+    // acceptance criteria on its own branch. Its criteria now differ from the
+    // merge base, so it still competes and refuses.
     let line_amended = "---\nid: TSK-001\nuid: uid-TSK-001\nstatus: todo\nintegration_target: main\n---\n\n# TSK-001: work\n\n## Description\n\nWork.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n- AC-9 Line added a competing requirement.\n\n## Closeout\n\nPending.\n";
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
     fixture.land("main", &[(&path, main_amended)]);
+    fixture.sync();
     fixture.land(LINE, &[(&path, line_amended)]);
-    fixture.git(&["switch", "-q", "-C", "sync", LINE]);
-    fixture.git(&[
-        "merge",
-        "--no-ff",
-        "-q",
-        "-X",
-        "theirs",
-        "-m",
-        "chore(merge): take main",
-        "main",
-    ]);
     refused(
         &fixture,
         "line independently amended criteria",
