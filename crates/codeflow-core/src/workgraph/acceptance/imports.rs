@@ -1205,11 +1205,14 @@ fn verify_record_home(
     // Divergent, independently introduced criteria do not become stale just
     // because the source has the same record as the receiving head.
     // The receiving base is set aside only when the full judgement finds
-    // competing versions with no doubt in either history, and the base is
-    // proved to inherit its criteria (TSK-1605): a merge of a branch that
-    // lacked the record is no decision of the base. Any other unknown, an
-    // ambiguous or unreadable record in either history included, refuses,
-    // and so does a base that amended and restored the criteria.
+    // competing versions with no doubt in the history it read, and the base
+    // is proved to inherit its criteria, or the task's absence, from its
+    // merge base with the landing (TSK-1605): a merge of a branch that
+    // lacked the record is no decision of the base. The landing's whole
+    // history is read, and every commit of the base outside it. Any other
+    // unknown, an ambiguous or unreadable record in either history
+    // included, refuses, and so does a base that amended and restored the
+    // criteria.
     if record.kind == RecordKind::Task {
         use super::super::landing::{Authority, Identity, Outside, RecordStore};
         let identity = Identity::of(record);

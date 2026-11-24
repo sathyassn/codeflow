@@ -894,6 +894,96 @@ fn a_landing_whose_history_holds_an_unreadable_record_is_refused() {
     );
 }
 
+/// Delete TSK-001 on `main`, and fork the line after it with work of its
+/// own, so neither holds the task and both histories do.
+fn fork_after_deletion(fixture: &Fixture) {
+    remove(fixture, "main", &path_of("TSK-001"));
+    fixture.git(&["branch", "-f", LINE, "main"]);
+    line_diverges(fixture);
+}
+
+/// TSK-1605 AC-1: `main` deleted the task before the line forked and files
+/// it again with other criteria. The line decided nothing about it.
+#[test]
+fn a_refile_after_a_shared_deletion_takes_mains_amendment() {
+    let fixture = planned_fixture();
+    fork_after_deletion(&fixture);
+    main_amends(&fixture);
+    fixture.sync();
+    let found = passes(&fixture, "a refile after a shared deletion");
+    assert!(found.contains_key("TSK-001"), "{found:?}");
+}
+
+/// TSK-1605 AC-3: two records matched the task in the shared history before
+/// the deletion, so the refile is refused.
+#[test]
+fn a_refile_whose_shared_history_matched_two_records_is_refused() {
+    let fixture = planned_fixture();
+    adds_a_copy(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    fork_after_deletion(&fixture);
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "two records matched before the deletion",
+        &["TSK-001", UNRESOLVED, "holds 2 records"],
+    );
+}
+
+/// TSK-1605 AC-3: the shared history before the deletion holds a record
+/// that does not parse, so the refile is refused.
+#[test]
+fn a_refile_whose_shared_history_holds_an_unreadable_record_is_refused() {
+    let fixture = planned_fixture();
+    adds_an_unreadable_record(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    fork_after_deletion(&fixture);
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "an unreadable record before the deletion",
+        &["TSK-001", UNRESOLVED, "does not parse"],
+    );
+}
+
+/// TSK-1605 AC-3: two records matched the refiled task on `main` after the
+/// fork, so `main`'s later amendment is refused.
+#[test]
+fn a_refile_that_matched_two_records_after_the_fork_is_refused() {
+    let fixture = planned_fixture();
+    fork_after_deletion(&fixture);
+    lands_planned(&fixture, "main");
+    adds_a_copy(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "two records matched after the fork",
+        &["TSK-001", UNRESOLVED, "holds 2 records"],
+    );
+}
+
+/// TSK-1605 AC-3: `main` held a record that does not parse beside the
+/// refiled task after the fork, so its later amendment is refused.
+#[test]
+fn a_refile_with_an_unreadable_record_after_the_fork_is_refused() {
+    let fixture = planned_fixture();
+    fork_after_deletion(&fixture);
+    lands_planned(&fixture, "main");
+    adds_an_unreadable_record(&fixture, "main");
+    remove(&fixture, "main", &path_of("TSK-002"));
+    main_amends(&fixture);
+    fixture.sync();
+    refused(
+        &fixture,
+        "an unreadable record after the fork",
+        &["TSK-001", UNRESOLVED, "does not parse"],
+    );
+}
+
 /// TSK-1605 Part 2 (AC-2): a task filed on `main` via a reviewed mixed
 /// planning merge carrying `docs/` and an ADR alongside task records (the
 /// PR #925 shape) syncs cleanly onto its declared home line, while a merge

@@ -104,8 +104,8 @@ pub(super) struct TaskJudgement {
     pub(super) criteria: Authority,
     /// The source of the criteria, kept apart from the run's policy authority.
     pub(super) criteria_source: String,
-    /// Whether the criteria are unknown only because the judged points hold
-    /// competing versions, with no doubt in the history of any version
+    /// Whether the criteria are unknown only because versions compete, with
+    /// no doubt in the whole history of any point that holds one
     /// ([`Disagreement::Diverged`], TSK-1605).
     pub(super) diverged: bool,
 }
@@ -229,11 +229,12 @@ struct Held {
 
 /// Why the judged points agree on no version ([`RecordStore::agreed`]).
 enum Disagreement {
-    /// The points hold competing versions, and the whole history of each
-    /// holder was read with no unreadable or ambiguous record.
+    /// The points hold competing versions, or an absent point's history
+    /// holds an earlier version with other criteria, and the whole history
+    /// of each holding point was read with no unreadable or ambiguous record.
     Diverged(String),
-    /// Anything else: a doubt, history that cannot be read, or a point that
-    /// no longer holds the record.
+    /// Anything else: a doubt, or history that cannot be read or cannot
+    /// tell which version an absent point keeps.
     Unproved(String),
 }
 
@@ -634,11 +635,12 @@ impl<'r> RecordStore<'r> {
     /// Returns why the criteria cannot be told: a point's doubt, held
     /// versions with different criteria, or an absent point whose history
     /// holds a version with other criteria or cannot prove which version
-    /// it keeps ([`Self::recovered`]). Held versions that compete after every
-    /// differing holder's whole history was read are
-    /// [`Disagreement::Diverged`]; every other reason is
-    /// [`Disagreement::Unproved`], an absent point's earlier version
-    /// included, since [`Self::recovered`] reads only the absent points.
+    /// it keeps ([`Self::recovered`]). Held versions that compete, and an
+    /// absent point's earlier version with other criteria, are
+    /// [`Disagreement::Diverged`] once the whole history of every holding
+    /// point was read without doubt; every other reason is
+    /// [`Disagreement::Unproved`]. Neither proves that a point decided
+    /// nothing: the caller proves that ([`Self::inherits_criteria`]).
     fn agreed(
         &mut self,
         task: &Identity,
@@ -703,7 +705,17 @@ impl<'r> RecordStore<'r> {
         if !absent.is_empty() {
             if let Some(earlier) = self.recovered(task, &absent).map_err(unproved)? {
                 if earlier.criteria.signature() != signature {
-                    return Err(Disagreement::Unproved(differ()));
+                    // `recovered` read only the absent points, so each
+                    // holding point's whole history is read here too.
+                    for (point, held) in points {
+                        let Some((blob, record)) = held.records.first() else {
+                            continue;
+                        };
+                        let holder = Holding::new(*point, *blob, Version::criteria(record));
+                        self.introductions(task, holder.commit, &holder.version)
+                            .map_err(|reason| unproved(holder.context(&reason)))?;
+                    }
+                    return Err(Disagreement::Diverged(differ()));
                 }
             }
         }
@@ -894,11 +906,14 @@ impl<'r> RecordStore<'r> {
     }
 
     /// Whether `base` only inherits its criteria for the task (TSK-1605):
-    /// it holds the criteria its one merge base with `landed` holds, or
-    /// neither holds the task, and no commit that `base` reaches and
-    /// `landed` does not decided them ([`Self::inherited`]). An amendment
-    /// is a decision even when a later commit restored the earlier
-    /// wording, so equal criteria at the two ends never prove this alone.
+    /// `landed` holds the task, `base` holds the criteria its one merge base
+    /// with `landed` holds, or neither of those two holds the task, and no
+    /// commit that `base` reaches and `landed` does not decided them
+    /// ([`Self::inherited`]). An amendment is a decision even when a later
+    /// commit restored the earlier wording, so equal criteria at the two
+    /// ends never prove this alone. Only the commits outside `landed`'s
+    /// history and their parents are read here; a judgement that `diverged`
+    /// read all of `landed`'s.
     ///
     /// # Errors
     ///
@@ -920,7 +935,9 @@ impl<'r> RecordStore<'r> {
             return Ok(false);
         };
         let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
-        self.criteria_at(task, landed, &mut uids)?;
+        if self.criteria_at(task, landed, &mut uids)?.is_none() {
+            return Ok(false);
+        }
         let carried = self.criteria_at(task, *shared, &mut uids)?;
         if self.criteria_at(task, base, &mut uids)? != carried {
             return Ok(false);
