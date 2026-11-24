@@ -1,0 +1,11 @@
+id = "TSK-1590"
+uid = "5a56f4ba-0eae-4ab5-aa96-589a44ce15d0"
+kind = "TSK"
+title = "The identity reader holds the contributor's git, account and home values in memory only"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:31Z"
+target = "integration/EPC-060-commits-never-carry-the-contributor-s-own-machin"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
