@@ -626,3 +626,37 @@ fn a_same_destination_own_move_still_judges_mains_moves() {
     fixture.sync();
     passes(&fixture, "a planning move beside the line's own");
 }
+
+/// TSK-1605 Part 1: when a receiving line carries the same criteria signature
+/// as its unique merge base with `main` (for example after re-homing the task
+/// to `main` or merging a branch that lacked the task), it has not amended the
+/// criteria and does not compete against `main`'s settled criteria.
+#[test]
+fn line_unchanged_criteria_yields_to_main_and_amended_criteria_still_competes() {
+    let path = path_of("TSK-001");
+    let main_amended = "---\nid: TSK-001\nuid: uid-TSK-001\nstatus: todo\nintegration_target: main\n---\n\n# TSK-001: work\n\n## Description\n\nRe-scoped on main.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n- AC-2 Main added a second requirement.\n\n## Closeout\n\nPending.\n";
+
+    // Case 1: LINE re-homes TSK-001 to main without changing its criteria,
+    // while main amends the criteria and moves it to main. LINE's criteria
+    // match the merge base, so sync passes.
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
+    // Create a branch from before TSK-001 existed (empty root) or a side merge
+    // on LINE that re-homes TSK-001 without touching AC-1.
+    fixture.land("main", &[(&path, main_amended)]);
+    fixture.land(LINE, &[(&path, &todo("TSK-001", "main"))]);
+    fixture.sync();
+    passes(&fixture, "line re-homed without criteria change");
+
+    // Case 2: LINE independently amends AC-1 on its own branch. Its criteria
+    // now differ from the merge base, so it still competes and refuses.
+    let line_amended = "---\nid: TSK-001\nuid: uid-TSK-001\nstatus: todo\nintegration_target: main\n---\n\n# TSK-001: work\n\n## Description\n\nWork.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n- AC-9 Line added a competing requirement.\n\n## Closeout\n\nPending.\n";
+    let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", LINE))]);
+    fixture.land("main", &[(&path, main_amended)]);
+    fixture.land(LINE, &[(&path, line_amended)]);
+    fixture.sync();
+    refused(
+        &fixture,
+        "line independently amended criteria",
+        &["TSK-001", "accepted criteria cannot be resolved"],
+    );
+}

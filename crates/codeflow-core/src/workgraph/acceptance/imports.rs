@@ -1104,12 +1104,22 @@ fn verify_record_home(
     }
     // Divergent, independently introduced criteria do not become stale just
     // because the source has the same record as the receiving head.
+    // However, when `base` has not changed the task's criteria since its
+    // unique merge base with `landed` (for example, `base` only re-homed the
+    // task or carried an untouched copy through merges), `base` does not
+    // compete with `landed`'s settled criteria.
     if record.kind == RecordKind::Task {
         use super::super::landing::{Authority, Identity, Outside, RecordStore};
+        let base_unchanged = base_criteria_unchanged(repo, record, base, landed)?;
+        let points: &[Oid] = if base_unchanged {
+            &[landed]
+        } else {
+            &[base, landed]
+        };
         let mut store = RecordStore::new(repo);
         let judged = store.judge(
             &Identity::of(record),
-            &[base, landed],
+            points,
             &Outside {
                 head,
                 tips: &[],
@@ -1132,6 +1142,34 @@ fn verify_record_home(
         }
     }
     Ok(anchor)
+}
+
+/// Whether `base` holds the exact same criteria state for `record` (same
+/// criteria signature, or absent on both sides) as the unique merge base of
+/// `base` and `landed`. Fails closed (`Ok(false)`) when there is no unique
+/// merge base or either side is ambiguous/unreadable.
+fn base_criteria_unchanged(
+    repo: &Repository,
+    record: &RecordView,
+    base: Oid,
+    landed: Oid,
+) -> Result<bool, String> {
+    let bases = history::merge_bases(repo, base, landed).map_err(|error| error.to_string())?;
+    let [mb] = bases.as_slice() else {
+        return Ok(false);
+    };
+    let uid = record_uid(&record.content);
+    let file = own_file_name(record);
+    match (
+        presence_at(repo, base, &record.id, uid.as_deref(), &file),
+        presence_at(repo, *mb, &record.id, uid.as_deref(), &file),
+    ) {
+        (Presence::Present(at_base), Presence::Present(at_mb)) => {
+            Ok(at_base.criteria.signature() == at_mb.criteria.signature())
+        }
+        (Presence::Absent, Presence::Absent) => Ok(true),
+        _ => Ok(false),
+    }
 }
 
 /// The paths whose imports have the same source proof used by acceptance.
