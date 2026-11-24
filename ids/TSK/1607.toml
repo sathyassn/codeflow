@@ -1,0 +1,11 @@
+id = "TSK-1607"
+uid = "2c2d8858-3fb2-42ff-9381-527eda7b5c54"
+kind = "TSK"
+title = "Eliminate timing race in remote_query policy timeout test under host load"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T17:27:27Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
