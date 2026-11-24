@@ -1,0 +1,11 @@
+id = "TSK-1585"
+uid = "e217bad0-362a-4d2c-97db-52173aa65aed"
+kind = "TSK"
+title = "IP and MAC addresses and private host names in added content are privacy findings"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:18Z"
+target = "integration/EPC-059-commits-and-pushes-refuse-personal-data-that-a-p"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
