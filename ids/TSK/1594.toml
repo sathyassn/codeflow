@@ -1,0 +1,11 @@
+id = "TSK-1594"
+uid = "d19384f8-1d39-4fd4-bcbb-d3622297f741"
+kind = "TSK"
+title = "The identity layer is installed at block, blocks at pre-push, behaves in CI as the operator chose, and fails closed"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:41Z"
+target = "integration/EPC-060-commits-never-carry-the-contributor-s-own-machin"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
