@@ -829,9 +829,10 @@ pub const SCHEMA: [KeySpec; 85] = [
         purpose: "Marks historical default-branch completions at or before this SHA as settled when synced into an integration line (TSK-1605).",
         notes: "Read only from the policy at the trusted default tip, never from \
                 the receiving branch or head. Absent by default for adopters. \
-                Exact blob matching, owned-path checks, clean remerge, and home \
-                history checks still run; completions landing after this SHA \
-                still undergo full completion proof.",
+                Exact blob matching (a merge's second parent included), \
+                owned-path checks, clean remerge, and home history checks \
+                still run; completions landing after this SHA still undergo \
+                full completion proof.",
     },
     KeySpec {
         path: "git.branch_naming",

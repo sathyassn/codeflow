@@ -614,7 +614,7 @@ fn a_kept_home_no_line_commit_set_is_refused() {
 
 /// AC-13 negative (1): a reviewed records-only merge that adopts `main`'s
 /// exact version but never landed on the line sets no anchor, so `main`'s
-/// docs-bearing move is judged and refused.
+/// product-bearing move is judged and refused.
 #[test]
 fn a_claimed_adoption_with_no_landing_is_refused() {
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);

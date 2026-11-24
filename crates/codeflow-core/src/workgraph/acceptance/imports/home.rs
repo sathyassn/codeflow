@@ -4,7 +4,7 @@
 //! The check walks every home move of the task's identity on the trusted
 //! default tip's first-parent history since the merge base of the line and
 //! that tip, and accepts each move only when it is a reviewed planning
-//! merge of records (AC-1, AC-6). The line's own copy is compared once,
+//! merge of records and docs (AC-1, AC-6). The line's own copy is compared once,
 //! with the last move's new home. A later change on `main` never clears an
 //! earlier move (AC-10). Only the line's own records-only adoption of an
 //! exact `main` version, on its first-parent history, moves the start of
@@ -481,7 +481,7 @@ fn line_unchanged(
 /// on each side.
 fn common_proof(repo: &Repository, who: &Identity<'_>, at: Oid, parent: Oid) -> Result<(), String> {
     if admissible_planning_landing_with(repo, at, PLANNING_LANDING_PATHS)? != Some(parent) {
-        return Err(format!("{MOVED}: the move at {at} is not a reviewed planning merge of records on the default branch's first-parent history"));
+        return Err(format!("{MOVED}: the move at {at} is not a reviewed planning merge of records and docs on the default branch's first-parent history"));
     }
     for side in [at, parent] {
         if !matches!(held_at(repo, side, who), Held::One(_)) {
@@ -706,8 +706,9 @@ pub(super) fn line_landing(
 /// Judge a record that names the receiving line as its home and that the
 /// line does not already hold homed there (AC-12): its exact version must
 /// stand on the default branch, its introduction there since `start` must
-/// be a records-only planning merge of a todo or blocked task, and every
-/// move must pass as any home move does. A record the line already homes
+/// be a reviewed planning merge of records and docs
+/// ([`PLANNING_LANDING_PATHS`]) of a todo or blocked task, and every move
+/// must pass as any home move does. A record the line already homes
 /// stays under the criteria freeze, and this grants nothing against it.
 ///
 /// # Errors

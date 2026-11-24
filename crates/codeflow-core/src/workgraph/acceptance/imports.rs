@@ -901,6 +901,30 @@ fn prove_retired_record(
     }))
 }
 
+/// The head a completed task's home landing took: the second parent of a
+/// two-parent merge, which must hold the exact record, else the landing
+/// itself. A clean merge can combine two edits into a record neither parent
+/// holds, so no reviewed source holds that result.
+///
+/// # Errors
+/// The second parent does not hold the exact record, or cannot be read.
+fn exact_source(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parents: &[Oid],
+) -> Result<Oid, String> {
+    let [_, second] = parents else {
+        return Ok(landed);
+    };
+    if record_at(repo, *second, record)?.is_none_or(|old| old.content != record.content) {
+        return Err("the home merge does not carry the exact source record".into());
+    }
+    Ok(*second)
+}
+
+/// Prove the completion of a task that landed at `landed` from the head
+/// `span` ([`exact_source`]).
 fn prove_task_completion(
     repo: &Repository,
     record: &RecordView,
@@ -908,7 +932,7 @@ fn prove_task_completion(
     tip: Oid,
     default_tip: Oid,
     landed: Oid,
-    parents: &[Oid],
+    span: Oid,
 ) -> Result<CompletionProof, String> {
     let block = active_block(record).expect("active block checked");
     let introduced = introduced_at(repo, record, &block, landed)?;
@@ -916,15 +940,6 @@ fn prove_task_completion(
     // Judge the entire task head that landed, including changes made
     // after its completion block was written. The block's introduction
     // alone cannot prove that the home accepted the reviewed result.
-    let span = if parents.len() == 2 {
-        let second = parents[1];
-        if record_at(repo, second, record)?.is_none_or(|old| old.content != record.content) {
-            return Err("the home merge does not carry the exact source record".into());
-        }
-        second
-    } else {
-        landed
-    };
     let run = RunBases::new([landed]);
     let source_graph = Graph::from_revision(repo, &landed.to_string())?;
     let bound = bind_completion_with_amendment(
@@ -950,7 +965,7 @@ fn prove_task_completion(
     let mut proof = bound
         .proof
         .ok_or("the home completion has no binding proof")?;
-    if parents.len() == 2 {
+    if span != landed {
         proof.landing_merge = Some(landed);
     }
     Ok(proof)
@@ -1060,6 +1075,9 @@ fn prove_record(
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
+        // The cutover settles the completion's proof only: the landing must
+        // still carry its source's exact record.
+        let span = exact_source(repo, record, landed, &parents)?;
         let settled_default_landing = walk.is_some()
             && settled_before
                 .map(|cutover| is_ancestor_or_same(repo, landed, cutover))
@@ -1075,7 +1093,7 @@ fn prove_record(
                 tip,
                 default_tip,
                 landed,
-                &parents,
+                span,
             )?)
         }
     } else {
@@ -1153,31 +1171,32 @@ fn verify_record_home(
     }
     // Divergent, independently introduced criteria do not become stale just
     // because the source has the same record as the receiving head.
-    // However, when `base` has not changed the task's criteria since its
-    // unique merge base with `landed` (for example, `base` only re-homed the
-    // task or carried an untouched copy through merges), `base` does not
-    // compete with `landed`'s settled criteria.
+    // The receiving base is set aside only when the full judgement gives no
+    // answer and the base is proved to inherit its criteria (TSK-1605): a
+    // merge of a branch that lacked the record is no decision of the base.
+    // A base that amended and restored them, whose task identity is
+    // ambiguous or whose history cannot be read is not proved, so the full
+    // judgement's refusal stands.
     if record.kind == RecordKind::Task {
         use super::super::landing::{Authority, Identity, Outside, RecordStore};
-        let base_unchanged = base_criteria_unchanged(repo, record, base, landed)?;
-        let points: &[Oid] = if base_unchanged {
-            &[landed]
-        } else {
-            &[base, landed]
+        let identity = Identity::of(record);
+        let outside = Outside {
+            head,
+            tips: &[],
+            at: None,
+            own: &[],
+            replaced: None,
         };
         let mut store = RecordStore::new(repo);
-        let judged = store.judge(
-            &Identity::of(record),
-            points,
-            &Outside {
-                head,
-                tips: &[],
-                at: None,
-                own: &[],
-                replaced: None,
-            },
-        );
-        match judged.criteria {
+        let mut criteria = store.judge(&identity, &[base, landed], &outside).criteria;
+        if matches!(criteria, Authority::Unknown(_))
+            && store
+                .inherits_criteria(&identity, base, landed)
+                .unwrap_or(false)
+        {
+            criteria = store.judge(&identity, &[landed], &outside).criteria;
+        }
+        match criteria {
             Authority::Held(source)
                 if source.criteria.signature() == record.criteria.signature() => {}
             Authority::Unknown(reason) => {
@@ -1191,34 +1210,6 @@ fn verify_record_home(
         }
     }
     Ok(anchor)
-}
-
-/// Whether `base` holds the exact same criteria state for `record` (same
-/// criteria signature, or absent on both sides) as the unique merge base of
-/// `base` and `landed`. Fails closed (`Ok(false)`) when there is no unique
-/// merge base or either side is ambiguous/unreadable.
-fn base_criteria_unchanged(
-    repo: &Repository,
-    record: &RecordView,
-    base: Oid,
-    landed: Oid,
-) -> Result<bool, String> {
-    let bases = history::merge_bases(repo, base, landed).map_err(|error| error.to_string())?;
-    let [mb] = bases.as_slice() else {
-        return Ok(false);
-    };
-    let uid = record_uid(&record.content);
-    let file = own_file_name(record);
-    match (
-        presence_at(repo, base, &record.id, uid.as_deref(), &file),
-        presence_at(repo, *mb, &record.id, uid.as_deref(), &file),
-    ) {
-        (Presence::Present(at_base), Presence::Present(at_mb)) => {
-            Ok(at_base.criteria.signature() == at_mb.criteria.signature())
-        }
-        (Presence::Absent, Presence::Absent) => Ok(true),
-        _ => Ok(false),
-    }
 }
 
 /// The paths whose imports have the same source proof used by acceptance.

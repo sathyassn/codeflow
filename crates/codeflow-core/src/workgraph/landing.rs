@@ -867,6 +867,112 @@ impl<'r> RecordStore<'r> {
         Ok(introduced)
     }
 
+    /// Whether `base` only inherits its criteria for the task (TSK-1605):
+    /// it holds the criteria its one merge base with `landed` holds, or
+    /// neither holds the task, and no commit that `base` reaches and
+    /// `landed` does not decided them ([`Self::inherited`]). An amendment
+    /// is a decision even when a later commit restored the earlier
+    /// wording, so equal criteria at the two ends never prove this alone.
+    ///
+    /// # Errors
+    ///
+    /// Returns why inheritance cannot be proved: an overlay, a shallow cut,
+    /// unreadable history or an ambiguous identity at any commit read.
+    pub(super) fn inherits_criteria(
+        &mut self,
+        task: &Identity,
+        base: Oid,
+        landed: Oid,
+    ) -> Result<bool, String> {
+        if let Some(overlay) = &self.overlay {
+            return Err(overlay.clone());
+        }
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let shared = history::merge_bases(self.repo, base, landed).map_err(unreadable)?;
+        let [shared] = shared.as_slice() else {
+            return Ok(false);
+        };
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
+        self.criteria_at(task, landed, &mut uids)?;
+        let carried = self.criteria_at(task, *shared, &mut uids)?;
+        if self.criteria_at(task, base, &mut uids)? != carried {
+            return Ok(false);
+        }
+        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
+        walk.push(base).map_err(unreadable)?;
+        walk.hide(landed).map_err(unreadable)?;
+        for commit in walk {
+            let commit = commit.map_err(unreadable)?;
+            if !self.inherited(task, commit, &mut uids)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether `commit` takes the task's criteria, or its absence, from its
+    /// parents without deciding them. A commit that agrees with every
+    /// parent inherits. A merge of two parents that differ inherits only
+    /// the side that changed since their merge base, as an automatic merge
+    /// does. Anything else is a decision: a direct change, an introduction,
+    /// a removal, a resolution that keeps the unchanged side, and criteria
+    /// neither parent holds.
+    fn inherited(
+        &mut self,
+        task: &Identity,
+        commit: Oid,
+        uids: &mut BTreeSet<String>,
+    ) -> Result<bool, String> {
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let own = self.criteria_at(task, commit, uids)?;
+        let parents = history::parents(
+            self.repo,
+            &self.repo.find_commit(commit).map_err(unreadable)?,
+        )
+        .map_err(unreadable)?;
+        if parents.is_empty() {
+            return Ok(own.is_none());
+        }
+        let mut held = Vec::new();
+        for parent in &parents {
+            held.push(self.criteria_at(task, *parent, uids)?);
+        }
+        if held.iter().all(|version| *version == own) {
+            return Ok(true);
+        }
+        let ([left, right], [ours, theirs]) = (parents.as_slice(), held.as_slice()) else {
+            return Ok(false);
+        };
+        let mut forks = Vec::new();
+        for fork in history::merge_bases(self.repo, *left, *right).map_err(unreadable)? {
+            forks.push(self.criteria_at(task, fork, uids)?);
+        }
+        let Some((fork, rest)) = forks.split_first() else {
+            return Ok(false);
+        };
+        if rest.iter().any(|other| other != fork) {
+            return Ok(false);
+        }
+        Ok((ours == fork && own == *theirs) || (theirs == fork && own == *ours))
+    }
+
+    /// The task's criteria in the tree at `commit`, or `None` when that
+    /// tree holds no record of the task.
+    fn criteria_at(
+        &mut self,
+        task: &Identity,
+        commit: Oid,
+        uids: &mut BTreeSet<String>,
+    ) -> Result<Option<Version>, String> {
+        let held = self.history_at(task, commit, uids)?;
+        Ok(held
+            .records
+            .first()
+            .map(|(_, record)| Version::criteria(record)))
+    }
+
     /// A historical tree must be readable before it can prove inheritance.
     fn history_at(
         &mut self,
