@@ -1,0 +1,11 @@
+id = "TSK-1601"
+uid = "353dc0a0-fd03-4f08-a7f1-53f6c3906566"
+kind = "TSK"
+title = "The review lens, name warnings and keyed terms are proven together and documented"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:58Z"
+target = "integration/EPC-061-reviewers-and-optional-detectors-catch-personal"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
