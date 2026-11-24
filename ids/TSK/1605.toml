@@ -1,0 +1,11 @@
+id = "TSK-1605"
+uid = "e0c42579-cb1a-40ac-8774-dd76ac5af7e1"
+kind = "TSK"
+title = "Allow settled main history and main-filed epic tasks to sync cleanly under work.import_authority"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T17:27:22Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
