@@ -1,0 +1,11 @@
+id = "TSK-1591"
+uid = "ee060446-95d1-4841-8cd5-2549ce30e2a3"
+kind = "TSK"
+title = "The identity reader reads the host names macOS and Linux keep"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-24T13:35:33Z"
+target = "integration/EPC-060-commits-never-carry-the-contributor-s-own-machin"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
