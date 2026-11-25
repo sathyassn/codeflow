@@ -355,6 +355,8 @@ const INTERSECT_LISTS: &[&str] = &[
     "git.clean_regenerable",
     "security.sandbox_retry_allow",
     "security.trusted_client_configs",
+    // Each listed field is one more Monitor input the guards accept.
+    "security.monitor_extra_fields",
     "git.ignored_files.allow",
 ];
 
