@@ -199,7 +199,7 @@ fn bounded_markdown_files(
 /// Unreadable inventory entries are errors, never missing records.
 pub(crate) fn epic_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>> {
     let epics = pm_root.join("epics");
-    let mut paths = direct_markdown_files(&epics)?;
+    let mut paths = unsorted_markdown_files(&epics)?;
     if let Some(entries) = real_directory_entries(&epics)? {
         for entry in entries {
             let entry = entry?;
@@ -221,22 +221,24 @@ pub(crate) fn epic_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>>
             }
         }
     }
-    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    crate::ids::sort_id_paths(&mut paths);
     Ok(paths)
 }
 
 /// Canonical flat task records plus tasks under legacy nested epics.
 pub(crate) fn task_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut paths = direct_markdown_files(&pm_root.join("tasks"))?;
+    // Each folder's listing is gathered unsorted and the whole list sorted
+    // once: the order is the same, without sorting the flat list twice.
+    let mut paths = unsorted_markdown_files(&pm_root.join("tasks"))?;
     if let Some(entries) = real_directory_entries(&pm_root.join("epics"))? {
         for entry in entries {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
-                paths.extend(direct_markdown_files(&entry.path().join("tasks"))?);
+                paths.extend(unsorted_markdown_files(&entry.path().join("tasks"))?);
             }
         }
     }
-    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    crate::ids::sort_id_paths(&mut paths);
     Ok(paths)
 }
 
@@ -246,6 +248,14 @@ pub(crate) fn spec_record_files(pm_root: &Path) -> std::io::Result<Vec<PathBuf>>
 }
 
 fn direct_markdown_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut paths = unsorted_markdown_files(dir)?;
+    crate::ids::sort_id_paths(&mut paths);
+    Ok(paths)
+}
+
+/// The `.md` files directly in `dir`, in directory order, for a caller that
+/// sorts the list it builds.
+fn unsorted_markdown_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     if let Some(entries) = real_directory_entries(dir)? {
         for entry in entries {
@@ -260,7 +270,6 @@ fn direct_markdown_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             }
         }
     }
-    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
     Ok(paths)
 }
 

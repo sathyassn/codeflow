@@ -79,6 +79,65 @@ pub fn compare_id_paths(left: &Path, right: &Path) -> Ordering {
     }
 }
 
+/// Sort paths into exactly the order [`compare_id_paths`] gives, with each
+/// path's sort key computed once instead of on every comparison.
+///
+/// A record listing holds about ten thousand absolute paths, and
+/// [`compare_id_paths`] walks every component of both paths on each of the
+/// listing's comparisons (TSK-1516). The key here encodes the same
+/// comparison as bytes, so a comparison is one memory compare; paths whose
+/// keys are equal fall back to `Path` order, as [`compare_id_paths`] does.
+/// The sort is stable, like `sort_by`.
+pub fn sort_id_paths(paths: &mut Vec<std::path::PathBuf>) {
+    let mut keyed: Vec<(Vec<u8>, std::path::PathBuf)> = paths
+        .drain(..)
+        .map(|path| (id_path_key(&path), path))
+        .collect();
+    keyed.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    paths.extend(keyed.into_iter().map(|(_, path)| path));
+}
+
+/// The byte key whose plain byte order is [`compare_id_paths`]'s order up to
+/// its final `Path` tie-break.
+///
+/// Each component becomes a run of self-delimiting tokens ended by `0`:
+/// - a non-digit byte below `'0'` is `1, byte`;
+/// - a run of digits is `2`, the run's length without leading zeros as eight
+///   big-endian bytes, then those digits, so runs compare by length and then
+///   by digits, and `TSK-01` reads equal to `TSK-001`;
+/// - a non-digit byte above `'9'` is `3, byte`.
+///
+/// [`compare_bytes`] compares a digit with a non-digit as raw bytes, and a
+/// non-digit byte is never between `'0'` and `'9'`, so the tags `1`, `2`
+/// and `3` keep that order. The component end `0` sorts below every token, so
+/// a component that is a prefix of another sorts first, and a path that is a
+/// prefix of another (fewer components) sorts first, as in
+/// [`compare_id_paths`].
+fn id_path_key(path: &Path) -> Vec<u8> {
+    let mut key = Vec::with_capacity(path.as_os_str().len() * 2 + 16);
+    for component in path.components() {
+        let bytes = component.as_os_str().as_encoded_bytes();
+        let mut index = 0;
+        while index < bytes.len() {
+            let byte = bytes[index];
+            if byte.is_ascii_digit() {
+                let end = digit_end(bytes, index);
+                let run = trim_zeros(&bytes[index..end]);
+                key.push(2);
+                key.extend_from_slice(&u64::try_from(run.len()).unwrap_or(u64::MAX).to_be_bytes());
+                key.extend_from_slice(run);
+                index = end;
+            } else {
+                key.push(if byte < b'0' { 1 } else { 3 });
+                key.push(byte);
+                index += 1;
+            }
+        }
+        key.push(0);
+    }
+    key
+}
+
 /// The entries of a map keyed by id text, in [`compare_ids`] order. A
 /// `BTreeMap<String, _>` iterates by text, which misorders ids past 999.
 #[must_use]
@@ -215,5 +274,130 @@ mod tests {
                 "pm/tasks/TSK-10000.md"
             ]
         );
+    }
+
+    /// Paths that exercise every branch of [`compare_id_paths`]: ids on both
+    /// sides of 999, flat and epic-local task paths with different parents,
+    /// padding ties (`TSK-01` and `TSK-001` read equal), paths that are equal
+    /// as `Path` but not as text (a trailing `/` or a `./`), digits against
+    /// bytes below and above the digits, a component or path that is a
+    /// prefix of another, long digit runs, and absolute and relative forms.
+    fn awkward_paths() -> Vec<PathBuf> {
+        let mut paths: Vec<PathBuf> = [
+            "/r/pm/tasks/TSK-999.md",
+            "/r/pm/tasks/TSK-1000.md",
+            "/r/pm/tasks/TSK-10000.md",
+            "/r/pm/tasks/TSK-002.md",
+            "/r/pm/tasks/TSK-2.md",
+            "/r/pm/tasks/TSK-01.md",
+            "/r/pm/tasks/TSK-001.md",
+            "/r/pm/tasks/TSK-1.md",
+            "/r/pm/tasks/TSK-051-008.md",
+            "/r/pm/tasks/TSK-051.md",
+            "/r/pm/tasks/TSK-051-010.md",
+            "/r/pm/tasks/TSK-999-999.md",
+            "/r/pm/tasks/TSK-1000-001.md",
+            "/r/pm/epics/EPC-010/tasks/TSK-998.md",
+            "/r/pm/epics/EPC-010/tasks/TSK-1001.md",
+            "/r/pm/epics/EPC-9/tasks/TSK-1001.md",
+            "/r/pm/epics/EPC-0010/tasks/TSK-1001.md",
+            "/r/pm/epics/EPC-010.md",
+            "/r/pm/epics/EPC-010",
+            "/r/pm/epics",
+            "/r/pm/tasks/",
+            "/r/pm/tasks",
+            "/r/pm/./tasks/TSK-999.md",
+            "/r/pm/tasks/TSK-999.md/",
+            "/r/pm/tasks/TSK-999.md",
+            "/r/pm/tasks/TSK-999.mdx",
+            "/r/pm/tasks/TSK-999-.md",
+            "/r/pm/tasks/TSK-999_.md",
+            "/r/pm/tasks/TSK-999 .md",
+            "/r/pm/tasks/TSK-999~.md",
+            "/r/pm/tasks/TSK-9990.md",
+            "/r/pm/tasks/TSK-0999.md",
+            "/r/pm/tasks/TSK-.md",
+            "/r/pm/tasks/TSK.md",
+            "/r/pm/tasks/tsk-1.md",
+            "/r/pm/tasks/99999999999999999999999.md",
+            "/r/pm/tasks/100000000000000000000000.md",
+            "/r/pm/tasks/0.md",
+            "/r/pm/tasks/00.md",
+            "/r/pm/tasks/7a.md",
+            "/r/pm/tasks/a7.md",
+            "pm/tasks/TSK-999.md",
+            "pm/tasks/TSK-1000.md",
+            "./pm/tasks/TSK-1000.md",
+            "/",
+            "",
+        ]
+        .iter()
+        .map(PathBuf::from)
+        .collect();
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            for raw in [
+                &b"/r/pm/tasks/TSK-\xff1000.md"[..],
+                b"/r/pm/tasks/TSK-\xff999.md",
+                b"/r/pm/tasks/\x01TSK-1.md",
+                b"/r/pm/tasks/TSK-1\x7f.md",
+            ] {
+                paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(raw)));
+            }
+        }
+        paths
+    }
+
+    /// TSK-1516: the cached key orders every pair exactly as
+    /// `compare_id_paths` does, falling back to `Path` order on equal keys.
+    #[test]
+    fn the_path_key_orders_every_pair_as_compare_id_paths() {
+        let paths = awkward_paths();
+        for left in &paths {
+            for right in &paths {
+                let keyed = id_path_key(left)
+                    .cmp(&id_path_key(right))
+                    .then_with(|| left.cmp(right));
+                assert_eq!(
+                    keyed,
+                    compare_id_paths(left, right),
+                    "{left:?} against {right:?}"
+                );
+            }
+        }
+    }
+
+    /// TSK-1516: `sort_id_paths` gives the same sequence as a stable sort by
+    /// `compare_id_paths`, ties included: paths equal as `Path` but spelled
+    /// differently keep their input order, compared by their exact text.
+    #[test]
+    fn sorting_by_the_cached_key_keeps_the_compare_id_paths_order() {
+        let base = awkward_paths();
+        let mut inputs = vec![base.clone(), base.iter().rev().cloned().collect()];
+        for shift in [1, 7, 19, 31] {
+            let mut rotated = base.clone();
+            rotated.rotate_left(shift % base.len());
+            inputs.push(rotated);
+        }
+        // Interleave flat and epic-local listings, as task_record_files does.
+        let (flat, nested): (Vec<_>, Vec<_>) = base
+            .iter()
+            .cloned()
+            .partition(|path| !path.to_string_lossy().contains("/epics/"));
+        inputs.push(nested.into_iter().chain(flat).collect());
+        for input in inputs {
+            let mut expected = input.clone();
+            expected.sort_by(|a, b| compare_id_paths(a, b));
+            let mut keyed = input;
+            sort_id_paths(&mut keyed);
+            let text = |paths: &[PathBuf]| -> Vec<std::ffi::OsString> {
+                paths
+                    .iter()
+                    .map(|path| path.as_os_str().to_owned())
+                    .collect()
+            };
+            assert_eq!(text(&keyed), text(&expected));
+        }
     }
 }

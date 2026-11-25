@@ -271,7 +271,7 @@ pub fn item_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
             files.push(path);
         }
     }
-    files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    crate::ids::sort_id_paths(&mut files);
     Ok(files)
 }
 

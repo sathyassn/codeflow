@@ -637,7 +637,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Body bytes come from strict parse_frontmatter; acceptance evidence/checkbox parsing therefore consumes already validated UTF-8, never lossy record identities.
     (
         "codeflow-core/src/validate/mod.rs",
-        "validate_task",
+        "validate_task_frontmatter",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -645,7 +645,7 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Body bytes come from strict parse_frontmatter; the Outcome and Deliverables sections are read from already validated UTF-8, never lossy record identities.
     (
         "codeflow-core/src/validate/mod.rs",
-        "validate_epic",
+        "validate_epic_frontmatter",
         "from_utf8_lossy",
         1,
         "format-contract",
@@ -4617,16 +4617,16 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // Blank required integration_target or standalone_reason is rejected; nonblank integration targets are validated in their original exact form.
     (
         "crates/codeflow-core/src/validate/mod.rs",
-        "validate_task",
+        "validate_task_frontmatter",
         "trim",
         3,
         "schema-reject-only",
     ),
-    // This duplicate-ID prepass skips unreadable bytes, but the same path is always passed to validate_epic/validate_task/validate_spec immediately afterwards; their read Err adds a ValidationReport issue, which rejects the check.
+    // TSK-1516: a record that is not UTF-8 gets no ledger-citation finding, as the separate pass's read_to_string skipped it; the same read's parse_frontmatter rejects it and lint_adrs, lint_epics or parse_task_graph_record reports it.
     (
-        "crates/codeflow-core/src/validate/mod.rs",
-        "validate_workgraph",
-        "obtain-absent:read",
+        "crates/codeflow-core/src/validate/docs.rs",
+        "ledger_citation_issue",
+        "obtain-absent:from_utf8",
         1,
         "unproven",
     ),
@@ -6384,7 +6384,7 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     // TSK-422: Free text a person wrote (titles, criteria, link and evidence text); the split only matches or bounds words, never a shell or git name.
     (
         "crates/codeflow-core/src/validate/docs.rs",
-        "lint_ledger_citations",
+        "ledger_citation_issue",
         "lines",
         1,
         "prose",
@@ -7427,7 +7427,7 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/workgraph/layout.rs", "bounded_record_files", "is_file", 2, "Type checks on entry.file_type() (errors mapped to Unreadable) and on symlink_metadata already obtained."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "checked_directory_entries", "ErrorKind::NotFound", 1, "Callers probe project-management under the discovered repository root, then children of directories verified real, so a leaf not found is proven absence."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "checked_directory_entries", "is_dir", 1, "Type check on symlink_metadata already obtained; other errors return Unreadable."),
-    ("crates/codeflow-core/src/workgraph/layout.rs", "direct_markdown_files", "is_file", 1, "Type check on entry.file_type() with its error propagated."),
+    ("crates/codeflow-core/src/workgraph/layout.rs", "unsorted_markdown_files", "is_file", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "epic_record_files", "ErrorKind::NotFound", 1, "The nested leaf is in an entry shown to be a real directory by its file type, so not found is proven absence."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "epic_record_files", "is_dir", 1, "Type check on entry.file_type() with its error propagated."),
     ("crates/codeflow-core/src/workgraph/layout.rs", "epic_record_files", "is_file", 1, "Type check on symlink_metadata already obtained; other errors return."),

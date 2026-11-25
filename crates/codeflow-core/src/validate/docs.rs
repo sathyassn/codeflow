@@ -66,6 +66,20 @@ pub struct DocsLintReport {
     pub warnings: Vec<crate::remedy::Finding>,
     /// References not checked because their layer is absent, by layer.
     unchecked: std::collections::BTreeMap<&'static str, std::collections::BTreeSet<String>>,
+    /// Ledger-citation findings, gathered while the ADR, epic and task
+    /// passes read each record and held so they are reported last.
+    ledger: LedgerCitations,
+}
+
+/// Ledger-citation findings by record kind, in the order each kind's pass
+/// lists its records. They are reported after every other finding, tasks
+/// then epics then ADRs, as the separate pass that read each record again
+/// reported them before TSK-1516 folded the scan into the existing reads.
+#[derive(Debug, Default)]
+struct LedgerCitations {
+    tasks: Vec<DocsLintIssue>,
+    epics: Vec<DocsLintIssue>,
+    adrs: Vec<DocsLintIssue>,
 }
 
 impl DocsLintReport {
@@ -135,7 +149,7 @@ pub fn lint_docs(repo_root: &Path) -> DocsLintReport {
     lint_capability_epic_reciprocity(repo_root, &mut report);
     lint_tasks(repo_root, &graph, &mut report);
     lint_feedback(repo_root, &mut report);
-    lint_ledger_citations(repo_root, &mut report);
+    report_ledger_citations(&mut report);
     report.note_unchecked();
 
     report
@@ -178,29 +192,41 @@ pub fn ledger_citation(text: &str) -> Option<String> {
 
 /// Task, epic and ADR records never cite a coordination ledger id: the
 /// coupling is one way, the ledger reads records and never the reverse.
-fn lint_ledger_citations(repo_root: &Path, report: &mut DocsLintReport) {
-    let pm = repo_root.join("project-management");
-    let mut files: Vec<PathBuf> = Vec::new();
-    files.extend(crate::workgraph::layout::task_record_files(&pm).unwrap_or_default());
-    files.extend(crate::workgraph::layout::epic_record_files(&pm).unwrap_or_default());
-    files.extend(adr_files(&repo_root.join("docs/decisions")).unwrap_or_default());
-    for path in files {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        for (index, line) in content.lines().enumerate() {
-            if let Some(id) = ledger_citation(line) {
-                report.issues.push(DocsLintIssue {
-                    file: path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf(),
-                    line: index + 1,
-                    message: format!(
-                        "cites the coordination ledger id {id}; records never cite FU, LN or WS ids, which are local to one clone (ADR-0086): name the task, pull request or commit instead"
-                    ),
-                });
-                break;
-            }
-        }
+///
+/// The ADR, epic and task passes call this on the bytes they have just read,
+/// before they parse the front matter, so a record whose front matter does
+/// not parse is still scanned and each record is read once for both checks
+/// (TSK-1516). A record that is not UTF-8 text gets no finding, and only the
+/// first citation in a record is reported.
+fn ledger_citation_issue(rel: &Path, content: &[u8]) -> Option<DocsLintIssue> {
+    // Every citation contains `FU-`, `LN-` or `WS-` and three digits, so a
+    // record without that text has no citation on any line. Most records
+    // have none, and this literal search, much faster than the full pattern,
+    // skips the line-by-line search for them.
+    static LITERAL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let text = std::str::from_utf8(content).ok()?;
+    let literal =
+        LITERAL.get_or_init(|| regex::Regex::new(r"(?:FU|LN|WS)-[0-9]{3}").expect("valid pattern"));
+    if !literal.is_match(text) {
+        return None;
     }
+    text.lines().enumerate().find_map(|(index, line)| {
+        ledger_citation(line).map(|id| DocsLintIssue {
+            file: rel.to_path_buf(),
+            line: index + 1,
+            message: format!(
+                "cites the coordination ledger id {id}; records never cite FU, LN or WS ids, which are local to one clone (ADR-0086): name the task, pull request or commit instead"
+            ),
+        })
+    })
+}
+
+/// Report the held ledger-citation findings last: tasks, epics, then ADRs.
+fn report_ledger_citations(report: &mut DocsLintReport) {
+    let ledger = std::mem::take(&mut report.ledger);
+    report.issues.extend(ledger.tasks);
+    report.issues.extend(ledger.epics);
+    report.issues.extend(ledger.adrs);
 }
 
 const CAPABILITIES_LAYER: &str = "docs/capabilities.md";
@@ -547,6 +573,10 @@ fn lint_adrs(repo_root: &Path, report: &mut DocsLintReport) {
                 continue;
             }
         };
+        report
+            .ledger
+            .adrs
+            .extend(ledger_citation_issue(&rel, &content));
         let Ok((data, _)) = parse_frontmatter(&content) else {
             report.issues.push(DocsLintIssue {
                 file: rel,
@@ -613,6 +643,10 @@ fn lint_epics(repo_root: &Path, graph: &DocGraph, report: &mut DocsLintReport) {
                 continue;
             }
         };
+        report
+            .ledger
+            .epics
+            .extend(ledger_citation_issue(&rel, &content));
         let (data, _) = match parse_frontmatter(&content) {
             Ok(data) => data,
             Err(error) => {
@@ -758,6 +792,10 @@ fn parse_task_graph_record(
             return None;
         }
     };
+    report
+        .ledger
+        .tasks
+        .extend(ledger_citation_issue(&rel, &content));
     let (data, _) = match parse_frontmatter(&content) {
         Ok(data) => data,
         Err(error) => {
@@ -1093,7 +1131,7 @@ fn md_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
             paths.push(path);
         }
     }
-    paths.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+    crate::ids::sort_id_paths(&mut paths);
     Ok(paths)
 }
 fn inventory_files(
@@ -1306,6 +1344,180 @@ mod tests {
             );
         }
         assert_eq!(ledger_citation("(FU-012)").as_deref(), Some("FU-012"));
+    }
+
+    /// The separate ledger-citation pass as it ran before TSK-1516 folded it
+    /// into the record reads, kept here verbatim (listings re-sorted by
+    /// `compare_id_paths`, as they were then) as the reference the folded
+    /// scan must match.
+    fn base_ledger_citations(repo_root: &Path) -> Vec<DocsLintIssue> {
+        let sorted = |mut files: Vec<PathBuf>| {
+            files.sort_by(|a, b| crate::ids::compare_id_paths(a, b));
+            files
+        };
+        let pm = repo_root.join("project-management");
+        let mut files: Vec<PathBuf> = Vec::new();
+        files.extend(sorted(
+            crate::workgraph::layout::task_record_files(&pm).unwrap_or_default(),
+        ));
+        files.extend(sorted(
+            crate::workgraph::layout::epic_record_files(&pm).unwrap_or_default(),
+        ));
+        files.extend(sorted(
+            adr_files(&repo_root.join("docs/decisions")).unwrap_or_default(),
+        ));
+        let mut issues = Vec::new();
+        for path in files {
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            for (index, line) in content.lines().enumerate() {
+                if let Some(id) = ledger_citation(line) {
+                    issues.push(DocsLintIssue {
+                        file: path.strip_prefix(repo_root).unwrap_or(&path).to_path_buf(),
+                        line: index + 1,
+                        message: format!(
+                            "cites the coordination ledger id {id}; records never cite FU, LN or WS ids, which are local to one clone (ADR-0086): name the task, pull request or commit instead"
+                        ),
+                    });
+                    break;
+                }
+            }
+        }
+        issues
+    }
+
+    /// The AC-1 fixture: a clean repository plus a task, an epic and an
+    /// ADR that each cite a ledger id, and the edge cases the scan handles.
+    fn citation_fixture() -> tempfile::TempDir {
+        let dir = clean_repo();
+        let root = dir.path();
+        // Twelve lines of front matter and body, then a blank line, so the
+        // first appended line is line 14.
+        let task = |id: &str, depends_on: &str, tail: &str| {
+            format!(
+                "---\nid: {id}\nformat_id: {id}\nepic_id: EPC-001\ntitle: task\nstatus: todo\nwork_type: feat\ndepends_on: {depends_on}\ncreated: 2026-07-25\n---\n\n## Acceptance Criteria\n\n{tail}"
+            )
+        };
+        // Epic-local and flat task paths together, ids on both sides of 999.
+        write(
+            root,
+            "project-management/epics/EPC-002/tasks/TSK-997.md",
+            &task("TSK-997", "[]", "Cites FU-010.\n"),
+        );
+        write(
+            root,
+            "project-management/epics/EPC-002/tasks/TSK-1001.md",
+            &task("TSK-1001", "[]", "Cites FU-011.\n"),
+        );
+        // Several citations on different lines: only the first is reported.
+        write(
+            root,
+            "project-management/tasks/TSK-998.md",
+            &task("TSK-998", "[]", "See WS-001 first.\nAnd FU-099 later.\n"),
+        );
+        // Another finding beside its citation: a dangling dependency.
+        write(
+            root,
+            "project-management/tasks/TSK-1000.md",
+            &task("TSK-1000", "[TSK-5000]", "Cites FU-012.\n"),
+        );
+        // Front matter that does not parse: both findings stay.
+        write(
+            root,
+            "project-management/tasks/TSK-1002.md",
+            "no front matter here\nsee LN-004\n",
+        );
+        // Not UTF-8: a parse finding, no ledger finding.
+        let mut bytes = task("TSK-1003", "[]", "Cites FU-013.\n").into_bytes();
+        bytes.extend_from_slice(b"\xff\xfe\n");
+        std::fs::write(root.join("project-management/tasks/TSK-1003.md"), bytes).unwrap();
+        let mut epic =
+            std::fs::read_to_string(root.join("project-management/epics/EPC-001.md")).unwrap();
+        epic.push_str("\nTracked in LN-002.\n");
+        write(root, "project-management/epics/EPC-001.md", &epic);
+        let adr_path = "docs/decisions/ADR-0001-stack-choice.md";
+        let mut adr_text = std::fs::read_to_string(root.join(adr_path)).unwrap();
+        adr_text.push_str("\nFrom WS-003.\n");
+        write(root, adr_path, &adr_text);
+        dir
+    }
+
+    /// TSK-1516 AC-1: folding the ledger scan into the ADR, epic and task
+    /// reads keeps every ledger finding, its line and message, its place
+    /// after every other finding, and the task, epic, ADR order, on a
+    /// fixture that holds each case the separate pass handled.
+    #[test]
+    fn folded_ledger_findings_equal_the_separate_pass() {
+        let dir = citation_fixture();
+        let root = dir.path();
+        let report = lint_docs(root);
+        let shown: Vec<String> = report.issues.iter().map(ToString::to_string).collect();
+        let is_ledger = |issue: &DocsLintIssue| issue.message.contains("coordination ledger id");
+
+        // The ledger findings are the report's tail, equal to the separate
+        // pass's findings in content and order.
+        let base = base_ledger_citations(root);
+        let tail = &report.issues[report.issues.len() - base.len()..];
+        let as_tuples = |issues: &[DocsLintIssue]| -> Vec<(PathBuf, usize, String)> {
+            issues
+                .iter()
+                .map(|issue| (issue.file.clone(), issue.line, issue.message.clone()))
+                .collect()
+        };
+        assert_eq!(as_tuples(tail), as_tuples(&base), "{shown:#?}");
+        assert!(
+            !report.issues[..report.issues.len() - base.len()]
+                .iter()
+                .any(is_ledger),
+            "{shown:#?}"
+        );
+
+        // The exact findings: tasks (epic-local before flat, by number),
+        // then epics, then ADRs.
+        let cited: Vec<(String, usize, String)> = tail
+            .iter()
+            .map(|issue| {
+                (
+                    crate::git::display_path(&issue.file),
+                    issue.line,
+                    ledger_citation(&issue.message).unwrap(),
+                )
+            })
+            .collect();
+        let expected = [
+            (
+                "project-management/epics/EPC-002/tasks/TSK-997.md",
+                14,
+                "FU-010",
+            ),
+            (
+                "project-management/epics/EPC-002/tasks/TSK-1001.md",
+                14,
+                "FU-011",
+            ),
+            ("project-management/tasks/TSK-998.md", 14, "WS-001"),
+            ("project-management/tasks/TSK-1000.md", 14, "FU-012"),
+            ("project-management/tasks/TSK-1002.md", 2, "LN-004"),
+            ("project-management/epics/EPC-001.md", 10, "LN-002"),
+            ("docs/decisions/ADR-0001-stack-choice.md", 11, "WS-003"),
+        ]
+        .map(|(file, line, id)| (file.to_string(), line, id.to_string()));
+        assert_eq!(cited, expected, "{shown:#?}");
+
+        // The other findings are still there, before the ledger findings.
+        let finding_for = |file: &str| {
+            report.issues[..report.issues.len() - base.len()]
+                .iter()
+                .any(|issue| crate::git::display_path(&issue.file).ends_with(file))
+        };
+        assert!(finding_for("TSK-1002.md"), "{shown:#?}");
+        assert!(finding_for("TSK-1003.md"), "{shown:#?}");
+        assert!(
+            shown.iter().any(|line| line.contains("TSK-5000")),
+            "{shown:#?}"
+        );
+        assert!(!report.is_clean());
     }
 
     #[test]
