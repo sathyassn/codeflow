@@ -783,6 +783,80 @@ const EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "format-contract",
     ),
+    // TSK-1057: the writer's ancestry check on macOS. A process name is only
+    // compared, after ASCII lowercasing, with the ASCII harness names
+    // (`claude`, `codex`, `grok`, or one of them and `-`), and shown through
+    // display_text. An invalid byte becomes U+FFFD, which no ASCII name
+    // holds, so the match is the one a byte comparison gives.
+    (
+        "codeflow-core/src/hooks/policy_baseline.rs",
+        "process_entry",
+        "to_string_lossy",
+        1,
+        "ascii-marker",
+    ),
+    // TSK-408: the walk under a run-time destination compares each entry
+    // name only with the ASCII enforcement names (`.git`, `.claude` and the
+    // rest). Host::opened changes only ASCII `:`, `.`, space and `~` digits,
+    // and the decode replaces only bytes or units no ASCII name holds, so an
+    // entry matches as its bytes would.
+    (
+        "codeflow-core/src/security/copy_reach.rs",
+        "holds_enforcement_name",
+        "to_string_lossy",
+        1,
+        "ascii-marker",
+    ),
+    // TSK-408: the source file's own name, compared only with the ASCII
+    // enforcement names, as in holds_enforcement_name.
+    (
+        "codeflow-core/src/security/copy_reach.rs",
+        "run_time_landing",
+        "to_string_lossy",
+        1,
+        "ascii-marker",
+    ),
+    // TSK-408: a source's top-level names, decoded only for the set that
+    // tree_reaches matches against the first name of each enforcement path
+    // below the landing, which is decoded the same way. The decode is a
+    // function of the bytes, so names that are equal stay equal; two
+    // different names that decode alike only add a match, which refuses.
+    // The names as listed are kept for the link check.
+    (
+        "codeflow-core/src/security/copy_reach.rs",
+        "read_source",
+        "to_string_lossy",
+        1,
+        "unproven",
+    ),
+    (
+        "codeflow-core/src/security/copy_reach.rs",
+        "tree_reaches",
+        "to_string_lossy",
+        1,
+        "unproven",
+    ),
+    // TSK-408: a link's name in the refusal message only; the link is
+    // opened by its listed name.
+    (
+        "codeflow-core/src/security/copy_reach.rs",
+        "through_link",
+        "to_string_lossy",
+        1,
+        "display",
+    ),
+    // TSK-1190: the attached branch name finds the carried task, whose
+    // declared landing line sets the informational comparison base. A name
+    // that is not UTF-8 gives no branch, never a lossy one, so the
+    // comparison is unproven (targets get the changed paths as `unknown`)
+    // unless --since supplies the base.
+    (
+        "codeflow-core/src/testing/target_inputs.rs",
+        "TargetInputs::comparison",
+        "shorthand",
+        1,
+        "unproven",
+    ),
 ];
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -6673,6 +6747,195 @@ const WHITESPACE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
         1,
         "unproven",
     ),
+    // TSK-1057: the baseline ledger is written by Store::write as SHA-256
+    // hex keys joined by LF and is compared whole with a hex key. The only
+    // thing lines() adds to an LF split is dropping a CR before the LF,
+    // which can make a line equal a key, never stop one: a listed key is
+    // never lost, so a vanished record still reads as missing.
+    (
+        "crates/codeflow-core/src/hooks/policy_baseline.rs",
+        "Store::ledger",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // TSK-1057: a baseline commit missing from the object store is not
+    // taken as an ancestor, so the read is Diverged and only the
+    // operator-confirmed baseline policy is enforced; absence never lets
+    // the tracking ref's policy replace it.
+    (
+        "crates/codeflow-core/src/hooks/policy_baseline.rs",
+        "apply",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-1057: a baseline commit missing from the object store is not an
+    // ancestor, so the refresh is refused and needs the operator's reset.
+    (
+        "crates/codeflow-core/src/hooks/policy_baseline.rs",
+        "refresh_refusal",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-1057: the Linux ancestry read. After the last `)` of
+    // /proc/<pid>/stat the kernel prints space-separated ASCII fields; the
+    // parent pid is the second and must parse as a number, or the writer
+    // refuses. The process name is taken between the parentheses, unsplit.
+    (
+        "crates/codeflow-core/src/hooks/policy_baseline.rs",
+        "process_entry",
+        "split_whitespace",
+        1,
+        "format-contract",
+    ),
+    // TSK-1057: a commit the remote named that is missing after the fetch
+    // refuses the fresh read; nothing is recorded.
+    (
+        "crates/codeflow-core/src/git/baseline_fresh.rs",
+        "fresh",
+        "obtain-absent:find_commit",
+        1,
+        "unproven",
+    ),
+    // TSK-1057: `git ls-remote --symref` prints LF-terminated
+    // `<id>\t<ref>` lines, and a ref name cannot hold CR, so the CR that
+    // lines() drops before an LF never changes a line git prints. Fields
+    // are split on the tab only, and the branch must still match the local
+    // remote HEAD and the fetched tip.
+    (
+        "crates/codeflow-core/src/git/baseline_fresh.rs",
+        "parse_head",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    // TSK-1057: `git fetch --dry-run --porcelain <url> <ref>` prints one
+    // LF-terminated line per ref, `<flag> <old> <new> <local-ref>` with
+    // single spaces; a ref name cannot hold an ASCII space or CR. The fetch
+    // names no destination, so its one local ref is FETCH_HEAD. A line that
+    // splits elsewhere either does not end in FETCH_HEAD or is a second
+    // candidate, and a second candidate or a new id that is not hex refuses.
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "fetched_tip",
+        "lines",
+        1,
+        "format-contract",
+    ),
+    (
+        "crates/codeflow-core/src/git/remote_query.rs",
+        "fetched_tip",
+        "split_whitespace",
+        1,
+        "format-contract",
+    ),
+    // TSK-408: a destination word's trailing path separators (`/`, and `\`
+    // on Windows) are dropped before an entry name is joined with `/`; they
+    // do not change the directory the word names, and a root keeps its
+    // leading separator through the join.
+    (
+        "crates/codeflow-core/src/hooks/git_guard.rs",
+        "copy_destinations",
+        "trim_end_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    // TSK-408: copy_reach reads a copy operand's names on the host's path
+    // separators: the last name (last_name_on, Host::last_name), a name
+    // joined inside a directory (joined), and the path rsync -R keeps
+    // (landings). Only separator characters are removed.
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "Host::last_name",
+        "trim_end_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "joined",
+        "trim_end_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "landings",
+        "trim_end_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "landings",
+        "trim_start_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "last_name_on",
+        "trim_end_matches",
+        1,
+        "grammar:host-path-separators",
+    ),
+    // TSK-408: a landing word's trailing separators are dropped only to
+    // spell the path in a refusal message.
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "judge",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "through_link",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    (
+        "crates/codeflow-core/src/security/copy_reach.rs",
+        "tree_reaches",
+        "trim_end_matches",
+        1,
+        "display",
+    ),
+    // TSK-1190: CODEFLOW_LANDING_LINE only seeds the informational landing
+    // line handed to targets; a value that is unset, not UTF-8 or not a
+    // safe stable target reads as `unknown`. It never selects targets or
+    // the comparison base.
+    (
+        "crates/codeflow-core/src/testing/gate.rs",
+        "run_configured",
+        "obtain-absent:var",
+        1,
+        "unproven",
+    ),
+    // TSK-1190: HEAD was already read above; a second read that fails gives
+    // no branch, so no declared landing line, and the comparison is
+    // unproven (targets get the changed paths as `unknown`) unless --since
+    // supplies the base.
+    (
+        "crates/codeflow-core/src/testing/target_inputs.rs",
+        "TargetInputs::comparison",
+        "obtain-absent:head",
+        1,
+        "unproven",
+    ),
+    // TSK-1190: only NotFound moves on to the next stable reference name;
+    // any other read error refuses, and no name found refuses with "no
+    // resolvable local commit", so the comparison is unproven.
+    (
+        "crates/codeflow-core/src/testing/target_inputs.rs",
+        "declared_base",
+        "obtain-absent:find_reference",
+        1,
+        "unproven",
+    ),
 ];
 
 const FRAMING_OWNERS: &[(&str, &str, &str)] = &[
@@ -7592,6 +7855,10 @@ const ABSENCE_EXCEPTIONS: &[(&str, &str, &str, usize, &str)] = &[
     ("crates/codeflow-core/src/coord/store.rs", "private_dir", "is_dir", 1, "TSK-422: Type check on symlink_metadata; a link or any other non-directory refuses the write."),
     ("crates/codeflow-core/src/coord/store.rs", "read", "ErrorKind::NotFound", 2, "TSK-422: Only NotFound reads as an empty ledger; any other error is reported as unavailable, never as empty."),
     ("crates/codeflow-core/src/coord/store.rs", "read_counters", "ErrorKind::NotFound", 1, "TSK-422: Runs under the lock: NotFound starts the counters at zero, and the log's own highest ids still bound every new number from below; other errors refuse."),
+    ("crates/codeflow-core/src/hooks/policy_baseline.rs", "read_owned", "ErrorKind::NotFound", 1, "TSK-1057: Only native NotFound from an O_NOFOLLOW open reads as no file (a link fails with another error); every other open error is a malformed baseline that blocks the policy check. A missing record whose repository the ledger lists reads as missing and blocks; only a repository absent from both reads as never initialized. The store is the operator-authority directory that agent presets and edit-guard keep agents from writing."),
+    ("crates/codeflow-core/src/hooks/policy_baseline.rs", "read_owned", "is_file", 1, "TSK-1057: Type check on the opened descriptor's metadata; anything but a regular file is a malformed baseline that blocks the policy check, so nothing is read as absent."),
+    ("crates/codeflow-core/src/security/copy_reach.rs", "read_source", "is_dir", 1, "TSK-408: Type check on metadata_optional, which already succeeded and follows links, so a link to a directory is read for its names; a non-directory is judged as one entry by its own name. Proven absence and every read error leave the source unread, which refuses where the landing holds enforcement files."),
+    ("crates/codeflow-core/src/security/copy_reach.rs", "holds_enforcement_name", "is_dir", 2, "TSK-408: Type checks that choose what the walk descends into: a directory entry, and a link whose followed metadata is a directory. The walk reads through links for every run-time copy, since one that follows links (cp -RL, rsync -L, scp -r) writes the target, so a link to a directory holding an enforcement name refuses. Every entry's name is still compared; a file type or link that cannot be read refuses, and WALK_LIMIT or the system's link limit ends a cycle with a refusal."),
 ];
 
 #[test]

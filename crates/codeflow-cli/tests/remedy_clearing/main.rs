@@ -109,6 +109,8 @@ const ROWS: &[(&str, Proof)] = &[
     ("WORK_CLASSIFICATION", Runs),
     ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
+    ("RECORD_SECTION_MISSING", Runs),
+    ("RECORD_SECTIONS_UNTRUSTED", Runs),
     ("ID_REGISTRY", Runs),
     ("ID_REGISTRY_UNFETCHED", Runs),
     ("ID_REGISTRY_RETARGET", Runs),

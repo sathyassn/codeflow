@@ -21,8 +21,8 @@
 //! time, a pattern, a remote spelling) refuses when its landing place holds
 //! an enforcement path, and so does an option the guard does not read. A
 //! destination filled in at run time refuses when the source holds an
-//! enforcement name at any depth, read within a bound of 4096 directories,
-//! or cannot be read.
+//! enforcement name at any depth, read through its symbolic links within a
+//! bound of 4096 directories, or cannot be read.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -426,7 +426,9 @@ fn reached(base: &Path, place: &Place<'_>) -> Result<Reached, String> {
 }
 
 /// The enforcement name `dir` holds at any depth, read within
-/// [`WALK_LIMIT`] directories; symbolic links are not followed.
+/// [`WALK_LIMIT`] directories. Symbolic links are followed, since a copy
+/// that follows them writes their targets; a link that cannot be read
+/// refuses.
 fn holds_enforcement_name(dir: &Path) -> Result<Option<PathBuf>, String> {
     let mut pending = vec![dir.to_path_buf()];
     let mut read = 0;
@@ -443,11 +445,21 @@ fn holds_enforcement_name(dir: &Path) -> Result<Option<PathBuf>, String> {
             if ENFORCEMENT_NAMES.contains(&name.as_str()) {
                 return Ok(Some(entry.path()));
             }
-            if entry
+            let kind = entry
                 .file_type()
-                .map_err(|e| format!("cannot read it: {e}"))?
-                .is_dir()
-            {
+                .map_err(|e| format!("cannot read it: {e}"))?;
+            // A copy that follows links (`cp -RL`, `rsync -L`, `scp -r`)
+            // writes a linked directory's contents, so the walk reads
+            // through every link. A link that cannot be read refuses, and
+            // WALK_LIMIT ends a cycle with a refusal.
+            let directory = if kind.is_symlink() {
+                std::fs::metadata(entry.path())
+                    .map_err(|e| format!("cannot read the link {}: {e}", entry.path().display()))?
+                    .is_dir()
+            } else {
+                kind.is_dir()
+            };
+            if directory {
                 pending.push(entry.path());
             }
         }

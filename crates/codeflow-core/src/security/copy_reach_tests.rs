@@ -177,6 +177,73 @@ fn a_run_time_destination_refuses_a_source_holding_an_enforcement_name() {
     );
 }
 
+/// Security review F1: a copy that follows links writes a linked
+/// directory's contents, so under a run-time destination the walk reads
+/// through each source link. The verdict's staging input: `stage/codeflow`
+/// links to a directory holding `.claude/settings.json`.
+#[cfg(unix)]
+#[test]
+fn a_run_time_destination_reads_through_source_links() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    repository(&root);
+    let payload = tmp.path().join("payload");
+    std::fs::create_dir_all(payload.join(".claude")).unwrap();
+    std::fs::write(payload.join(".claude/settings.json"), "{}\n").unwrap();
+    let stage = tmp.path().join("stage");
+    std::fs::create_dir_all(&stage).unwrap();
+    std::os::unix::fs::symlink(&payload, stage.join("codeflow")).unwrap();
+    // The same link one level down.
+    std::fs::create_dir_all(stage.join("a")).unwrap();
+    std::os::unix::fs::symlink(&payload, stage.join("a/b")).unwrap();
+    let staged = stage.display();
+    for line in [
+        format!("rsync -aL {staged}/ $W"),
+        format!("cp -RL {staged}/ $W"),
+        format!("scp -r {staged}/codeflow $W"),
+        format!("scp -r {staged} $W"),
+    ] {
+        let found = judged(&line, &root).unwrap_or_else(|| panic!("{line}: passed"));
+        assert!(found.contains("cannot resolve"), "{line}: {found}");
+        assert!(found.contains(".claude"), "{line}: {found}");
+    }
+    // A link to a directory with no enforcement name keeps passing.
+    let docs = tmp.path().join("docs");
+    std::fs::create_dir_all(docs.join("guide")).unwrap();
+    let plain = tmp.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    std::os::unix::fs::symlink(&docs, plain.join("docs")).unwrap();
+    assert_eq!(
+        judged(&format!("rsync -aL {}/ $W", plain.display()), &root),
+        None
+    );
+}
+
+/// Security review F1: a source link the walk cannot read, and a link
+/// cycle, refuse under a run-time destination.
+#[cfg(unix)]
+#[test]
+fn a_dangling_or_cyclic_source_link_refuses_a_run_time_destination() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("repo");
+    repository(&root);
+    let dangling = tmp.path().join("dangling");
+    std::fs::create_dir_all(&dangling).unwrap();
+    std::os::unix::fs::symlink(tmp.path().join("nowhere"), dangling.join("x")).unwrap();
+    let line = format!("rsync -aL {}/ $W", dangling.display());
+    let found = judged(&line, &root).unwrap_or_else(|| panic!("{line}: passed"));
+    assert!(found.contains("cannot verify"), "{line}: {found}");
+    assert!(found.contains("cannot read the link"), "{line}: {found}");
+    let cycle = tmp.path().join("cycle");
+    std::fs::create_dir_all(&cycle).unwrap();
+    std::os::unix::fs::symlink(&cycle, cycle.join("again")).unwrap();
+    // The walk ends either at WALK_LIMIT or where the system stops
+    // resolving the nested links; both refuse.
+    let line = format!("cp -RL {}/ $W", cycle.display());
+    let found = judged(&line, &root).unwrap_or_else(|| panic!("{line}: passed"));
+    assert!(found.contains("cannot verify"), "{line}: {found}");
+}
+
 #[cfg(unix)]
 #[test]
 fn a_link_at_the_landing_place_into_enforcement_files_refuses() {
