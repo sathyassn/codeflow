@@ -28,3 +28,4 @@ pub mod structural;
 mod target_inputs;
 pub mod threshold;
 pub mod validation;
+pub mod wait;

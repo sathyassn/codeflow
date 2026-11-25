@@ -28,8 +28,8 @@ pub struct TestArgs {
     #[arg(long, default_value = "full", value_parser = ["full", "quick", "essential"])]
     pub mode: String,
 
-    /// Seconds heavy work waits for a host-exclusive target, or a
-    /// host-exclusive target for other heavy runs. Default zero.
+    /// Seconds to wait for named shared resources or host-exclusive admission.
+    /// Default zero. Output leases use the target's timeout instead.
     #[arg(long, value_name = "SECONDS")]
     pub wait_seconds: Option<u64>,
 
@@ -294,10 +294,17 @@ pub fn run(args: &TestArgs) -> i32 {
     if args.lock_status {
         return print_lock_status(&root);
     }
+    let waits = codeflow_core::testing::wait::WaitLog::default();
+    let _wait_scope = waits.enter();
     let _lock = match guard_gate(&root, &args.mode, args.config.as_deref(), args.wait_seconds) {
         Ok(lock) => lock,
         Err(message) => {
             eprintln!("codeflow test: refused: {message}");
+            if let Err(error) =
+                codeflow_core::testing::gate::record_lock_refusal(&root, &args.mode, &message)
+            {
+                eprintln!("codeflow test: refusal evidence could not be written: {error}");
+            }
             return 1;
         }
     };
@@ -454,15 +461,25 @@ fn guard_gate(
         return Ok(None);
     }
     let dirs = lock_dirs(root, codeflow_home().as_deref()).map_err(|error| {
-        format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`")
+        let attempt = codeflow_core::testing::wait::Attempt::new("heavy admission", "");
+        format!("gate lock unavailable: cannot discover repository: {error}; repair repository metadata, then rerun `codeflow doctor --check permissions`; {}", attempt.description())
     })?;
     let wait = std::time::Duration::from_secs(wait_seconds.unwrap_or(0));
     let start = std::time::Instant::now();
     let mut announced = false;
+    let mut attempt: Option<codeflow_core::testing::wait::Attempt> = None;
     let lock = loop {
         match acquire_gate_lock(&dirs, root, mode) {
-            Ok(lock) => break lock,
+            Ok(lock) => {
+                if let Some(attempt) = attempt.take() {
+                    attempt.acquired();
+                }
+                break lock;
+            }
             Err(held) if held.exclusive && start.elapsed() < wait => {
+                attempt.get_or_insert_with(|| {
+                    codeflow_core::testing::wait::Attempt::new("heavy admission", &held.holder)
+                });
                 if !announced {
                     announced = true;
                     eprintln!("codeflow test: waiting up to {}s: {held}", wait.as_secs());
@@ -470,7 +487,12 @@ fn guard_gate(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
             Err(held) => {
+                let attempt = attempt.get_or_insert_with(|| {
+                    codeflow_core::testing::wait::Attempt::new("heavy admission", &held.holder)
+                });
                 let mut message = held.to_string();
+                message.push_str("; ");
+                message.push_str(&attempt.description());
                 if message.contains("gate lock unavailable") {
                     message.push_str(
                         "; `codeflow doctor --check permissions` names each directory the gate must write, \

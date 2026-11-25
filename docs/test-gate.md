@@ -1,5 +1,25 @@
 # Test gate selection
 
+## Findings
+
+Before the named-resource change (TSK-1010, base `5405cdb1b`), heavy
+admission takes a shared legacy fence and a shared host lock in each lock
+directory, then the first free numbered slot. Each slot records one run;
+the host has a set of occupied slots, rather than one gate holder.
+`GateLock` releases its admission and clears its slot record on drop.
+See `gate_guard.rs`, `acquire_gate_lock` and `GateLock::drop`.
+
+A host-exclusive target releases this process's shared host locks and
+takes them exclusively, waiting within `heavy_wait_seconds`. Its drop
+clears the exclusive records, releases the exclusive locks and retakes
+the shared locks. A refusal to admit heavy work prints the recorded
+exclusive holder; an exclusive target that exhausts its wait prints the
+wait duration and lock path. Output leases lock sorted output names and
+wait within `timeout_seconds`; their refusal prints the output and lease
+path, without a holder. Neither path records structured wait metadata in
+`run.json`. See `hold_host_exclusive_in`, `take_host_shared` and
+`runner::evidence_leases`.
+
 ## Concept
 
 Every gate run executes every eligible target of its mode, unless `--only`
@@ -169,6 +189,42 @@ refusal fails, because its refusal cannot name the run's fresh subject
 (TSK-365).
 
 ## Technical
+
+### Named host resources and wait evidence
+
+A target can declare `shared_resources: ["port:4700", "browser-cache"]`
+alongside `host_exclusive`. Equal names serialize across gates and
+repositories sharing the CodeFlow home. Names are case-sensitive labels
+of 1 to 128 ASCII letters, digits, dots, underscores, colons or hyphens,
+starting with a letter or digit. Duplicate names are ignored.
+
+The target takes its names in a fixed order across the host and repository
+lock folders. It waits up to `--wait-seconds`, whose default is zero, then
+is reported not run. Unrelated names and other heavy gates continue under
+the existing capacity admission. `host_exclusive` retains its existing
+behavior. On Unix, a target inherits its named leases so a surviving
+target keeps them after its controller ends.
+
+Each `shared-<sha256>.record` beside its name lock contains the declared
+name and the holder record. Names are hashed into filenames; they are never
+interpreted as paths. An unreadable or unwritable name record refuses the
+target with the cause.
+The OS lock establishes ownership. A released target can leave a stale
+record, which the next owner replaces under the lock.
+
+Version-2 `run.json` records add an optional `wait` object for contended or refused
+host admission, host-exclusive targets, named resources and output leases.
+It contains `wait_started` and `acquired` as Unix seconds, `seconds_waited`
+as a duration, and `holder: {pid, worktree, mode}`. `acquired` is null on
+refusal. An unreadable or missing holder is the explicit string
+`holder unknown`; an untrusted holder directory is null. When several
+waits occur, `wait.events` retains every event; the enclosing fields
+describe the first recorded event. Successful uncontended runs omit `wait`.
+Refusal messages include the holder and request time. A gate refused
+before targets start also writes a failed, incomplete local `run.json`.
+These optional fields leave the existing schema-version-2 fields intact.
+
+### Target configuration
 
 The config is `.codeflow/test-config.json`; its editor schema is
 `.codeflow/test-config.schema.json`. Existing configurations remain valid and
