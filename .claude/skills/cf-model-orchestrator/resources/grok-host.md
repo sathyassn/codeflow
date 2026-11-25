@@ -52,8 +52,8 @@ Code host only. Neither seat is claimed complete until its own canary
 succeeds on this host.
 
 Grok-started Claude schema-v2 (Herdr `send-text` of the armed file) and
-Codex Herdr consult canaries are recorded in the CodeFlow repository under
-`docs/verification/`. Consuming scaffolds do not ship that file. Those
+Codex Herdr consult canaries are recorded in CodeFlow's own repository
+and are not shipped to consuming scaffolds. Those
 records are consult-posture, host-specific, and not a qualified
 `grok-engineering-primary` binding or a full promotion suite. Doctor does
 not claim the lanes.
