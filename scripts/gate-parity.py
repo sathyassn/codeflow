@@ -39,8 +39,15 @@ def is_rust_verification_command(cmd: str) -> bool:
 
 SUITE = "cargo nextest run --workspace --no-fail-fast --profile codeflow"
 DOCTESTS = "cargo test --workspace --doc"
-COVERAGE = re.compile(r"^cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines \d+ --profile codeflow$")
-COVERAGE_FORM = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines <N> --profile codeflow"
+# The coverage run also writes its summary, which the gate records in the
+# run's coverage block (TSK-369); the coverage shards drop these flags with
+# the floor, since each shard runs with --no-report.
+COVERAGE_SUMMARY = "target/llvm-cov-summary.json"
+COVERAGE_REPORT_FLAGS = f" --json --summary-only --output-path {COVERAGE_SUMMARY}"
+COVERAGE = re.compile(r"^cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines \d+"
+                      + re.escape(COVERAGE_REPORT_FLAGS) + r" --profile codeflow$")
+COVERAGE_FORM = ("cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines <N>"
+                 f"{COVERAGE_REPORT_FLAGS} --profile codeflow")
 
 
 def applicable(target: dict) -> bool:
@@ -252,7 +259,8 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
 SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
 SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
-COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
+COVERAGE_CANONICAL = ("cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90"
+                      f"{COVERAGE_REPORT_FLAGS} --profile codeflow")
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
     name: codeflow gates (coverage ${{ matrix.shard }} of @COUNT@)
@@ -369,13 +377,22 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
         problems.append(f"the rust-coverage target must run `{COVERAGE_FORM}` with no cwd or env; the coverage "
                         f"shards run it with --no-report; found {coverage!r}")
         coverage = COVERAGE_CANONICAL
+    floor = re.search(r" --fail-under-lines (\d+)", coverage)
+    block = targets.get("rust-coverage", {}).get("coverage") or {}
+    expected = {"format": "llvm-cov-json", "path": COVERAGE_SUMMARY,
+                "rules": [{"scope": "global", "minimum": int(floor.group(1)) if floor else None}]}
+    if block != expected:
+        problems.append("the rust-coverage target's coverage block must be exactly "
+                        f"{json.dumps(expected)}, so the full run records the summary its command writes "
+                        f"and its floor equals --fail-under-lines; found {json.dumps(block)}")
     if targets.get("rust-coverage", {}).get("requires") != ["present-web-build"]:
         problems.append("the rust-coverage target must require exactly present-web-build, the one prerequisite "
                         "the coverage shards run")
     if targets.get("journey-gate", {}).get("requires") != ["rust-coverage"] or not full.get("journey-gate"):
         problems.append("the journey-gate target must require exactly rust-coverage, whose results the coverage "
                         "report reads")
-    shard_run = (re.sub(r" --fail-under-lines \S+", "", coverage).replace(" --profile ", " --no-report --profile ")
+    shard_run = (re.sub(r" --fail-under-lines \S+", "", coverage).replace(COVERAGE_REPORT_FLAGS, "")
+                 .replace(" --profile ", " --no-report --profile ")
                  + " " + SHARD_FILTER)
     numbers = range(1, shards + 1)
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
