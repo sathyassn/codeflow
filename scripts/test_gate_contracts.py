@@ -207,13 +207,8 @@ class GateContracts(unittest.TestCase):
         jobs = dict(zip(parts[1::2], parts[2::2]))
         windows = {key: text for key, text in jobs.items() if key.startswith('windows')}
         gated = ('windows', 'windows-build', 'windows-tests', 'windows-journeys', 'windows-release-journey')
-        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image', 'windows-tier', 'windows-tier-journeys'})
+        self.assertEqual(set(windows), {*gated, 'windows-verdict', 'windows-image'})
         checks = json.loads(read('.release/config.json'))['required_publication_checks']
-        # TSK-1242: the tier only applies to pull requests. Neither job is a
-        # publication check; `scripts/gate-parity.py` pins their text.
-        for key in ('windows-tier', 'windows-tier-journeys'):
-            self.assertNotIn(windows[key].split('name: ', 1)[1].split('\n', 1)[0], checks)
-        self.assertIn("    if: github.event_name == 'pull_request'\n", windows['windows-tier'])
         # TSK-359: `windows-image` only reads the push's Windows runner image
         # for the reuse decision. It runs on pushes alone and is no gate.
         image = windows['windows-image']
@@ -233,7 +228,8 @@ class GateContracts(unittest.TestCase):
         # journeys run in a job that starts with the run.
         journeys = windows['windows-journeys']
         self.assertIn('journey-gate.py --results target/nextest/partitions --skip-benchmark --part results', journeys)
-        self.assertIn('windows-partitions.py check --list', journeys)
+        self.assertIn('partition-check.py check --count 16 --prefix windows-junit --margin-minutes 24 '
+                      '--setup-minutes 2 --list', journeys)
         self.assertNotIn('test_release.py', journeys)
         self.assertIn('needs: windows-tests', journeys)
         self.assertIn('pattern: windows-junit-*', journeys)
@@ -253,21 +249,28 @@ class GateContracts(unittest.TestCase):
         # `codeflow gates` is: one accepted body, so no edit can add another
         # way for it to pass.
         self.assertEqual(PARITY.windows_verdict_problems(workflow), [])
-        # Two ways to pass: the reduced tier (TSK-1242) and a reused or full run.
-        self.assertEqual(windows['windows-verdict'].count('exit 0'), 2)
+        # Missing dependency data and failed results each have a refusal;
+        # neither path can leave early with a passing verdict (TSK-1321).
+        self.assertEqual(windows['windows-verdict'].count('sys.exit('), 2)
+        self.assertEqual(windows['windows-verdict'].count('sys.exit(1)'), 2)
         self.assertEqual([check for check in checks if 'windows' in check], ['windows'])
 
     def test_an_extra_way_for_the_windows_verdict_to_pass_is_refused(self):
         workflow = read('.github/workflows/codeflow-ci.yml')
-        guard = '          if [ "$CHECKS" != success ] || [ "$BUILD" != success ]'
-        self.assertEqual(workflow.count(guard), 1)
+        guard = '          if errors:\n'
+        self.assertEqual(workflow.count(guard), 2)
         controls = {
-            'an inserted exit 0': workflow.replace(guard, '          if [ "$TESTS" = failure ]; then\n'
-                                                          '            exit 0\n          fi\n' + guard),
-            'reuse without skipped jobs': workflow.replace(
-                '[ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = '
-                '"skipped skipped skipped skipped skipped" ]', '[ "$REUSE" = success ]'),
-            'a dropped job result': workflow.replace(' || [ "$RELEASE" != success ]', ''),
+            'an inserted exit 0': workflow.replace(guard, '          if result("windows-tests") == "failure":\n'
+                                                          '              sys.exit(0)\n' + guard),
+            'reuse without a named run': workflow.replace(
+                'mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"',
+                'mode = "reuse" if result("reuse") == "success" else "full"'),
+            'a dropped job result': workflow.replace(
+                'jobs = sorted(job for job in needs if job != "reuse")',
+                'jobs = sorted(job for job in needs if job not in ("reuse", "windows-release-journey"))'),
+            'a pass with no job run': workflow.replace(
+                'if mode == "full" and all(result(job) == "skipped" for job in jobs):',
+                'if False:'),
             'continue-on-error': workflow.replace('    name: windows\n', '    name: windows\n    continue-on-error: true\n'),
         }
         for label, changed in controls.items():
@@ -290,13 +293,13 @@ class GateContracts(unittest.TestCase):
         self.assertIn('    permissions:\n      contents: read\n      actions: read\n      pull-requests: read\n', reuse)
         self.assertNotIn(': write', workflow)
         self.assertIn('python3 -I scripts/ci-reuse.py', reuse)
-        for key in ('gates', 'windows', 'windows-release-journey'):
+        self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs['gates'])
+        self.assertIn('    needs: [reuse, gates-build]\n', jobs['gates'])
+        # TSK-1321: the coverage and Windows jobs follow the reuse decision.
+        for key in ('gates-coverage', 'windows-build', 'windows', 'windows-release-journey'):
             with self.subTest(job=key):
                 self.assertIn("    if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (", jobs[key])
-                self.assertIn('    needs: [reuse, gates-build]\n' if key == 'gates' else '    needs: reuse\n', jobs[key])
-        # TSK-1242: the build also follows the tier, and still follows the reuse decision.
-        self.assertIn("    if: ${{ !cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == '' && (", jobs['windows-build'])
-        self.assertIn('    needs: [reuse, windows-tier]\n', jobs['windows-build'])
+                self.assertIn('    needs: reuse\n', jobs[key])
         self.assertIn("needs.windows-build.result == 'success'", jobs['windows-tests'])
         self.assertIn("needs.windows-tests.result != 'skipped'", jobs['windows-journeys'])
 

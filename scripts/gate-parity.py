@@ -85,29 +85,18 @@ def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
 
 # TSK-203: the Windows suite runs in nextest partitions. TSK-265: one job
 # builds the suite into a nextest archive and each partition runs that
-# archive with the filterset scripts/windows-partitions.py gives it from
-# measured durations and the archive's test list (TSK-1063: the list places
-# binaries the data does not know). The archived run stands for the whole suite only when
-# the archive is built from the whole workspace with the same profile, and
-# the matrix runs every partition from 1 to the plan's count exactly once.
-# The plan itself gives every test exactly one partition, and the Windows
-# journeys job checks each run's results against the archive's test list.
-# TSK-1242: the reduced tier's journey run is a named subset, never the suite,
-# so it is pinned by TIER_JOURNEYS_JOB and owes no local parity.
+# archive. TSK-1321: each runs `--partition hash:<n>/<count>`, which gives
+# every test exactly one partition by the hash of its name, under the
+# windows-hosted profile, which adds the per-test bound to the codeflow
+# profile's settings. The archived run stands for the whole suite only when the
+# archive is built from the whole workspace with the codeflow profile, and the
+# matrix runs every partition from 1 to the run's count exactly once. The
+# Windows journeys job checks each run's results against the archive's test
+# list (scripts/partition-check.py).
 ARCHIVE = re.compile(r"^cargo nextest archive --workspace --profile codeflow --archive-file (\S+)$")
 ARCHIVED_RUN = re.compile(
     r"^cargo nextest run --archive-file (\S+) --workspace-remap \. --extract-to \. --extract-overwrite "
-    r"--no-fail-fast --profile codeflow "
-    r'-E "\$\(python -B scripts/windows-partitions\.py filter \$\{\{ matrix\.partition \}\} '
-    r'--list "\$RUNNER_TEMP/windows-test-list/windows-tests\.json"\)"$')
-PARTITION_DATA = ROOT / "scripts" / "windows-test-times.json"
-TIER_RUN = ('cargo nextest run --workspace --no-fail-fast --profile codeflow '
-            '-E "$(python -B scripts/journey-gate.py --nextest-filter --skip-benchmark)"')
-
-
-def planned_partitions(data: Path | None = None) -> int:
-    """The partition count scripts/windows-partitions.py plans for."""
-    return int(json.loads(repository_text(data or PARTITION_DATA))["partitions"])
+    r"--no-fail-fast --profile windows-hosted --partition hash:\$\{\{ matrix\.partition \}\}/([1-9][0-9]*)$")
 
 
 def matrix_partitions(job: str) -> list[int]:
@@ -119,7 +108,7 @@ def matrix_partitions(job: str) -> list[int]:
     return [int(v) for v in values] if all(v.isdigit() for v in values) else []
 
 
-def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
+def ci_rust_job_commands(workflow: str) -> set[str]:
     """Rust verification `run:` commands inside the Windows raw referee jobs
     (every job whose id starts with `windows`). An archive build runs no
     test; the archived partitions stand for the suite they cover."""
@@ -134,15 +123,13 @@ def ci_rust_job_commands(workflow: str, planned: int | None = None) -> set[str]:
             cmd = norm(run.group(1))
             if not is_rust_verification_command(cmd) or ARCHIVE.match(cmd):
                 continue
-            if name == "windows-tier-journeys" and cmd == TIER_RUN:
-                continue
             archived = ARCHIVED_RUN.match(cmd)
             if archived:
-                count = planned_partitions() if planned is None else planned
+                count = int(archived.group(2))
                 if archived.group(1) not in archives:
                     cmd = f"{cmd} (no windows job builds the archive {archived.group(1)})"
                 elif partitions != list(range(1, count + 1)):
-                    cmd = f"{cmd} (partitions {partitions} do not cover the planned 1 to {count})"
+                    cmd = f"{cmd} (partitions {partitions} do not cover 1 to {count})"
                 else:
                     cmd = SUITE
             out.add(cmd)
@@ -243,15 +230,15 @@ def gate_part_problems(cfg: dict, workflow: str) -> list[str]:
 # report job adds up their coverage, applies the floor and reads the
 # journeys. Both jobs are pinned exactly, like the verdict, and are built
 # from the config: the shards run the rust-coverage command with
-# --no-report and their planned filterset after its present-web-build
-# prerequisite, the report reads the floor from the config and runs the
-# journey-gate command on the shards' results, and the matrix, the merge
-# and the partition check cover every shard scripts/coverage-test-times.json
-# plans, once. The merge's own tests (scripts/test_coverage_merge.py) and
-# the planner's (scripts/test_windows_partitions.py) cover the rest.
+# --no-report and their hash partition after its present-web-build
+# prerequisite (TSK-1321), the report reads the floor from the config and
+# runs the journey-gate command on the shards' results, and the matrix, the
+# merge and the partition check cover every one of the COVERAGE_SHARDS
+# shards, once. The merge's own tests (scripts/test_coverage_merge.py) and
+# the partition check's (scripts/test_partition_check.py) cover the rest.
 COVERAGE_TARGETS = ("rust-coverage", "journey-gate")
-SHARD_DATA = ROOT / "scripts" / "coverage-test-times.json"
-SHARD_FILTER = '-E "$(python3 -B scripts/coverage-shards.py filter ${{ matrix.shard }})"'
+COVERAGE_SHARDS = 3
+SHARD_FILTER = "--partition hash:${{ matrix.shard }}/@COUNT@"
 COVERAGE_CANONICAL = "cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow"
 COVERAGE_JOB = """\
     if: ${{ !cancelled() && needs.reuse.outputs.run == '' && (@CONDITION@) }}
@@ -354,7 +341,7 @@ COVERAGE_REPORT_JOB = """\
       - name: Every test ran in exactly one shard
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 -B scripts/test_windows_partitions.py && python3 -B scripts/coverage-shards.py check --list @LISTS@ --results target/coverage/results
+        run: python3 -B scripts/test_partition_check.py && python3 -B scripts/partition-check.py check --count @COUNT@ --prefix coverage-shard --margin-minutes 24 --setup-minutes 6 --list @LISTS@ --results target/coverage/results
 """
 
 
@@ -379,8 +366,8 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
                  + " " + SHARD_FILTER)
     numbers = range(1, shards + 1)
     lists = " ".join(f"target/coverage/results/coverage-shard-{n}/tests.json" for n in numbers)
-    fill = {"@CONDITION@": condition, "@COUNT@": str(shards), "@SHARDS@": ", ".join(map(str, numbers)),
-            "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run,
+    fill = {"@CONDITION@": condition, "@SHARDS@": ", ".join(map(str, numbers)),
+            "@WEB_BUILD@": full.get("present-web-build", ""), "@SHARD_RUN@": shard_run, "@COUNT@": str(shards),
             "@JOURNEY@": full.get("journey-gate", ""), "@LISTS@": lists}
     jobs = []
     for template in (COVERAGE_JOB, COVERAGE_REPORT_JOB):
@@ -391,15 +378,15 @@ def coverage_jobs(cfg: dict, condition: str, shards: int) -> tuple[str, str, lis
 
 
 def coverage_job_problems(cfg: dict, jobs: dict[str, str], condition: str,
-                          data: Path | None = None) -> list[str]:
+                          count: int = COVERAGE_SHARDS) -> list[str]:
     """The shard and report jobs are exactly the pinned ones for this config
-    and plan, and nothing else in the workflow claims their names."""
-    shards, report, problems = coverage_jobs(cfg, condition, planned_partitions(data or SHARD_DATA))
+    and shard count, and nothing else in the workflow claims their names."""
+    shards, report, problems = coverage_jobs(cfg, condition, count)
     for job, expected in (("gates-coverage", shards), ("gates-coverage-report", report)):
         if norm_job(jobs.get(job, "")) != norm_job(expected):
             problems.append(f"the `{job}` job must be exactly this, built from .codeflow/test-config.json and "
-                            "scripts/coverage-test-times.json: any other form could run part of the suite, skip "
-                            "a shard or judge the floor on another number. Expected:\n" + expected)
+                            f"{count} hash shards: any other form could run part of the suite, skip a shard or "
+                            "judge the floor on another number. Expected:\n" + expected)
     return problems
 
 
@@ -465,151 +452,71 @@ WINDOWS_VERDICT = "windows"
 WINDOWS_VERDICT_JOB = """\
     if: ${{{{ always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}}}
     name: windows
-    needs: [reuse, windows-tier, windows, windows-build, windows-tests, windows-journeys, windows-release-journey, windows-tier-journeys]
+    needs: [reuse, windows, windows-build, windows-tests, windows-journeys, windows-release-journey]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Every Windows job passed
-        shell: bash
+        shell: python3 -I {{0}}
         env:
-          REUSE: ${{{{ needs.reuse.result }}}}
-          REUSED: ${{{{ needs.reuse.outputs.run }}}}
-          CHECKS: ${{{{ needs.windows.result }}}}
-          BUILD: ${{{{ needs.windows-build.result }}}}
-          TESTS: ${{{{ needs.windows-tests.result }}}}
-          JOURNEYS: ${{{{ needs.windows-journeys.result }}}}
-          RELEASE: ${{{{ needs.windows-release-journey.result }}}}
-          MISSING: ${{{{ needs.windows-journeys.outputs.missing }}}}
-          TIER: ${{{{ needs.windows-tier.outputs.tier }}}}
-          TIER_JOURNEYS: ${{{{ needs.windows-tier-journeys.result }}}}
-          EVENT: ${{{{ github.event_name }}}}
-          BASE: ${{{{ github.event.pull_request.base.ref }}}}
+          NEEDS: ${{{{ toJSON(needs) }}}}
         run: |
-          if [ "$TIER" = reduced ]; then
-            if [ "$EVENT" = pull_request ] && [ "${{BASE#integration/}}" != "$BASE" ] \\
-              && [ "$BUILD $TESTS $JOURNEYS" = "skipped skipped skipped" ] \\
-              && [ "$CHECKS $RELEASE $TIER_JOURNEYS" = "success success success" ]; then
-              echo "Windows reduced tier passed at ${{GITHUB_SHA}}: the twelve test partitions were skipped by tier"
-              echo "Windows reduced tier at ${{GITHUB_SHA}}: the twelve test partitions were skipped by tier. This is not full Windows evidence; the push to the line runs them." >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            echo "::error::the reduced Windows tier accepts only the skipped build, partitions and partition journeys on a pull request into an integration line; event=${{EVENT}} base=${{BASE}} checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}} tier journeys=${{TIER_JOURNEYS}}"
-            exit 1
-          fi
-          if [ "$TIER_JOURNEYS" != skipped ]; then
-            echo "::error::the reduced tier's journey job concluded ${{TIER_JOURNEYS}} outside the reduced tier"
-            exit 1
-          fi
-          if [ "$REUSE" = success ] && [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ] \\
-            && printf '%s' "$REUSED" | grep -Eqx '[0-9]+'; then
-            echo "Windows passed on pull request run ${{GITHUB_SERVER_URL}}/${{GITHUB_REPOSITORY}}/actions/runs/${{REUSED}}, which tested this exact tree"
-            exit 0
-          fi
-          if [ "$CHECKS $BUILD $TESTS $JOURNEYS $RELEASE" = "skipped skipped skipped skipped skipped" ]; then
-            echo "::error::the Windows gates did not run; bases outside main, master or integration/** cannot supply a passing verdict"
-            exit 1
-          fi
-          if [ "$CHECKS" != success ] || [ "$BUILD" != success ] || [ "$TESTS" != success ] || [ "$JOURNEYS" != success ] || [ "$RELEASE" != success ]; then
-            if [ -n "$MISSING" ]; then
-              echo "::error::Windows test partition(s) ${{MISSING}} ended without a report (a timeout or a cancellation); their tests did not finish, none is known to have failed"
-            fi
-            echo "::error::Windows concluded checks=${{CHECKS}} build=${{BUILD}} tests=${{TESTS}} journeys=${{JOURNEYS}} release journey=${{RELEASE}}; see the windows jobs"
-            exit 1
-          fi
-          echo "every Windows job passed"
+          import json, os, re, sys
+          needs = json.loads(os.environ["NEEDS"])
+          sha = os.environ["GITHUB_SHA"]
+          names = {{"windows": "windows checks", "windows-build": "windows test build",
+                   "windows-tests": "windows tests", "windows-journeys": "windows journeys",
+                   "windows-release-journey": "windows release journey"}}
+          def result(job): return needs.get(job, {{}}).get("result", "missing")
+          def output(job, key): return (needs.get(job, {{}}).get("outputs") or {{}}).get(key, "")
+          expected = {{"reuse", "windows", "windows-build", "windows-tests",
+                      "windows-journeys", "windows-release-journey"}}
+          errors = [f"missing dependency {{job}}" for job in sorted(expected - needs.keys())]
+          for job in sorted(needs):
+              if not isinstance(needs[job], dict) or "result" not in needs[job]:
+                  errors.append(f"{{job}} has a missing result")
+          if errors:
+              for line in errors:
+                  print(f"::error::{{line}}")
+              sys.exit(1)
+          reused = output("reuse", "run")
+          jobs = sorted(job for job in needs if job != "reuse")
+          errors = []
+          if result("reuse") not in {{"success", "skipped"}}:
+              errors.append(f"reuse concluded {{result('reuse')}}; expected success or skipped")
+          mode = "reuse" if result("reuse") == "success" and re.fullmatch(r"[0-9]+", reused) else "full"
+          if mode == "full" and all(result(job) == "skipped" for job in jobs):
+              errors.append("the Windows gates did not run; bases outside main or master cannot supply a "
+                            "passing verdict")
+          else:
+              want = "skipped" if mode == "reuse" else "success"
+              for job in jobs:
+                  if result(job) != want:
+                      declared = "a reused run skips it" if mode == "reuse" else "a full run needs it"
+                      errors.append(f"{{names.get(job, job)}} concluded {{result(job)}}; {{declared}}")
+          missing = output("windows-journeys", "missing")
+          if missing:
+              errors.append(f"Windows test partition(s) {{missing}} ended without a report (a timeout or a "
+                            "cancellation); their tests did not finish, none is known to have failed")
+          if errors:
+              for line in errors:
+                  print(f"::error::{{line}}")
+              sys.exit(1)
+          url = f"{{os.environ.get('GITHUB_SERVER_URL', '')}}/{{os.environ.get('GITHUB_REPOSITORY', '')}}/actions/runs/{{reused}}"
+          line = {{"reuse": f"Windows passed on pull request run {{url}}, which tested this exact tree",
+                  "full": f"every Windows job passed at {{sha}}"}}[mode]
+          print(line)
+          with open(os.environ.get("GITHUB_STEP_SUMMARY", os.devnull), "a", encoding="utf-8") as summary:
+              print(line, file=summary)
 """
-
-
-# TSK-1242: the switch is the one value of this job that may differ, off or on.
-# A pull request into an integration line takes the reduced tier only when it
-# is on; any other value, base or event takes the full tier.
-TIER_SWITCH = re.compile(r'^( {10}REDUCED_TIER: )"(?:on|off)"$', re.M)
-WINDOWS_TIER_JOB = """\
-    if: github.event_name == 'pull_request'
-    name: windows tier
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      tier: ${{ steps.tier.outputs.tier }}
-    steps:
-      - name: Choose the Windows tier
-        id: tier
-        shell: bash
-        env:
-          REDUCED_TIER: "off"
-          BASE: ${{ github.event.pull_request.base.ref }}
-        run: |
-          tier=full
-          if [ "$REDUCED_TIER" = on ]; then
-            case "$BASE" in
-              integration/*) tier=reduced ;;
-            esac
-          fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "Windows tier: $tier (reduced tier switch: $REDUCED_TIER, base: $BASE)"
-"""
-TIER_JOURNEYS_JOB = f"""\
-    if: ${{{{ !cancelled() && needs.windows-tier.outputs.tier == 'reduced' && !github.event.pull_request.draft }}}}
-    name: windows tier journeys
-    needs: windows-tier
-    runs-on: windows-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-      - name: Install the differential shells
-        id: shells
-        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
-        with:
-          msystem: MSYS
-          install: bash zsh dash
-      - name: Select the differential shell directory
-        shell: pwsh
-        env:
-          MSYS2_LOCATION: ${{{{ steps.shells.outputs.msys2-location }}}}
-        run: Add-Content -Path $env:GITHUB_ENV -Value "CODEFLOW_DIFFERENTIAL_SHELL_DIR=$env:MSYS2_LOCATION\\usr\\bin"
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: windows-tests
-          cache-on-failure: true
-      - name: Install nextest
-        uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
-        with:
-          tool: cargo-nextest@0.9.129
-      - name: Begin journey check
-        shell: bash
-        run: |
-          rm -rf target/nextest/codeflow
-          echo "CODEFLOW_GATE_STARTED_AT=$(python -c 'import time; print(time.time())')" >> "$GITHUB_ENV"
-      - name: Run every supported Windows journey test
-        shell: bash
-        run: {TIER_RUN}
-      - name: journey gate
-        shell: bash
-        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --results target/nextest/codeflow/junit.xml --skip-benchmark --part results
-"""
-BUILD_TIER_CLAUSE = "!cancelled() && needs.windows-tier.outputs.tier != 'reduced' && needs.reuse.outputs.run == ''"
 
 
 def windows_tier_problems(workflow: str) -> list[str]:
-    """The tier job, its journey job and the one job that declares the skip are
-    exactly the pinned forms, so no other job can leave the full tier."""
+    """Hash partitions have no reduced tier or tier-dependent skip."""
     jobs = workflow_jobs(workflow)
-    problems = []
-    tier = TIER_SWITCH.sub(r'\1"off"', jobs.get("windows-tier", ""))
-    if norm_job(tier) != norm_job(WINDOWS_TIER_JOB):
-        problems.append("`windows-tier` must be exactly this, with its switch off or on:\n" + WINDOWS_TIER_JOB)
-    if norm_job(jobs.get("windows-tier-journeys", "")) != norm_job(TIER_JOURNEYS_JOB):
-        problems.append("`windows-tier-journeys` must be exactly this:\n" + TIER_JOURNEYS_JOB)
-    build = jobs.get("windows-build", "")
-    if BUILD_TIER_CLAUSE not in build or "    needs: [reuse, windows-tier]\n" not in build:
-        problems.append(f"`windows-build` must need [reuse, windows-tier] and run under `{BUILD_TIER_CLAUSE}`")
-    others = [name for name, text in jobs.items() if "needs.windows-tier.outputs.tier" in text
-              and name not in ("windows-build", "windows-tier-journeys", "windows-verdict")]
-    if others:
-        problems.append(f"only windows-build may leave the full tier; these jobs also read the tier: {others}")
-    return problems
+    return [f"{name}: the removed Windows tier must not select hash jobs"
+            for name, text in jobs.items()
+            if name in {"windows-tier", "windows-tier-journeys"} or "needs.windows-tier" in text]
 
 
 def windows_verdict_problems(workflow: str) -> list[str]:

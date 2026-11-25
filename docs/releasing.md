@@ -285,7 +285,7 @@ The workflows apply the table as follows:
 - While `main` is relaxed, every Linux gate job, every full-suite Windows
   job (the test build, the partitions, the checks and the journeys) and
   both verdict jobs in `codeflow-ci.yml` run only on `schedule` and
-  `workflow_dispatch`, and the reduced Windows tier is off. The image, tier
+  `workflow_dispatch`. The reduced Windows tier is removed. The image
   and provenance helper jobs keep their other events. The workflow's
   header lists what restoring `main`'s checks adds back; the restore adds
   no clause for a line push or a line pull request.
@@ -294,6 +294,31 @@ The workflows apply the table as follows:
   workflows (`windows-daily.yml`, `windows-daily-verdict.yml`) are switched
   off by the operator while `main` is relaxed, so no line has a scheduled
   run.
+
+### Hash placement of hosted tests
+
+Windows builds one nextest archive and runs it in sixteen `hash:M/16`
+partitions. Linux coverage uses three `hash:M/3` shards. Neither reads a
+measured timing plan. New tests need no plan refresh.
+
+`scripts/partition-check.py check` compares the test listing with every
+JUnit report. A listed test must execute once in its hash partition; a
+missing report, skipped owed test, duplicate, wrong partition or unlisted
+test fails the check. Test time plus setup must stay within 24 minutes:
+2 minutes of setup for Windows, 6 for coverage. A hung Windows test ends
+after 12 minutes under the `windows-hosted` profile; local profiles keep
+their existing behavior.
+
+These changes preserve the placement table above. The first full hosted
+proof after the merge is a daily or dispatched full run on main, with its
+exact SHA and every partition's result recorded in TSK-1321. The task stays
+open until that proof passes. Main's relaxation returns only under the
+conditions in the workspace's
+`coordination/coordinators/parallel/notes/ci-relaxations-2026-11-11.md`:
+the backlog, epic C templates and guard fixes must meet the recorded
+condition and the operator decides. Jobs return before required checks.
+Line pushes never return. The separate daily workflows stay disabled;
+TSK-1321's active-line and admission evidence remain with the Director.
 
 ## Technical
 
@@ -663,7 +688,7 @@ ADR-0013, ADR-0014 and the parity section of
 | Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the interactive Codex CLI in a Herdr tab (the plugin only as a recorded fallback), and Codex to Claude through task-scoped Herdr (tmux as the last fallback) with the qualified tracked Stop/StopFailure lifecycle, as `cf-model-orchestrator/resources/routing/transport.md` states. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
 | Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
 | CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
-| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as two shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
+| Coverage | The one instrumented run, `cargo llvm-cov nextest --workspace --no-fail-fast --fail-under-lines 90 --profile codeflow` (the `rust-coverage` target of the full gate), passes locally. CI runs the same command as three hash shards and applies the same floor to their merged count. CI billing or availability never substitutes for this evidence |
 | Distribution plan | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows |
 | Source archive | `source.tar.gz` comes from `git archive`, so it leaves out `docs/verification/` (`export-ignore` in `.gitattributes`). A contract test compares the real archive with the tracked files |
 | Installers | Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |
