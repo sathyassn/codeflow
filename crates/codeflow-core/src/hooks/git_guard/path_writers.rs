@@ -35,11 +35,11 @@ type Entry = (git2::Oid, u32);
 type Entries = BTreeMap<String, Entry>;
 
 /// How many tree entries one judgment reads before it stops and refuses.
-const ENTRY_LIMIT: usize = 200_000;
+const ENTRY_LIMIT: usize = codeflow_limits::PATH_WRITER_ENTRY_LIMIT.default_count();
 /// How many commits a picked range may hold before the guard refuses it.
-const COMMIT_LIMIT: usize = 10_000;
+const COMMIT_LIMIT: usize = codeflow_limits::PATH_WRITER_COMMIT_LIMIT.default_count();
 /// The largest patch or mailbox file the guard reads.
-const PATCH_LIMIT: u64 = 64 * 1024 * 1024;
+const PATCH_LIMIT: u64 = codeflow_limits::PATH_WRITER_PATCH_BYTES.default;
 
 /// Global options that change where Git reads the repository, its index,
 /// its objects, its configuration or its attributes. A path writer behind one

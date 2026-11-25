@@ -89,9 +89,11 @@ fn opens_or_closes(text: &str, tag: &str) -> bool {
 /// at most 60 characters), the criterion `name` and the tag `label`.
 #[must_use]
 pub fn hidden_tag_message(name: &str, label: &str, line: &str) -> String {
-    const LIMIT: usize = 60;
-    let mut quoted: String = line.chars().take(LIMIT).collect();
-    if line.chars().count() > LIMIT {
+    let mut quoted: String = line
+        .chars()
+        .take(codeflow_limits::RECORD_TEXT_LIMIT.count())
+        .collect();
+    if line.chars().count() > codeflow_limits::RECORD_TEXT_LIMIT.count() {
         quoted.push_str("...");
     }
     format!(

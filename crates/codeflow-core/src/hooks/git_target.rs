@@ -424,9 +424,6 @@ pub(super) enum Cwd {
     Unknown(String),
 }
 
-/// More directory candidates than this are treated as unknown.
-const MAX_CANDIDATES: usize = 8;
-
 impl Cwd {
     fn session() -> Self {
         Self::Paths(vec![String::new()])
@@ -442,7 +439,7 @@ impl Cwd {
                         all.push(p.clone());
                     }
                 }
-                if all.len() > MAX_CANDIDATES {
+                if all.len() > codeflow_limits::GUARD_TARGET_CANDIDATES.count() {
                     Self::Unknown("too many possible directories".to_string())
                 } else {
                     Self::Paths(all)

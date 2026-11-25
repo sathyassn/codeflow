@@ -1045,7 +1045,7 @@ async fn poll_events(
                 ],
             );
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(codeflow_limits::PRESENT_SERVICE_POLL.wait()).await;
     }
 }
 
@@ -1600,7 +1600,7 @@ impl OwnerLifeline {
 
 async fn monitor_session(state: AppState, mut owner: Option<OwnerLifeline>) {
     loop {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        tokio::time::sleep(codeflow_limits::PRESENT_SERVICE_RETRY.wait()).await;
         if owner.as_mut().is_some_and(OwnerLifeline::has_exited) {
             let _ = state.store.close(state.session_id);
             cleanup_owned_browser(&state);

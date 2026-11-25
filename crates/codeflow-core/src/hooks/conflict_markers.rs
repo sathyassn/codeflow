@@ -22,14 +22,14 @@ use super::Violation;
 pub const RULE: &str = "git.conflict_markers";
 
 /// Git's marker length when no attribute sets one.
-pub const DEFAULT_SIZE: usize = 7;
+pub const DEFAULT_SIZE: usize = codeflow_limits::CONFLICT_MARKER_SIZE.default_count();
 
 /// The attribute git's merge and `git diff --check` read.
 const ATTRIBUTE: &str = "conflict-marker-size";
 
 /// Git's binary heuristic, applied to content: a NUL byte in the first 8000
 /// bytes.
-const BINARY_SNIFF_BYTES: usize = 8000;
+const BINARY_SNIFF_BYTES: usize = codeflow_limits::GIT_BINARY_SNIFF_BYTES.default_count();
 
 /// The kind of one marker line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

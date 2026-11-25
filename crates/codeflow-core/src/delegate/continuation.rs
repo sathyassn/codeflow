@@ -22,9 +22,6 @@ use std::path::Path;
 
 use super::{hex_sha256, DelegateError};
 
-/// Largest session transcript read to verify a launch.
-const MAX_TRANSCRIPT_BYTES: u64 = 512 * 1024 * 1024;
-
 const OPEN: &str = "<task-notification>\n";
 const CLOSE: &str = "\n</task-notification>";
 
@@ -221,7 +218,9 @@ fn session_entries<'a>(
     }
     let metadata = std::fs::symlink_metadata(transcript)
         .map_err(|error| format!("cannot inspect the session transcript: {error}"))?;
-    if !metadata.file_type().is_file() || metadata.len() > MAX_TRANSCRIPT_BYTES {
+    if !metadata.file_type().is_file()
+        || metadata.len() > codeflow_limits::DELEGATE_MAX_TRANSCRIPT_BYTES.value()
+    {
         return Err("the session transcript is not a bounded regular file".to_string());
     }
     let file = File::open(transcript)

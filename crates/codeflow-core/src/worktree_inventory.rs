@@ -7,9 +7,6 @@
 
 use std::path::{Path, PathBuf};
 
-/// The most entries shown per list.
-const SHOWN: usize = 5;
-
 /// One worktree's work that exists nowhere else.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorktreeWork {
@@ -180,8 +177,14 @@ pub fn render(inventory: &[WorktreeWork]) -> crate::git::TextBlock {
         if items.is_empty() {
             return;
         }
-        let shown: Vec<&str> = items.iter().take(SHOWN).map(String::as_str).collect();
-        let more = items.len().saturating_sub(SHOWN);
+        let shown: Vec<&str> = items
+            .iter()
+            .take(codeflow_limits::WORKTREE_INVENTORY_SHOWN.count())
+            .map(String::as_str)
+            .collect();
+        let more = items
+            .len()
+            .saturating_sub(codeflow_limits::WORKTREE_INVENTORY_SHOWN.count());
         let _ = writeln!(
             out,
             "    {label}: {} ({}{})",

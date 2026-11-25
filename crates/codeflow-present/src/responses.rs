@@ -470,7 +470,7 @@ impl Ledger {
 /// The most bytes a `delivered` or `acknowledged` line takes with its
 /// newline: its largest sequence and time come to 136. Each stored answer
 /// keeps this much room twice under the byte bound, each review once.
-pub(crate) const STATE_LINE_BYTES: u64 = 136;
+pub(crate) const STATE_LINE_BYTES: u64 = codeflow_limits::PRESENT_STATE_LINE_BYTES.default;
 
 /// Why a bound refuses a line while the ledger may still have room: that
 /// room is kept for the answers it already holds.

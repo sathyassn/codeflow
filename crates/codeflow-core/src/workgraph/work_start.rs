@@ -24,18 +24,11 @@ use crate::workgraph::{
 /// Shared wording for a tracking state that cannot be determined.
 pub const TRACKING_STATE_MESSAGE: &str = "cannot determine durable-work tracking";
 
-/// Maximum provider wait for the review evidence of one predecessor pin.
-pub const REVIEW_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-
 /// Render the tracking-state refusal consistently across commands.
 #[must_use]
 pub fn tracking_state_message(error: impl std::fmt::Display) -> String {
     format!("{TRACKING_STATE_MESSAGE}: {error}")
 }
-
-/// Maximum task-home entries inspected by the activation probe. An exhausted
-/// inventory is an error, never evidence that durable work is absent.
-const MAX_ACTIVATION_ENTRIES: usize = 16_384;
 
 #[derive(Debug, Error)]
 pub enum DurableTrackingError {
@@ -51,7 +44,7 @@ pub enum DurableTrackingError {
     StateRead(#[from] crate::scaffold::ScaffoldError),
     #[error("unsupported CodeFlow state schema version {0}")]
     UnsupportedStateVersion(u32),
-    #[error("CodeFlow task-home inventory exceeds {MAX_ACTIVATION_ENTRIES} entries")]
+    #[error("CodeFlow task-home inventory exceeds {} entries", codeflow_limits::WORK_START_MAX_ACTIVATION_ENTRIES.count())]
     TaskInventoryLimit,
     #[error("cannot inspect CodeFlow task-home inventory")]
     TaskInventoryUnreadable,
@@ -535,7 +528,7 @@ pub fn durable_work_tracking_enabled(repo_root: &Path) -> Result<bool, DurableTr
 
     crate::workgraph::layout::has_task_record_path(
         &repo_root.join("project-management"),
-        MAX_ACTIVATION_ENTRIES,
+        codeflow_limits::WORK_START_MAX_ACTIVATION_ENTRIES.count(),
     )
     .map_err(|error| match error {
         crate::workgraph::layout::InventoryError::LimitExceeded => {
@@ -2766,7 +2759,6 @@ pub fn anchored_project_file(
     task_id: &str,
     path: &str,
 ) -> Result<AnchoredFile, String> {
-    const MAX_BYTES: usize = 1024 * 1024;
     if !is_canonical_task_format_id(task_id) {
         return Err("design authority requires a canonical task id".into());
     }
@@ -2850,8 +2842,11 @@ pub fn anchored_project_file(
                 return Err(format!("{path} on {target} must be a regular file"));
             }
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
-            if blob.size() > MAX_BYTES {
-                return Err(format!("{path} on {target} exceeds {MAX_BYTES} bytes"));
+            if blob.size() > codeflow_limits::WORK_START_MAX_BYTES.count() {
+                return Err(format!(
+                    "{path} on {target} exceeds {work_start_max_bytes} bytes",
+                    work_start_max_bytes = codeflow_limits::WORK_START_MAX_BYTES.count()
+                ));
             }
             Some(blob.content().to_vec())
         }
@@ -3671,10 +3666,6 @@ fn markdown_stem(file: &str) -> Option<&str> {
 /// The tree every work record lives under.
 const RECORDS_ROOT: &str = "project-management";
 
-/// The largest work record a tree read accepts. The largest real record is
-/// about 100 KiB; the bound matches the portal's per-file source limit.
-const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
-
 #[cfg(test)]
 thread_local! {
     /// How many trees `records_from_tree` has parsed on this thread.
@@ -3737,7 +3728,9 @@ pub(crate) fn records_from_tree_matching(
                 return crate::git::Walk::Stop;
             }
         };
-        if u64::try_from(size).map_or(true, |size| size > MAX_RECORD_BYTES) {
+        if u64::try_from(size).map_or(true, |size| {
+            size > codeflow_limits::WORK_START_MAX_RECORD_BYTES.value()
+        }) {
             failure = Some(format!(
                 "{path}: record exceeds the 4 MiB bound for a work record"
             ));

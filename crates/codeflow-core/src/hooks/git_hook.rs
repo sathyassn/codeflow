@@ -1636,10 +1636,6 @@ fn is_force_update(repo: &Repository, r: &PushRef) -> Result<bool, String> {
         .map_err(|e| format!("cannot read push ancestry: {e}"))
 }
 
-/// Time budget for the whole pre-push set. A push set that takes longer still
-/// runs to its verdict, but the hook names the slowest step (TSK-132).
-pub const PUSH_SET_BUDGET: std::time::Duration = std::time::Duration::from_secs(60);
-
 /// One timed step of the push set.
 #[derive(Debug, Clone)]
 pub struct PushStep {
@@ -3787,16 +3783,29 @@ mod tests {
             step("codeflow ci --head abc --branch feat/x", 70),
             step("release preflight (feat/x)", 2),
         ];
-        let note = over_budget_note(&steps, std::time::Duration::from_secs(72), PUSH_SET_BUDGET)
-            .unwrap()
-            .to_string();
+        let note = over_budget_note(
+            &steps,
+            std::time::Duration::from_secs(72),
+            codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait(),
+        )
+        .unwrap()
+        .to_string();
         assert!(note.contains("72.0s, over its 60s budget"), "{note}");
         assert!(note.contains("built-in `codeflow ci"), "{note}");
         assert!(!note.contains("modes.quick"), "{note}");
-        assert!(over_budget_note(&steps, PUSH_SET_BUDGET, PUSH_SET_BUDGET).is_none());
-        let note = over_budget_note(&[], std::time::Duration::from_secs(65), PUSH_SET_BUDGET)
-            .unwrap()
-            .to_string();
+        assert!(over_budget_note(
+            &steps,
+            codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait(),
+            codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait()
+        )
+        .is_none());
+        let note = over_budget_note(
+            &[],
+            std::time::Duration::from_secs(65),
+            codeflow_limits::PUSH_SET_BUDGET_SECONDS.wait(),
+        )
+        .unwrap()
+        .to_string();
         assert!(note.contains("65.0s, over its 60s budget"), "{note}");
     }
 

@@ -1510,7 +1510,7 @@ struct AuthorityFiles {
 /// packed refs, worktree configs and remote-tracking refs, as far as a
 /// bounded walk lists them.
 fn authority_files(root: &Path) -> AuthorityFiles {
-    const WALK_LIMIT: usize = 4096;
+    const WALK_LIMIT: usize = codeflow_limits::ARGUMENT_WALK_LIMIT.default_count();
     let Ok(Some(repo)) = crate::hooks::repo::open(root) else {
         return AuthorityFiles {
             files: Vec::new(),

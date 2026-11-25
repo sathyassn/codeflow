@@ -16,7 +16,7 @@ use serde_json::Value;
 
 use super::actor::{is_follow_up_id, is_lane_id, is_stream_id, RecordedBy, INTAKE};
 use super::reference::Link;
-use super::text::{check, check_required, LONG, MEDIUM, SHORT};
+use super::text::{check, check_required};
 
 /// The schema this build writes and reads.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -225,10 +225,20 @@ pub fn validate(envelope: &Envelope) -> Result<Data, String> {
     super::parse_time(&envelope.recorded_at)?;
     envelope.recorded_by.validate()?;
     if let Some(comment) = &envelope.comment {
-        check("comment", comment, MEDIUM, true)?;
+        check(
+            "comment",
+            comment,
+            codeflow_limits::COORD_TEXT_MEDIUM.count(),
+            true,
+        )?;
     }
     if let Some(key) = &envelope.idempotency_key {
-        check_required("idempotency_key", key, SHORT, false)?;
+        check_required(
+            "idempotency_key",
+            key,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
     }
     let subject_ok = match envelope.event.subject() {
         Subject::FollowUp => is_follow_up_id(&envelope.subject_id),
@@ -693,19 +703,39 @@ impl Data {
             Self::ItemAdded(item) => validate_follow_up(item),
             Self::ItemUpdated(update) => {
                 if let Some(title) = &update.title {
-                    check_required("title", title, SHORT, false)?;
+                    check_required(
+                        "title",
+                        title,
+                        codeflow_limits::COORD_TEXT_SHORT.count(),
+                        false,
+                    )?;
                 }
                 if let Some(description) = &update.description {
-                    check_required("description", description, LONG, true)?;
+                    check_required(
+                        "description",
+                        description,
+                        codeflow_limits::COORD_TEXT_LONG.count(),
+                        true,
+                    )?;
                 }
                 if let Some(done_when) = &update.done_when {
-                    check_required("done_when", done_when, MEDIUM, true)?;
+                    check_required(
+                        "done_when",
+                        done_when,
+                        codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                        true,
+                    )?;
                 }
                 if let Some(links) = &update.links {
                     validate_links(links)?;
                 }
                 if let Some(reason) = &update.no_link_reason {
-                    check_required("no_link_reason", reason, MEDIUM, true)?;
+                    check_required(
+                        "no_link_reason",
+                        reason,
+                        codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                        true,
+                    )?;
                 }
                 if let Some(next) = &update.next_check {
                     super::parse_time(next)?;
@@ -714,7 +744,12 @@ impl Data {
                     validate_waits(waits)?;
                 }
                 if let Some(condition) = &update.awaiting_operator {
-                    check("awaiting_operator", condition, MEDIUM, true)?;
+                    check(
+                        "awaiting_operator",
+                        condition,
+                        codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                        true,
+                    )?;
                 }
                 if let Some(observed) = &update.observed {
                     validate_observations(observed)?;
@@ -725,11 +760,21 @@ impl Data {
                 Ok(())
             }
             Self::ItemChecked(check_data) => {
-                check_required("observed", &check_data.observed, MEDIUM, true)?;
+                check_required(
+                    "observed",
+                    &check_data.observed,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )?;
                 super::parse_time(&check_data.next_check)?;
                 validate_observations(&check_data.observations)?;
                 if let Some(source) = &check_data.answer_source {
-                    check_required("answer_source", source, SHORT, false)?;
+                    check_required(
+                        "answer_source",
+                        source,
+                        codeflow_limits::COORD_TEXT_SHORT.count(),
+                        false,
+                    )?;
                 }
                 Ok(())
             }
@@ -741,15 +786,30 @@ impl Data {
                 Ok(())
             }
             Self::ItemClosed(evidence) => {
-                check_required("evidence.reference", &evidence.reference, MEDIUM, false)?;
-                check_required("evidence.source", &evidence.source, SHORT, false)?;
+                check_required(
+                    "evidence.reference",
+                    &evidence.reference,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    false,
+                )?;
+                check_required(
+                    "evidence.source",
+                    &evidence.source,
+                    codeflow_limits::COORD_TEXT_SHORT.count(),
+                    false,
+                )?;
                 for (field, value) in [
                     ("evidence.repository", &evidence.repository),
                     ("evidence.target", &evidence.target),
                     ("evidence.revision", &evidence.revision),
                 ] {
                     if let Some(value) = value {
-                        check_required(field, value, SHORT, false)?;
+                        check_required(
+                            field,
+                            value,
+                            codeflow_limits::COORD_TEXT_SHORT.count(),
+                            false,
+                        )?;
                     }
                 }
                 super::parse_time(&evidence.observed_at)?;
@@ -761,8 +821,18 @@ impl Data {
                 Ok(())
             }
             Self::ItemDropped(drop) => {
-                check_required("reason", &drop.reason, MEDIUM, true)?;
-                check_required("disposition", &drop.disposition, MEDIUM, true)
+                check_required(
+                    "reason",
+                    &drop.reason,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )?;
+                check_required(
+                    "disposition",
+                    &drop.disposition,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )
             }
             Self::ItemPurged(purge) => {
                 if purge.events == 0 {
@@ -770,9 +840,12 @@ impl Data {
                 }
                 Ok(())
             }
-            Self::ItemReopened(reason) | Self::StreamClosed(reason) => {
-                check_required("reason", &reason.reason, MEDIUM, true)
-            }
+            Self::ItemReopened(reason) | Self::StreamClosed(reason) => check_required(
+                "reason",
+                &reason.reason,
+                codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                true,
+            ),
             Self::StreamOpened(scope)
             | Self::StreamScopeChanged(scope)
             | Self::LaneScopeChanged(scope) => validate_scope(scope.slug.as_deref(), &scope.scope),
@@ -788,9 +861,19 @@ impl Data {
             }
             Self::SeatDetached(detach) => {
                 check_required("seat_instance", &detach.seat_instance, 120, false)?;
-                check_required("reason", &detach.reason, MEDIUM, true)
+                check_required(
+                    "reason",
+                    &detach.reason,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )
             }
-            Self::LaneReported(report) => check_required("summary", &report.summary, LONG, true),
+            Self::LaneReported(report) => check_required(
+                "summary",
+                &report.summary,
+                codeflow_limits::COORD_TEXT_LONG.count(),
+                true,
+            ),
             Self::LaneAdopted(adopt) | Self::CoordinatorAdopted(adopt) => {
                 check_required("expected_holder", &adopt.expected_holder, 120, false)?;
                 check_required("new_holder", &adopt.new_holder, 120, false)?;
@@ -800,8 +883,18 @@ impl Data {
                 Ok(())
             }
             Self::LaneClosed(close) => {
-                check_required("detail", &close.detail, MEDIUM, true)?;
-                check_required("disposition", &close.disposition, MEDIUM, true)?;
+                check_required(
+                    "detail",
+                    &close.detail,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )?;
+                check_required(
+                    "disposition",
+                    &close.disposition,
+                    codeflow_limits::COORD_TEXT_MEDIUM.count(),
+                    true,
+                )?;
                 match (close.outcome, &close.successor) {
                     (LaneOutcome::Superseded, Some(successor)) if is_lane_id(successor) => Ok(()),
                     (LaneOutcome::Superseded, _) => {
@@ -832,11 +925,31 @@ impl Data {
 }
 
 fn validate_follow_up(item: &FollowUp) -> Result<(), String> {
-    check_required("title", &item.title, SHORT, false)?;
-    check_required("description", &item.description, LONG, true)?;
-    check_required("done_when", &item.done_when, MEDIUM, true)?;
+    check_required(
+        "title",
+        &item.title,
+        codeflow_limits::COORD_TEXT_SHORT.count(),
+        false,
+    )?;
+    check_required(
+        "description",
+        &item.description,
+        codeflow_limits::COORD_TEXT_LONG.count(),
+        true,
+    )?;
+    check_required(
+        "done_when",
+        &item.done_when,
+        codeflow_limits::COORD_TEXT_MEDIUM.count(),
+        true,
+    )?;
     if let Some(reference) = &item.source_reference {
-        check_required("source_reference", reference, SHORT, false)?;
+        check_required(
+            "source_reference",
+            reference,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
     }
     validate_stream(&item.stream)?;
     validate_holder(&item.holder)?;
@@ -848,28 +961,43 @@ fn validate_follow_up(item: &FollowUp) -> Result<(), String> {
         (false, Some(_)) => {
             return Err("a follow-up with links carries no no_link_reason".into());
         }
-        (true, Some(reason)) => check_required("no_link_reason", reason, MEDIUM, true)?,
+        (true, Some(reason)) => check_required(
+            "no_link_reason",
+            reason,
+            codeflow_limits::COORD_TEXT_MEDIUM.count(),
+            true,
+        )?,
         (false, None) => {}
     }
     super::parse_time(&item.next_check)?;
     if let Some(schedule) = &item.schedule {
-        check_required("schedule", schedule, SHORT, false)?;
+        check_required(
+            "schedule",
+            schedule,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
     }
     validate_waits(&item.waits_on)?;
     if let Some(condition) = &item.awaiting_operator {
-        check_required("awaiting_operator", condition, MEDIUM, true)?;
+        check_required(
+            "awaiting_operator",
+            condition,
+            codeflow_limits::COORD_TEXT_MEDIUM.count(),
+            true,
+        )?;
     }
     for rejected in &item.rejected_suggestions {
         check_required(
             "rejected_suggestions.reference",
             &rejected.reference,
-            SHORT,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
             false,
         )?;
         check_required(
             "rejected_suggestions.reason",
             &rejected.reason,
-            MEDIUM,
+            codeflow_limits::COORD_TEXT_MEDIUM.count(),
             true,
         )?;
     }
@@ -912,10 +1040,25 @@ fn validate_observations(observations: &[Observation]) -> Result<(), String> {
         return Err("at most 64 observations".into());
     }
     for observation in observations {
-        check_required("observation.link", &observation.link, SHORT, false)?;
-        check_required("observation.state", &observation.state, SHORT, false)?;
+        check_required(
+            "observation.link",
+            &observation.link,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
+        check_required(
+            "observation.state",
+            &observation.state,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
         if let Some(version) = &observation.version {
-            check_required("observation.version", version, SHORT, false)?;
+            check_required(
+                "observation.version",
+                version,
+                codeflow_limits::COORD_TEXT_SHORT.count(),
+                false,
+            )?;
         }
     }
     Ok(())
@@ -958,7 +1101,12 @@ fn validate_scope(slug: Option<&str>, scope: &[String]) -> Result<(), String> {
         return Err("a scope names at most 32 links".into());
     }
     for entry in scope {
-        check_required("scope", entry, SHORT, false)?;
+        check_required(
+            "scope",
+            entry,
+            codeflow_limits::COORD_TEXT_SHORT.count(),
+            false,
+        )?;
     }
     Ok(())
 }

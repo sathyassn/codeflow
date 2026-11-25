@@ -446,8 +446,11 @@ fn forecast_files(
         let bytes = if super::sources::secret_path(&path) {
             Err("credential and secret file paths are not forecast inputs".to_string())
         } else {
-            crate::bounded_file::read_bounded_regular(&path, super::model::MAX_INPUT_BYTES)
-                .map_err(|_| "unreadable, not a regular file, or over 1 MiB".to_string())
+            crate::bounded_file::read_bounded_regular(
+                &path,
+                codeflow_limits::ESTIMATE_MAX_INPUT_BYTES.value(),
+            )
+            .map_err(|_| "unreadable, not a regular file, or over 1 MiB".to_string())
         };
         files.push((explicit.display().to_string(), bytes));
     } else if let Adoption::Adopted {
@@ -469,8 +472,11 @@ fn forecast_files(
             let bytes = confined.as_ref().map_or_else(
                 || Err("the project root cannot be opened safely".to_string()),
                 |root| {
-                    root.read(Path::new(path), super::model::MAX_INPUT_BYTES)
-                        .map_err(|_| "unreadable, not a regular file, or over 1 MiB".to_string())
+                    root.read(
+                        Path::new(path),
+                        codeflow_limits::ESTIMATE_MAX_INPUT_BYTES.value(),
+                    )
+                    .map_err(|_| "unreadable, not a regular file, or over 1 MiB".to_string())
                 },
             );
             files.push((path.clone(), bytes));

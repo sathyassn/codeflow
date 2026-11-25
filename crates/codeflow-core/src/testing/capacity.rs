@@ -4,19 +4,68 @@
 //! Heavy runs (full and essential gates, heavy quick targets, `codeflow
 //! reserve`) never queue behind each other. The host has a job budget: its
 //! logical cores, lowered when available memory cannot give each job
-//! [`MEMORY_PER_JOB`], or the `execution.host_jobs` value a project sets.
-//! A run that finds the host within capacity uses its own width (its
-//! `execution.worker_budget`, else the whole budget); a run that finds more
-//! runs active than the budget holds at that width starts at once with the
-//! budget divided among the active runs, at least one job.
+//! [`codeflow_limits::MEMORY_PER_JOB`], or the `execution.host_jobs` value a
+//! project sets. A run that finds the host within capacity uses its own width
+//! (its `execution.worker_budget`, else the whole budget); a run that finds
+//! more runs active than the budget holds at that width starts at once with
+//! the budget divided among the active runs, at least one job.
+//!
+//! The computed budget is guidance (ADR-0083). It sizes a run nobody sized,
+//! and it never lowers a value the project set: an `execution.worker_budget`
+//! above it is used as set, with a warning (TSK-1299).
 
-/// Available memory one compile or test job is assumed to need when the
-/// host budget is computed.
-pub const MEMORY_PER_JOB: u64 = 1 << 30;
+/// What one heavy run gets from the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunShare {
+    /// The jobs the run uses.
+    pub jobs: usize,
+    /// The budget the run was measured against.
+    pub host: usize,
+    /// Whether sharing the host lowered the run below the width it asked for.
+    pub lowered: bool,
+    /// The warning to report when a value the project set is above the
+    /// memory-derived budget. The run goes ahead either way.
+    pub warning: Option<&'static str>,
+}
+
+/// The share of a run with the project's `configured` host budget, its
+/// `per_run` width, and `active` heavy runs on the host.
+#[must_use]
+pub fn run_share(configured: Option<usize>, per_run: Option<usize>, active: usize) -> RunShare {
+    share_of(configured, host_jobs(None), per_run, active)
+}
+
+/// [`run_share`] against a `computed` budget. Only a budget the project set
+/// bounds a width the project set.
+fn share_of(
+    configured: Option<usize>,
+    computed: usize,
+    per_run: Option<usize>,
+    active: usize,
+) -> RunShare {
+    if let (None, Some(width)) = (configured, per_run) {
+        let jobs = width.max(1);
+        return RunShare {
+            jobs,
+            host: computed,
+            lowered: false,
+            warning: (jobs > computed).then_some(codeflow_limits::WORKER_BUDGET.warning),
+        };
+    }
+    let host = configured.map_or(computed, |jobs| jobs.max(1));
+    let jobs = run_jobs(host, per_run, active);
+    RunShare {
+        jobs,
+        host,
+        lowered: lowered(host, per_run, active),
+        warning: (jobs > computed).then_some(codeflow_limits::HOST_JOBS.warning),
+    }
+}
 
 /// The host's job budget: `configured` when set, else the logical cores,
-/// lowered to the available memory divided by [`MEMORY_PER_JOB`] when that
-/// can be read, and never below one.
+/// lowered to the available memory divided by
+/// [`codeflow_limits::MEMORY_PER_JOB`] when that can be read, and never below
+/// one.
 #[must_use]
 pub fn host_jobs(configured: Option<usize>) -> usize {
     if let Some(jobs) = configured {
@@ -30,7 +79,11 @@ pub fn host_jobs(configured: Option<usize>) -> usize {
 #[must_use]
 pub fn budget_from(cores: usize, memory: Option<u64>) -> usize {
     let by_memory = memory.map_or(usize::MAX, |bytes| {
-        usize::try_from(bytes / MEMORY_PER_JOB).unwrap_or(usize::MAX)
+        bytes
+            .checked_div(codeflow_limits::MEMORY_PER_JOB.value())
+            .map_or(usize::MAX, |jobs| {
+                usize::try_from(jobs).unwrap_or(usize::MAX)
+            })
     });
     cores.min(by_memory).max(1)
 }
@@ -140,8 +193,9 @@ mod tests {
     #[test]
     fn the_budget_is_cores_lowered_by_available_memory() {
         assert_eq!(budget_from(16, None), 16);
-        assert_eq!(budget_from(16, Some(8 * MEMORY_PER_JOB)), 8);
-        assert_eq!(budget_from(16, Some(64 * MEMORY_PER_JOB)), 16);
+        let per_job = codeflow_limits::MEMORY_PER_JOB.default;
+        assert_eq!(budget_from(16, Some(8 * per_job)), 8);
+        assert_eq!(budget_from(16, Some(64 * per_job)), 16);
         assert_eq!(budget_from(16, Some(0)), 1);
         assert_eq!(host_jobs(Some(6)), 6);
         assert_eq!(host_jobs(Some(0)), 1);
@@ -169,6 +223,41 @@ mod tests {
         assert_eq!(run_jobs(4, Some(9), 3), 1);
         // Past any run count a run still starts with one job.
         assert_eq!(run_jobs(4, Some(2), 1000), 1);
+    }
+
+    #[test]
+    fn an_explicit_worker_budget_above_the_computed_budget_is_used_as_set() {
+        // Memory suggests two jobs; the project asked for nine.
+        let share = share_of(None, 2, Some(9), 1);
+        assert_eq!(share.jobs, 9);
+        assert!(!share.lowered);
+        assert_eq!(share.warning, Some(codeflow_limits::WORKER_BUDGET.warning));
+        // Other runs on the host do not lower it either.
+        assert_eq!(share_of(None, 2, Some(9), 5).jobs, 9);
+        // Within the computed budget there is nothing to warn about.
+        assert_eq!(share_of(None, 16, Some(4), 1).warning, None);
+    }
+
+    #[test]
+    fn a_large_host_budget_runs_with_a_warning() {
+        let share = share_of(Some(64), 2, None, 1);
+        assert_eq!(share.jobs, 64);
+        assert_eq!(share.warning, Some(codeflow_limits::HOST_JOBS.warning));
+    }
+
+    #[test]
+    fn a_host_budget_the_project_set_still_bounds_a_shared_run() {
+        let share = share_of(Some(4), 64, Some(2), 4);
+        assert_eq!(share.jobs, 1);
+        assert!(share.lowered);
+        assert_eq!(share.warning, None);
+    }
+
+    #[test]
+    fn a_run_nobody_sized_takes_the_computed_budget_without_a_warning() {
+        let share = share_of(None, 2, None, 1);
+        assert_eq!(share.jobs, 2);
+        assert_eq!(share.warning, None);
     }
 
     #[test]

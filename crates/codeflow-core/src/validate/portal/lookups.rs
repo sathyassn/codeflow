@@ -19,6 +19,8 @@ use crate::scaffold::manifest::{ScaffoldManifest, Tier};
 pub const SKILL_CATALOG: &str = "skill-catalog";
 /// The derivation name of the policy reference.
 pub const POLICY_REFERENCE: &str = "policy-reference";
+/// The derivation name of the limits page.
+pub const LIMITS_PAGE: &str = "limits";
 /// The heading of the authored hook stage section of the policy reference.
 pub const HOOK_STAGES_HEADING: &str = "## Git hook stages";
 
@@ -161,6 +163,7 @@ pub fn policy_reference() -> Generated {
         let group = match spec.path.split_once('.') {
             Some(("git", _)) => "Git keys",
             Some(("security", _)) => "Security keys",
+            Some(("coord" | "limits", _)) => "Limit keys",
             _ => "Top-level keys",
         };
         if sections.last().is_none_or(|(name, _)| *name != group) {
@@ -201,6 +204,61 @@ pub fn policy_reference() -> Generated {
     }
 }
 
+/// The columns of each limits page table.
+pub const LIMIT_COLUMNS: [&str; 6] = ["Key", "Default", "Bounds", "Class", "What it limits", "Why"];
+
+/// The generated limits page: every limit in the registry, by where a project
+/// sets it (TSK-1299).
+#[must_use]
+pub fn limits_page() -> Generated {
+    use crate::hooks::limits::{LimitClass, Route, LIMITS};
+    let row = |limit: &crate::hooks::limits::Limit| {
+        let bounds = match (limit.route, limit.class) {
+            (Route::Fixed, _) => "fixed".to_string(),
+            (_, LimitClass::Guidance) => "none; reported only".to_string(),
+            _ => limit.valid_text(),
+        };
+        format!(
+            "| {} | `{}` {} | {} | {} | {} | {} |",
+            limit
+                .key
+                .map_or_else(|| "none".to_string(), |key| format!("`{key}`")),
+            limit.default,
+            limit.unit,
+            cell(&bounds),
+            limit.class.label(),
+            cell(limit.name),
+            cell(limit.reason)
+        )
+    };
+    let mut text = String::from(
+        "Every limit CodeFlow applies: timeouts, retries, counts, sizes, waits, parallel numbers and word limits, each with its key, default, bounds and class. The binary generates this page from its limits registry, so a limit a maintainer adds appears here without further work. To choose which models CodeFlow uses, see [model and harness upgrades](model-upgrades.md).\n\nSet a limit by adding its key to the file its section names. An absent key keeps the default. A value of the wrong type or outside the bounds refuses, naming the key and its bounds.\n\n- **Operational** limits tune how long or how much work may take. The bounds are only what correctness needs, and a large value is never refused.\n- **Security** limits keep a control fail-closed. You can tighten one to its floor at any time, and raise it to its ceiling. The ceiling leaves a buffer: the guard deadline always stays inside the guard hook timeout.\n- **Guidance** values are only reported. CodeFlow warns, and never refuses, queues, waits or lowers what you set.\n"
+    );
+    let mut rows = 0;
+    for (heading, route) in [
+        ("Set in `.codeflow/policy.json`", Route::Policy),
+        ("Set in the test configuration", Route::TestConfig),
+        ("Set in `.codeflow/ci-wait.json`", Route::CiWait),
+        ("Set in the present configuration", Route::PresentConfig),
+        ("Set on the command line", Route::CommandLine),
+        ("Not settable", Route::Fixed),
+    ] {
+        let table: Vec<String> = LIMITS
+            .iter()
+            .filter(|limit| limit.route == route)
+            .map(row)
+            .collect();
+        rows += table.len();
+        write!(
+            text,
+            "\n## {heading}\n\n{}\n",
+            lookup_table(&LIMIT_COLUMNS, &table)
+        )
+        .expect("writing to a String cannot fail");
+    }
+    Generated { text, rows }
+}
+
 /// The stage names in the first column of the table under
 /// [`HOOK_STAGES_HEADING`], backticks removed, or `None` when the section or
 /// its table is missing.
@@ -237,6 +295,7 @@ pub fn title_of(derive: &str) -> Option<&'static str> {
     match derive {
         SKILL_CATALOG => Some("Skills"),
         POLICY_REFERENCE => Some("Policy and hook reference"),
+        LIMITS_PAGE => Some("Limits"),
         _ => None,
     }
 }
@@ -258,6 +317,7 @@ pub fn verify_lookup_page(
     let title = title_of(derive).ok_or_else(|| format!("{derive} is not a generated lookup"))?;
     let generated = match derive {
         SKILL_CATALOG => skill_catalog(inputs.assets)?,
+        LIMITS_PAGE => limits_page(),
         _ => policy_reference(),
     };
     let expected = page_with_title(title, &generated);
@@ -266,11 +326,13 @@ pub fn verify_lookup_page(
             "the committed page differs from its {derive} derivation; regenerate it"
         ));
     };
-    if derive == SKILL_CATALOG {
+    if derive == SKILL_CATALOG || derive == LIMITS_PAGE {
         return if rest.trim().is_empty() {
             Ok(generated.rows)
         } else {
-            Err("the skill catalog carries text after its generated region".into())
+            Err(format!(
+                "the {derive} page carries text after its generated region"
+            ))
         };
     }
     let mut on_page =

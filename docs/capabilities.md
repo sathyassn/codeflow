@@ -267,8 +267,8 @@ Other checks on these planes:
 | Refusals | from the ledger; `unknown` before the clone began recording |
 | Baseline | pull requests 568 to 644 in `docs/verification/ceremony-baseline-2026-09-28.md`; the release checklist compares each release's window with it |
 
-Detail: [enforcement planes](architecture/enforcement-planes.md) and
-[policy reference](policy-reference.md).
+Detail: [enforcement planes](architecture/enforcement-planes.md),
+[policy reference](policy-reference.md) and [limits](limits.md).
 
 #### remote-protect-doctor
 

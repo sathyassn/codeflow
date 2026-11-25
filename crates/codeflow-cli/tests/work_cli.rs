@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 #[cfg(unix)]
-use codeflow_core::workgraph::work_start::REVIEW_LOOKUP_TIMEOUT;
+use codeflow_limits::WORK_START_REVIEW_LOOKUP_TIMEOUT_SECONDS;
 
 fn git(root: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
@@ -457,7 +457,7 @@ fn failed_review_providers(level: &str) {
     let child = "task/TSK-002-work-tsk-002";
     let timeout_reason = format!(
         "provider timed out after {} seconds",
-        REVIEW_LOOKUP_TIMEOUT.as_secs()
+        WORK_START_REVIEW_LOOKUP_TIMEOUT_SECONDS.default
     );
     for (provider, reason, hangs) in [
         ("exit 1", "provider failed", false),
@@ -491,7 +491,10 @@ fn failed_review_providers(level: &str) {
             let error = String::from_utf8_lossy(&out.stderr);
             assert!(error.contains(reason), "{command}: {error}");
             if hangs {
-                assert!(elapsed >= REVIEW_LOOKUP_TIMEOUT, "{elapsed:?}");
+                assert!(
+                    elapsed >= WORK_START_REVIEW_LOOKUP_TIMEOUT_SECONDS.wait(),
+                    "{elapsed:?}"
+                );
                 // Include startup, Git checks and cleanup on a loaded host.
                 assert!(elapsed < Duration::from_secs(30), "{elapsed:?}");
             } else {

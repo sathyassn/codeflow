@@ -35,7 +35,8 @@
             "minimum": 85
           }
         ]
-      }
+      },
+      "timeout_seconds": 600
     }
   ]
 }

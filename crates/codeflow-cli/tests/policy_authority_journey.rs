@@ -10,6 +10,8 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+const GUARD_REMOTE_QUERY_SECS: u64 = codeflow_limits::GUARD_REMOTE_QUERY_WAIT.default;
+
 fn binary() -> PathBuf {
     std::env::var_os("TSK1077_TEST_BINARY").map_or_else(
         || PathBuf::from(env!("CARGO_BIN_EXE_codeflow")),
@@ -609,7 +611,7 @@ fn a_head_sets_no_wait_for_the_hook_and_ci_reads_the_authority_it_names() {
 #[cfg(unix)]
 #[test]
 fn no_configured_wait_reaches_a_guard() {
-    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_REMOTE_QUERY_SECS};
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
     use std::time::{Duration, Instant};
     for (seconds, attempts) in [(1, 1), (60, 5)] {
         let policy = format!(
@@ -664,6 +666,51 @@ fn no_configured_wait_reaches_a_guard() {
             "{took:?}"
         );
     }
+}
+
+/// TSK-1299 AC-4: with the guard's git read wait and its deadline at their
+/// ceilings on the default branch, a git that never answers still gets the
+/// guard's own refusal, after the raised wait and before the raised deadline.
+#[cfg(unix)]
+#[test]
+fn a_guard_at_its_ceilings_still_refuses_a_stalled_git_on_time() {
+    use codeflow_limits::{GUARD_DEADLINE, GUARD_GIT_READ_SECONDS};
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::time::{Duration, Instant};
+    let wait = GUARD_GIT_READ_SECONDS.most();
+    let deadline = GUARD_DEADLINE.most();
+    let policy = format!(
+        r#"{{"limits":{{"guard_deadline_seconds":{deadline},"guard_git_read_seconds":{wait}}}}}"#
+    );
+    let (a, _) = Adopter::with_line();
+    a.land_main_policy(&policy);
+    let real = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on PATH");
+    let bin = a.temp.path().join("stalled-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let script = format!(
+        "#!/bin/sh\nfor word in \"$@\"; do\n  if [ \"$word\" = --list ]; then\n    sleep 60\n  fi\ndone\nexec '{}' \"$@\"\n",
+        real.display()
+    );
+    std::fs::write(bin.join("git"), script).unwrap();
+    std::fs::set_permissions(bin.join("git"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let payload = json!({"tool_name":"Bash","cwd":a.work(),"tool_input":{"command":"git -c alias.x=status x"}})
+        .to_string();
+    let started = Instant::now();
+    let guard = a.codeflow_on(&path, &["hook", "git-guard"], &payload);
+    let took = started.elapsed();
+    let text = said(&guard);
+    println!("guard at its ceilings ({took:?}):\n{text}");
+    assert_eq!(guard.status.code(), Some(2), "{text}");
+    assert!(took >= Duration::from_secs(wait), "{took:?}");
+    assert!(took < Duration::from_secs(deadline), "{took:?}");
+    assert!(!text.contains("reached no decision"), "{text}");
 }
 
 /// TSK-1301 AC-8: while the policy authority is unresolved, both guards let
@@ -774,7 +821,7 @@ fn only_a_plain_fetch_gets_the_recovery_allowance() {
 #[cfg(unix)]
 #[test]
 fn the_guard_refuses_a_silent_remote_after_its_wait_and_a_fetch_clears_it() {
-    use codeflow_core::hooks::guard_deadline::{GUARD_DEADLINE_SECS, GUARD_REMOTE_QUERY_SECS};
+    use codeflow_core::hooks::guard_deadline::GUARD_DEADLINE_SECS;
     use std::time::{Duration, Instant};
     let (a, _) = Adopter::with_line();
     for branch in ["HEAD", "main", "integration/line"] {

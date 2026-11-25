@@ -3,19 +3,11 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-// About four times the supplied quiet coverage run (1713s). TSK-1279 removes
-// the self-contention behind the observed fivefold slowdown. Tune with evidence.
-pub const HEAVY_TIMEOUT_MULTIPLIER: u64 = 4;
-/// Default per-target `cleanup_grace_seconds`: the bound on termination,
-/// reaping, watcher shutdown and pipe draining after termination starts.
-pub const DEFAULT_CLEANUP_GRACE_SECONDS: u64 = 5;
-/// Largest `cleanup_grace_seconds`. Cleanup is bounded work, and an hour
-/// keeps every deadline sum far inside `Instant` and `Duration` arithmetic.
-pub const MAX_CLEANUP_GRACE_SECONDS: u64 = 3600;
-pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(300);
-pub const DEFAULT_STALL_SECONDS: u64 = 300;
-pub const MAX_TIMEOUT_SECONDS: u64 =
-    (u64::MAX - DEFAULT_CLEANUP_GRACE_SECONDS * 1_000) / (HEAVY_TIMEOUT_MULTIPLIER * 1_000);
+pub const HEAVY_TIMEOUT_MULTIPLIER: u64 = codeflow_limits::HEAVY_TIMEOUT_MULTIPLIER.default;
+pub const DEFAULT_CLEANUP_GRACE_SECONDS: u64 = codeflow_limits::TARGET_CLEANUP_GRACE.default;
+pub const MAX_CLEANUP_GRACE_SECONDS: u64 = codeflow_limits::TARGET_CLEANUP_GRACE.most();
+pub const DEFAULT_STALL_SECONDS: u64 = codeflow_limits::TARGET_STALL_TIMEOUT.default;
+pub const MAX_TIMEOUT_SECONDS: u64 = codeflow_limits::TARGET_TIMEOUT.most();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -161,7 +153,7 @@ impl Deadline {
             },
             cleanup_grace: Duration::from_secs(DEFAULT_CLEANUP_GRACE_SECONDS),
             last_activity: Duration::ZERO,
-            next_heartbeat: HEARTBEAT_INTERVAL,
+            next_heartbeat: codeflow_limits::RUNNER_HEARTBEAT_INTERVAL_SECONDS.wait(),
         }
     }
 
@@ -214,7 +206,8 @@ impl Deadline {
         if !self.info.heavy || now < self.next_heartbeat {
             return None;
         }
-        self.next_heartbeat = now.saturating_add(HEARTBEAT_INTERVAL);
+        self.next_heartbeat =
+            now.saturating_add(codeflow_limits::RUNNER_HEARTBEAT_INTERVAL_SECONDS.wait());
         let observed = self
             .info
             .cpu_usec
