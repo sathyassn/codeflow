@@ -8721,11 +8721,19 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
         // shell kept inside one word (TSK-242 review round 15).
         let operand = operand.replace("\\_", " ");
         let rest = tokens.get(after..).unwrap_or_default();
-        return Some(format!(
-            "{} {operand} {}",
-            quote_words(&tokens[..at]),
-            quote_words(rest)
-        ));
+        // Keep shell assignments as assignments when the command is read
+        // again. Quoting the whole word would make it a program instead.
+        let assigned = skip_leading(tokens, Taker::Shell);
+        let prefix = tokens[..assigned]
+            .iter()
+            .map(|word| {
+                let (name, value) = word.split_once('=').expect("shell assignment");
+                format!("{name}={}", quote_words(&[value.to_string()]))
+            })
+            .chain(std::iter::once(quote_words(&tokens[assigned..at])))
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Some(format!("{prefix} {operand} {}", quote_words(rest)));
     }
 }
 
@@ -18769,6 +18777,164 @@ mod tests {
             expand_commands(&deep).iter().any(|s| s == NESTING_UNREAD),
             "{deep}"
         );
+    }
+
+    #[test]
+    fn leading_assignment_before_split_string_allows_allowed_command() {
+        let p = default_policy();
+        for (case, command) in [
+            ("direct control", "git config --global user.name Probe"),
+            (
+                "no-assignment control",
+                "env -S 'git config --global user.name Probe'",
+            ),
+            (
+                "leading assignment",
+                "FOO=1 env -S 'git config --global user.name Probe'",
+            ),
+            (
+                "two leading assignments",
+                "FOO=1 BAR=2 env -S 'git config --global user.name Probe'",
+            ),
+        ] {
+            let violations = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(violations.is_empty(), "{case}: {violations:?}");
+            eprintln!("{case}: allowed");
+        }
+    }
+
+    #[test]
+    fn leading_assignment_before_split_string_preserves_refusal_rule() {
+        let p = default_policy();
+        for (case, command) in [
+            ("direct control", "git config --global alias.x !id"),
+            (
+                "no-assignment control",
+                "env -S 'git config --global alias.x !id'",
+            ),
+            (
+                "leading assignment",
+                "FOO=1 env -S 'git config --global alias.x !id'",
+            ),
+            (
+                "runner configuration assignment",
+                "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/tmp/hooks env -S 'git config --global user.name Probe'",
+            ),
+        ] {
+            let violations = evaluate(command, &ctx(&p, "feat/x"));
+            assert!(
+                violations.iter().any(|violation| {
+                    violation.rule == "git.hook_integrity" && violation.level == PolicyLevel::Block
+                }),
+                "{case}: {violations:?}"
+            );
+            eprintln!("{case}: refused by git.hook_integrity");
+        }
+    }
+
+    /// TSK-1536 on main: a leading assignment before `env -S` no longer
+    /// changes the verdict, so each form gets the verdict the same form gets
+    /// without the assignment. The forms are ones the EPC-022 line judges
+    /// more strictly (an expanding string, a `!` in double quotes, a
+    /// non-ASCII launcher word); this pins the interim verdict on main.
+    #[test]
+    fn leading_assignment_before_split_string_keeps_the_bare_verdict() {
+        let p = default_policy();
+        let verdict = |command: &str| {
+            evaluate(command, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|violation| (violation.rule, violation.level))
+                .collect::<Vec<_>>()
+        };
+        for form in [
+            "env -S 'echo $X'",
+            "env -S 'echo \"a!b\"'",
+            "env -S 'n\u{456}ce git config --global user.name Probe'",
+            "env -S 'cat \"x'",
+        ] {
+            let bare = verdict(form);
+            let assigned = verdict(&format!("FOO=1 {form}"));
+            assert_eq!(assigned, bare, "{form}");
+            eprintln!("{form}: {bare:?} with and without FOO=1");
+        }
+    }
+
+    /// TSK-1536 on main: split strings refused on their own stay refused
+    /// after a leading assignment. Each refusal has a removal control that
+    /// differs only in the refused part and carries no `git.hook_integrity`
+    /// refusal, so the refusal comes from that part and not from the
+    /// assignment. Inside `sh -c` the assignment is a variable change in a
+    /// nested command, which `git.policy_authority` refuses on its own.
+    #[test]
+    fn leading_assignment_before_split_string_refuses_split_string_controls() {
+        let p = default_policy();
+        let rules = |command: &str| {
+            evaluate(command, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|violation| violation.rule)
+                .collect::<Vec<_>>()
+        };
+        let mut wrong = Vec::new();
+        for (case, refused, removed, removed_rules) in [
+            (
+                "alias operand",
+                "FOO=1 env -S 'git config --global alias.x !id'",
+                "FOO=1 env -S 'git config --global user.name Probe'",
+                &[][..],
+            ),
+            (
+                "alias operand inside sh -c",
+                "sh -c \"FOO=1 env -S 'git config --global alias.x !id'\"",
+                "sh -c \"FOO=1 env -S 'git config --global user.name Probe'\"",
+                &["git.policy_authority"][..],
+            ),
+        ] {
+            let got = rules(refused);
+            if got.iter().any(|rule| rule == "git.hook_integrity") {
+                eprintln!("{case}: refused by git.hook_integrity");
+            } else {
+                wrong.push(format!(
+                    "{case}: not refused by git.hook_integrity: {got:?}"
+                ));
+            }
+            let got = rules(removed);
+            if got == removed_rules {
+                eprintln!("{case} removal control: {got:?}");
+            } else {
+                wrong.push(format!(
+                    "{case} removal control: {got:?}, expected {removed_rules:?}"
+                ));
+            }
+        }
+        // The hooksPath assignment refusal is the "runner configuration
+        // assignment" row of `leading_assignment_before_split_string_preserves_refusal_rule`;
+        // its removal control sets a harmless key with the same assignments.
+        let removed = "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=Probe env -S 'git config --global user.name Probe'";
+        let got = rules(removed);
+        if got.is_empty() {
+            eprintln!("hooksPath assignment removal control: {got:?}");
+        } else {
+            wrong.push(format!("hooksPath assignment removal control: {got:?}"));
+        }
+        // An unclosed quote in the split string is an error for env's
+        // grammar after a leading assignment too, so the exec guard takes
+        // its refusing path; the closed quote is its removal control.
+        let words = |line: &str| command_argv(line);
+        if matches!(
+            env_split_argv(&words("FOO=1 env -S 'cat \"x'")),
+            Some(Err(_))
+        ) {
+            eprintln!("unclosed quote: unread by env's grammar");
+        } else {
+            wrong.push("unclosed quote: read by env's grammar".to_string());
+        }
+        match env_split_argv(&words("FOO=1 env -S 'cat \"x\"'")) {
+            Some(Ok(read)) if read == ["FOO=1", "env", "cat", "x"] => {
+                eprintln!("unclosed quote removal control: read as {read:?}");
+            }
+            other => wrong.push(format!("unclosed quote removal control: {other:?}")),
+        }
+        assert!(wrong.is_empty(), "wrong verdicts:\n{}", wrong.join("\n"));
     }
 
     #[test]
