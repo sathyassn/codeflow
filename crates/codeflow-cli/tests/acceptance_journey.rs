@@ -9,6 +9,8 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "acceptance_journey/landing.rs"]
+mod landing;
 #[path = "support/outcome.rs"]
 mod outcome;
 #[path = "support/process_folders.rs"]

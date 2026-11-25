@@ -51,6 +51,29 @@ pub(super) struct Run<'a> {
     pub pushed: bool,
 }
 
+/// A landing candidate's line, once its authority is established: the bound
+/// epic line and its fetched tip, resolved once. The acceptance check judges
+/// the candidate's members against this tip (TSK-1154), never against a
+/// supplied base, a local branch or anything the head names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Landing {
+    pub line: String,
+    pub tip: String,
+    /// What the head is: an epic line's next tip, or a batch into the
+    /// default target.
+    pub kind: Kind,
+}
+
+/// The two landings judged member by member (TSK-1154).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// A landing candidate of an epic line.
+    Line,
+    /// A batch pull request into the default target (AC-17), whose `line`
+    /// is that target's branch name and whose `tip` is its fetched tip.
+    MainBatch,
+}
+
 /// Where the judged line came from, for the output and the remedy. A line
 /// found from the base carries the default target's branch name when the
 /// base is that target's fetched tip too.
@@ -63,19 +86,22 @@ enum Source {
 
 /// Judge the head as a line's next tip when the run's context says it is
 /// one, or cannot say it is not; push a blocking `work.epic_line` finding
-/// for each refusal.
+/// for each refusal. Returns the line and its fetched tip when the line's
+/// authority was established, so the acceptance check can judge the
+/// candidate member by member; `None` otherwise.
 pub(super) fn check(
     root: &Path,
     run: &Run<'_>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
-) {
+) -> Option<Landing> {
     let (line, source) = match destination(root, run) {
         Ok(Some(found)) => found,
-        Ok(None) => return,
+        Ok(None) => return None,
         Err((error, source)) => {
             ran.push("line-tip");
-            return refuse(tagged, &error, None, &source);
+            refuse(tagged, &error, None, &source);
+            return None;
         }
     };
     ran.push("line-tip");
@@ -94,8 +120,16 @@ pub(super) fn check(
         "codeflow ci: line tip: the head is judged as the next tip of '{}' ({how})",
         codeflow_core::git::display_text(&line)
     );
-    if let Err(error) = judge(root, &line, &source, run.head, tagged) {
-        refuse(tagged, &error, Some(&line), &source);
+    match judge(root, &line, &source, run.head, tagged) {
+        Ok(tip) => tip.map(|tip| Landing {
+            line,
+            tip,
+            kind: Kind::Line,
+        }),
+        Err(error) => {
+            refuse(tagged, &error, Some(&line), &source);
+            None
+        }
     }
 }
 
@@ -112,6 +146,9 @@ fn destination(root: &Path, run: &Run<'_>) -> Result<Option<(String, Source)>, (
             .map_err(|reason| (format!("--line-tip {reason}"), Source::Flag))?;
         return Ok(Some((line.to_string(), Source::Flag)));
     }
+    // A push reaches a line only through the binding `candidate::check`
+    // made from its own reads (TSK-1351); a push it did not bind is never
+    // judged as a line's next tip, whatever its name or history.
     if let Some(line) = run.candidate {
         return Ok(Some((line.to_string(), Source::Candidate)));
     }
@@ -163,14 +200,16 @@ fn default_target_at(root: &Path, base: &str) -> Result<Option<String>, String> 
     Ok((tip.as_deref() == Some(base)).then(|| name.to_string()))
 }
 
-/// Judge `head` as `line`'s next tip against the line's fetched tip.
+/// Judge `head` as `line`'s next tip against the line's fetched tip, and
+/// return that tip once the line is bound and the head is cut from it
+/// (`None` when durable work tracking is off).
 fn judge(
     root: &Path,
     line: &str,
     source: &Source,
     head: &str,
     tagged: &mut Vec<super::TaggedViolation>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let remote = format!("refs/remotes/origin/{line}");
     // The one trusted tip, resolved once: never a local branch, a supplied
     // base or anything the head names.
@@ -199,7 +238,7 @@ fn judge(
     }
     if !tracked {
         println!("codeflow ci: line tip: durable work tracking is off, so no epic line is judged");
-        return Ok(());
+        return Ok(None);
     }
     let place = format!("'origin/{line}'");
     match epic_line_bound_at(root, line, &tip_text, &place).map_err(|error| error.to_string())? {
@@ -231,7 +270,7 @@ fn judge(
             "codeflow ci: line tip: no unadopted direct commit from {}",
             &tip_text[..9]
         );
-        return Ok(());
+        return Ok(Some(tip_text));
     }
     let (message, mut remedy) =
         line_adoption::direct_commit_refusal(line, &report.unadopted, &remote);
@@ -242,7 +281,7 @@ fn judge(
         sha: None,
         violation: Violation::always_blocking(RULE, message, &remedy),
     });
-    Ok(())
+    Ok(Some(tip_text))
 }
 
 /// The remedy for a run that found the line from its base: it names the
@@ -292,4 +331,227 @@ fn refuse(
             &remedy,
         ),
     });
+}
+
+/// The refusal of a pushed batch into the default target: the message.
+pub(super) const PUSHED_BATCH_REFUSAL: &str = "a pushed `candidate/` branch that is not bound to an epic line is not judged as a batch into the default target: on a push, only a landing candidate that the pre-push binding ties to its line from the destination's own policy (TSK-1351) is judged member by member, and a batch into the default target has no such binding";
+
+/// The refusal of a pushed batch into the default target: the remedy, the
+/// sanctioned route.
+pub(super) const PUSHED_BATCH_REMEDY: &str = "land the batch through a pull request from this branch into the default branch: that pull request's run (`codeflow ci --into <default branch>` with the pull request's body) judges each member from the default branch's fetched tip";
+
+/// A batch into the default target (TSK-1154 AC-17): a head on the judging
+/// policy's `git.candidate_prefix` (`candidate`) in a pull request into the
+/// default target (`into` names it). The name only selects this judgment,
+/// which grants a member nothing its own pull request into the default
+/// target would not get. The anchor is always the default target's fetched
+/// tip, never a supplied base or anything the head names, and the head must
+/// descend from it. `None` when the run is not such a batch or durable work
+/// tracking is off; a batch whose anchor cannot be established refuses.
+///
+/// A push of such a head that `candidate::check` did not bind to a line is
+/// refused, never judged: a push names its own policy prefix and history,
+/// and only that binding establishes a pushed candidate's line from facts
+/// the pusher cannot forge.
+pub(super) fn main_batch(
+    root: &Path,
+    run: &Run<'_>,
+    candidate: bool,
+    into: Option<&str>,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) -> Option<Landing> {
+    if !candidate || run.line_tip.is_some() || run.candidate.is_some() {
+        return None;
+    }
+    if run.pushed && !run.merge_landing {
+        ran.push("main-batch");
+        tagged.push(super::TaggedViolation {
+            sha: None,
+            violation: Violation::always_blocking(
+                "work.acceptance_binding",
+                PUSHED_BATCH_REFUSAL.to_string(),
+                PUSHED_BATCH_REMEDY,
+            ),
+        });
+        return None;
+    }
+    let judged = (|| -> Result<Option<Landing>, String> {
+        let Some(target) = default_work_target_ref(root)
+            .map_err(|error| format!("the default target cannot be read: {error}"))?
+        else {
+            return Ok(None);
+        };
+        let Some(name) = target.strip_prefix("refs/remotes/origin/") else {
+            return Ok(None);
+        };
+        let into_default = into
+            .map(|into| {
+                into.strip_prefix("refs/heads/")
+                    .or_else(|| into.strip_prefix("origin/"))
+                    .unwrap_or(into)
+            })
+            .is_some_and(|into| into == name);
+        let tip = line_adoption::reference_tip(root, &target)?;
+        // Only a pull request into the default target is judged as a batch;
+        // a push was refused above.
+        if !(run.merge_landing && into_default) {
+            return Ok(None);
+        }
+        ran.push("main-batch");
+        let tip = tip.ok_or_else(|| {
+            format!(
+                "'{}' has no fetched tip ('origin/{}'), so the batch's anchor cannot be established",
+                codeflow_core::git::display_text(name),
+                codeflow_core::git::display_text(name)
+            )
+        })?;
+        let mut tracked = false;
+        for revision in [run.head, tip.as_str()] {
+            tracked |= durable_work_tracking_enabled_at(root, revision).map_err(|error| {
+                format!(
+                    "durable work tracking cannot be read at {}: {error}",
+                    &revision[..revision.len().min(9)]
+                )
+            })?;
+        }
+        if !tracked {
+            println!("codeflow ci: main batch: durable work tracking is off, so no batch is judged member by member");
+            return Ok(None);
+        }
+        if !line_adoption::descends_from(root, &tip, run.head)? {
+            return Err(format!(
+                "the head is not cut from the fetched tip {} of '{}', so it is not a batch built on it",
+                &tip[..tip.len().min(9)],
+                codeflow_core::git::display_text(name)
+            ));
+        }
+        println!(
+            "codeflow ci: main batch: the head is judged as a batch into '{}' from its fetched tip {}",
+            codeflow_core::git::display_text(name),
+            &tip[..tip.len().min(9)]
+        );
+        Ok(Some(Landing {
+            line: name.to_string(),
+            tip,
+            kind: Kind::MainBatch,
+        }))
+    })();
+    match judged {
+        Ok(landing) => landing,
+        Err(error) => {
+            tagged.push(super::TaggedViolation {
+                sha: None,
+                violation: Violation::always_blocking(
+                    "work.acceptance_binding",
+                    format!("cannot judge the head as a batch into the default target: {error}"),
+                    "fetch the default target (`git fetch origin`) and rebuild the batch from its fetched tip, with only no-ff merges of reviewed heads",
+                ),
+            });
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Run, Source};
+
+    const LINE: &str = "integration/EPC-001-line";
+
+    /// A repository whose `main` holds one commit, the fetched tip of both
+    /// `origin/main` and the epic line `LINE`, and whose head adds one
+    /// commit on it: the head's first-parent history reaches both tips.
+    /// Returns the folder, the tip and the head.
+    fn tip_and_head() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let git = |args: &[&str]| {
+            let out = codeflow_core::git::command()
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgsign=false",
+                ])
+                .args(args)
+                .current_dir(&root)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        git(&["init", "-q", "-b", "main"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "chore: tip"]);
+        let tip = git(&["rev-parse", "HEAD"]);
+        git(&["update-ref", &format!("refs/remotes/origin/{LINE}"), &tip]);
+        git(&["update-ref", "refs/remotes/origin/main", &tip]);
+        git(&["switch", "-q", "-c", "candidate/batch"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "chore: head"]);
+        let head = git(&["rev-parse", "HEAD"]);
+        (dir, tip, head)
+    }
+
+    fn pushed<'a>(tip: &'a str, head: &'a str, candidate: Option<&'a str>) -> Run<'a> {
+        Run {
+            line_tip: None,
+            candidate,
+            base: Some(tip),
+            head,
+            merge_landing: false,
+            pushed: true,
+        }
+    }
+
+    /// TSK-1154 merge with TSK-1351: a pushed `candidate/` head that
+    /// `candidate::check` did not bind (it refused, or it returned no
+    /// binding) is never judged as a line's next tip, even when its
+    /// first-parent history reaches an epic line's fetched tip, so it never
+    /// yields a `Landing`. Only the binding's line does.
+    #[test]
+    fn an_unbound_pushed_candidate_is_never_a_line_landing() {
+        let (dir, tip, head) = tip_and_head();
+        let run = pushed(&tip, &head, None);
+        assert!(
+            matches!(super::destination(dir.path(), &run), Ok(None)),
+            "an unbound push named no line"
+        );
+        let (mut tagged, mut ran) = (Vec::new(), Vec::new());
+        assert_eq!(super::check(dir.path(), &run, &mut tagged, &mut ran), None);
+        assert!(!ran.contains(&"line-tip"), "{ran:?}");
+        assert!(tagged.is_empty());
+
+        let bound = pushed(&tip, &head, Some(LINE));
+        assert!(matches!(
+            super::destination(dir.path(), &bound),
+            Ok(Some((line, Source::Candidate))) if line == LINE
+        ));
+    }
+
+    /// TSK-1154 AC-17 as amended 2026-11-19: a pushed batch into the default
+    /// target is refused, naming why and the pull request into the default
+    /// branch as the route, and yields no `Landing`.
+    #[test]
+    fn a_pushed_main_batch_is_refused_with_the_route() {
+        let (dir, tip, head) = tip_and_head();
+        let run = pushed(&tip, &head, None);
+        let (mut tagged, mut ran) = (Vec::new(), Vec::new());
+        let landing =
+            super::main_batch(dir.path(), &run, true, Some("main"), &mut tagged, &mut ran);
+        assert_eq!(landing, None);
+        assert_eq!(tagged.len(), 1, "one refusal");
+        let violation = &tagged[0].violation;
+        assert_eq!(violation.rule, "work.acceptance_binding");
+        assert!(violation.level_fixed, "the refusal always blocks");
+        assert_eq!(violation.message, super::PUSHED_BATCH_REFUSAL);
+        let remedy = violation.remedy.to_string();
+        assert!(
+            remedy.contains("pull request from this branch into the default branch"),
+            "{remedy}"
+        );
+        assert!(ran.contains(&"main-batch"), "{ran:?}");
+    }
 }
