@@ -14,7 +14,7 @@ use std::process::{Command, Output};
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 const BRANCH: &str = "task/TSK-001-adopt";
 const TASK: &str = "project-management/tasks/TSK-001.md";

@@ -41,6 +41,7 @@ mod process_folders;
 use process_folders::isolated_home;
 
 fn with_env(command: &mut Command) -> &mut Command {
+    process_folders::clear_ci_environment(command);
     let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
     let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),

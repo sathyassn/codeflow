@@ -13,7 +13,7 @@ use std::process::{Command, Stdio};
 mod fixture_seed;
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 fn clean_env(command: &mut Command) -> &mut Command {
     command

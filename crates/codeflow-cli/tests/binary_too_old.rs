@@ -14,7 +14,7 @@ use std::process::{Command, Output};
 
 #[path = "support/process_folders.rs"]
 mod process_folders;
-use process_folders::isolated_home;
+use process_folders::cargo_home as isolated_home;
 
 const BINARY: &str = env!("CARGO_PKG_VERSION");
 const NEWER: &str = "99.0.0";

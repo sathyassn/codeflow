@@ -110,6 +110,7 @@ fn project(state: Ledger) -> (tempfile::TempDir, PathBuf) {
 }
 
 fn run(root: &Path, args: &[&str], stdin: Option<String>) -> (Option<i32>, String) {
+    codeflow_fixture::require_cargo_environment();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
     cmd.current_dir(root)
         .args(args)

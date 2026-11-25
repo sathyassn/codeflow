@@ -338,6 +338,7 @@ fn home() -> &'static Path {
 /// A command with the binary under test first on `PATH` (the git hooks
 /// run it) and no user configuration.
 fn command(program: &str, dir: &Path) -> Command {
+    codeflow_fixture::require_cargo_environment();
     let path = std::env::join_paths(exe().parent().map(Path::to_path_buf).into_iter().chain(
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
     ))

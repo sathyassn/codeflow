@@ -4,6 +4,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn fixture_command(program: &str, root: &Path) -> Command {
+    codeflow_fixture::require_cargo_environment();
     let mut command = Command::new(program);
     command
         .current_dir(root)

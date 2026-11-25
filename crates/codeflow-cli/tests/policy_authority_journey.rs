@@ -46,6 +46,7 @@ impl Adopter {
     }
 
     fn command(&self, program: &Path) -> Command {
+        codeflow_fixture::require_cargo_environment();
         let mut c = Command::new(program);
         let home = self.temp.path();
         c.current_dir(self.work())

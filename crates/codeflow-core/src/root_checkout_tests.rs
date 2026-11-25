@@ -234,18 +234,19 @@ fn the_test_environment_blanks_every_harness_marker() {
     // The fixture helpers also clear every marker themselves (TSK-1397), so
     // a test binary started directly, which inherits the caller's markers,
     // gives the same results; the blank environment is asserted only when
-    // cargo started the run and applied that file.
+    // the forced Git values establish that cargo applied that file.
     let config = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.cargo/config.toml"),
     )
     .unwrap();
-    let started_by_cargo = std::env::var_os("CARGO_MANIFEST_DIR").is_some();
+    let cargo_applied_the_table =
+        codeflow_fixture::cargo_environment_applied(|key| std::env::var_os(key));
     for marker in AGENT_MARKERS {
         assert!(
             config.contains(&format!("{marker} = {{ value = \"\", force = true }}")),
             "{marker} is not blanked in .cargo/config.toml"
         );
-        if started_by_cargo {
+        if cargo_applied_the_table {
             assert_eq!(std::env::var(marker).unwrap_or_default(), "", "{marker}");
         }
     }
