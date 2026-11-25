@@ -7,7 +7,7 @@
 
 ## Concept
 
-`codeflow doctor` runs twenty-six health checks against a repository and the tools around it.
+`codeflow doctor` runs twenty-seven health checks against a repository and the tools around it.
 
 It is for someone whose setup misbehaves after `codeflow init`, after
 `codeflow update` or after a harness change.
@@ -19,7 +19,7 @@ It is for someone whose setup misbehaves after `codeflow init`, after
 
 ## Architecture
 
-The twenty-six checks fall into six groups by the surface each one reads.
+The twenty-seven checks fall into seven groups by the surface each one reads.
 
 - **Git hooks, CI and host rules.** `hooks`, `ci-perimeter` and
   `remote-perimeter` read the hook subcommands of the installed binary, git's
@@ -53,6 +53,10 @@ The twenty-six checks fall into six groups by the surface each one reads.
   `instructions`, `reading` and `test-config` read the product, architecture
   and agent docs for scaffold placeholders, the sizes of the instruction files
   and installed skills, and the optional `.codeflow/test-config.json`.
+- **Pipeline workflow.** `pipeline` reads the user-owned
+  `.claude/workflows/pipeline.workflow.js` and reports a verify stage that
+  still runs a whole essential gate on every change, or a copy it cannot
+  read.
 
 ## Technical
 
@@ -66,12 +70,12 @@ failed check never hides the others. Each line starts with a status badge.
 - `FAIL` means the check found a broken state.
 
 Doctor exits 0 when no check failed, with or without warnings, and 1 when any
-check failed. Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
+check failed. Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,
 `config`, `permissions`, `policy-source`, `secret-engine`, `model-bindings`,
-`delegate-roundtrip`, `repo-integrity`, `id-registry` and `adopter-fit`. The
-other fourteen warn at most.
+`delegate-roundtrip`, `repo-integrity`, `id-registry`, `adopter-fit` and
+`pipeline`. The other fourteen warn at most.
 
-- `codeflow doctor --list` prints the twenty-six names and exits 0.
+- `codeflow doctor --list` prints the twenty-seven names and exits 0.
 - `codeflow doctor --check <name>` runs one check. An unknown name prints an
   error to stderr and exits 1.
 
@@ -104,6 +108,7 @@ Each row below is one check, in the order doctor prints it.
 | `test-config` | `.codeflow/test-config.json`, through the test engine's own health checks: schema, each target's `cwd`, command parsing, paths, globs, coverage transforms, runner probes and the coverage producer a full command runs | Warn: a listed sub-check warned or failed; a missing coverage producer is named with its install command. This check never fails doctor. Ok when the file is absent | Correct the named entries in `.codeflow/test-config.json`, or replace it with `codeflow test setup --template <name> --replace`, then run `codeflow test` |
 | `id-registry` | The shared id registry on the fetched refs, when durable work tracking is on; it never fetches | Fail: the registry cannot be read or shows damage. Warn: an id no ref can place, tracking state that cannot be read, live host rules that do not block force pushes and deletion for everyone, or host rules that cannot be read, recorded or not (reduced assurance). Ok when tracking is off | Resolve each finding named (`codeflow ids admit` registers an unplaced id, `codeflow ids retarget <id>` renumbers a collision), then confirm with `codeflow ids check`. Run `codeflow remote protect --branch codeflow/registry` to apply the host rules; when they cannot be read, make `origin` name one github.com repository for fetch and push and give `gh` a login that can read its rules |
 | `adopter-fit` | The effective `git.pr_sections` level and its origin, a kept PR template's pending mapping decision, and the `[release] backend` in `.codeflow/project.toml` against the release tools found | Fail: the release backend is invalid or unreadable. Warn: a mapping decision is pending, policy provenance does not parse, or the backend and a detected release tool disagree | Record the decision in `git.pr_section_mapping.decided` (accepted, refused or custom), or set `[release] backend` to the one version authority the project uses, then rerun `codeflow doctor --check adopter-fit` |
+| `pipeline` | `.claude/workflows/pipeline.workflow.js`, the user-owned pipeline workflow, for the verify stage 3.1 and earlier shipped, which runs `codeflow test --mode essential --strict` on every change | Warn: the copy still runs that whole essential gate on every change; the message prints the one line that replaces it. Fail: the file exists but cannot be read. Ok when the file is absent, as on the minimal tier | Replace the named verify stage line with the printed one, keeping its indentation; the stage then runs the affected targeted checks and `codeflow test --mode quick --strict`, and the primary runs one full gate on the landing candidate. A project that wants an essential run on every change keeps its copy and the warning. `codeflow update` never rewrites the file |
 
 ### Heavy work shares the host
 

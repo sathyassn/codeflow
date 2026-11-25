@@ -27,6 +27,7 @@ pub mod hooks_path;
 pub mod init;
 pub mod json_edit;
 pub mod manifest;
+pub mod pipeline_stage;
 pub mod portal;
 pub mod pr_template;
 pub mod prior_release;

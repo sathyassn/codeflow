@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Which check inspects which surface, and which checks can fail?",
-    "idea": "The twenty-six checks fall into six groups by the surface they read, and only twelve of them can fail; the other fourteen warn at most.",
-    "title": "The twenty-six checks, by what they read",
+    "idea": "The twenty-seven checks fall into seven groups by the surface they read, and only thirteen of them can fail; the other fourteen warn at most.",
+    "title": "The twenty-seven checks, by what they read",
     "kicker": "Doctor checks",
-    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry or adopter fit.",
+    "caption": "A FAIL comes only from hooks, the guard timeouts, the sandbox configuration, config, permissions, the policy source, the secret engine, model bindings, the delegate round trip, repository integrity, the id registry, adopter fit or the pipeline workflow.",
     "states": [
       {
         "name": "canfail",
@@ -23,12 +23,12 @@
     ],
     "facts": [
       {
-        "claim": "twelve checks can fail",
+        "claim": "thirteen checks can fail",
         "source": "docs/troubleshooting.md#technical",
         "derive": "the fail sentence",
         "check": {
           "kind": "contains",
-          "text": "Twelve checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
+          "text": "Thirteen checks can fail: `hooks`, `guard-timeouts`, `sandbox`,"
         },
         "value": true
       },
@@ -43,18 +43,18 @@
         "value": true
       },
       {
-        "claim": "the checks fall into six groups",
+        "claim": "the checks fall into seven groups",
         "source": "docs/troubleshooting.md#architecture",
         "derive": "the group count",
         "check": {
           "kind": "count-items"
         },
-        "value": 6
+        "value": 7
       }
     ],
     "wide": {
       "width": 720,
-      "height": 382,
+      "height": 428,
       "draw": [
         {
           "text": "Hooks, CI, host rules",
@@ -573,6 +573,37 @@
           "for": [
             "g5c3"
           ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 384,
+          "x2": 704,
+          "y2": 384
+        },
+        {
+          "text": "Pipeline workflow",
+          "x": 16,
+          "y": 412,
+          "style": "strong"
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 239,
+          "cy": 407,
+          "r": 7,
+          "id": "g6c0"
+        },
+        {
+          "text": "pipeline",
+          "x": 255,
+          "y": 412,
+          "style": "mono",
+          "for": [
+            "g6c0"
+          ]
         }
       ]
     },
@@ -582,7 +613,7 @@
       "marks": "same",
       "reason": "Each surface stays one row of the same marks at phone width, with its name on its own line above its checks.",
       "width": 360,
-      "height": 594,
+      "height": 660,
       "draw": [
         {
           "text": "Hooks, CI, host rules",
@@ -1101,6 +1132,37 @@
           "for": [
             "g5c3"
           ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 592,
+          "x2": 352,
+          "y2": 592
+        },
+        {
+          "text": "Pipeline workflow",
+          "x": 8,
+          "y": 616,
+          "style": "strong"
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 26,
+          "cy": 639,
+          "r": 7,
+          "id": "g6c0"
+        },
+        {
+          "text": "pipeline",
+          "x": 40,
+          "y": 644,
+          "style": "mono",
+          "for": [
+            "g6c0"
+          ]
         }
       ]
     },
@@ -1140,6 +1202,11 @@
           "Customization, tests",
           "none",
           "`customization`, `instructions`, `reading`, `test-config`"
+        ],
+        [
+          "Pipeline workflow",
+          "`pipeline`",
+          "none"
         ]
       ]
     }

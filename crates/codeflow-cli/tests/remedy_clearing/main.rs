@@ -237,6 +237,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("DOCTOR_REMOTE_UNREAD", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
+    ("DOCTOR_PIPELINE_STAGE", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
     ("DOCTOR_READING_CONFIG", Runs),
@@ -3266,6 +3267,55 @@ fn clears_doctor_customization() {
                 }
                 write(&root, path, &text);
             }
+        },
+    );
+}
+
+/// TSK-370: a 3.1.0 pipeline still runs essential on every change; the
+/// printed line, put in place of the old one, clears the warning.
+#[test]
+fn clears_doctor_pipeline_stage() {
+    const PIPELINE: &str = ".claude/workflows/pipeline.workflow.js";
+    const LEAD: &str = "keeping its indentation: ";
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    write(
+        &root,
+        PIPELINE,
+        include_str!("../fixtures/pipeline-3.1.0.workflow.js"),
+    );
+    prove(
+        "DOCTOR_PIPELINE_STAGE",
+        "still runs `codeflow test --mode essential --strict`",
+        || doctor(&root, "pipeline"),
+        |printed| {
+            let flat = printed.split_whitespace().collect::<Vec<_>>().join(" ");
+            // The printed edit is two lines: the review line, then the
+            // verify line, each after the lead.
+            let cut = |from: usize, end_mark: &str| -> (String, usize) {
+                let start = flat[from..].find(LEAD).expect("the printed line") + from + LEAD.len();
+                let end = flat[start..].find(end_mark).expect("its end") + start + end_mark.len();
+                (flat[start..end].to_string(), end)
+            };
+            let (review, after) = cut(0, "never as a pass.'),");
+            let (verify, _) = cut(after, "approved.',");
+            let copy = read(&root, PIPELINE);
+            let edited: Vec<String> = copy
+                .split('\n')
+                .map(|l| {
+                    let body = l.trim_start();
+                    let indent = &l[..l.len() - body.len()];
+                    if body.starts_with("'Run `codeflow validate` and `codeflow test --mode quick")
+                    {
+                        format!("{indent}{review}")
+                    } else if body.starts_with("'Run the affected targeted checks, then") {
+                        format!("{indent}{verify}")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
+            write(&root, PIPELINE, &edited.join("\n"));
         },
     );
 }
