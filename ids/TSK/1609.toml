@@ -1,0 +1,11 @@
+id = "TSK-1609"
+uid = "051153b5-ee42-41e7-b500-c24b259c220c"
+kind = "TSK"
+title = "The release impact check judges a merged head against its event base"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-11-25T13:22:48Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
