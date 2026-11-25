@@ -357,8 +357,19 @@ impl CommitFinding {
     /// The exact next step: the catalogued remedy.
     #[must_use]
     pub fn next_step(&self) -> crate::remedy::Remedy {
-        let root = self.root_branch.name.to_string();
-        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", &root)])
+        // A root branch read from `origin/HEAD` is the remote's name, which
+        // policy validation never sees, so one that starts with `-` follows
+        // `--` (TSK-416 review). The operand is rendered from the exact
+        // bytes; a name with no printed form leaves the placeholder, and the
+        // finding's message names the branch escaped (review round 2).
+        let root = crate::git::Pasted::new(Path::new(&self.repo), "git switch")
+            .name(&self.root_branch.name)
+            .render();
+        let operand = root
+            .as_deref()
+            .and_then(|command| command.strip_prefix("git switch "))
+            .unwrap_or("<root-branch>");
+        crate::remedy::ROOT_CHECKOUT_COMMIT.with(&[("root", operand)])
     }
 }
 
@@ -1169,6 +1180,25 @@ fn canonical(path: &Path) -> PathBuf {
     crate::portable_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// The step that moves a linked worktree into `.worktrees/`. The path is
+/// rendered from its exact text, so a space or `$(…)` in it stays one
+/// argument (TSK-416 review round 2).
+fn worktree_move_step(root: &Path, path: &Path) -> String {
+    path.to_str()
+        .and_then(|path| {
+            crate::git::Pasted::new(root, "git worktree move")
+                .value(path)
+                .placeholder(".worktrees/<slug>")
+                .without_end_of_options()
+                .render()
+        })
+        .unwrap_or_else(|| {
+            "git worktree move to .worktrees/<slug>, run from a git client since its path \
+             holds a character a terminal does not show as itself"
+                .to_string()
+        })
+}
+
 /// Doctor's findings for linked worktrees: one outside every location, and
 /// one inside the working tree that nothing ignores.
 #[must_use]
@@ -1230,9 +1260,9 @@ pub fn worktree_findings(
                     path.display()
                 ),
                 next_step: format!(
-                    "move it with git worktree move {} .worktrees/<slug>, or add its folder \
-                     to {LOCATIONS_KEY} in .codeflow/policy.json",
-                    path.display()
+                    "move it with {}, or add its folder to {LOCATIONS_KEY} in \
+                     .codeflow/policy.json",
+                    worktree_move_step(&root, &path)
                 ),
             });
             continue;
@@ -1442,6 +1472,44 @@ fn missing_branch_finding(
     })
 }
 
+/// The step that continues branch `b` in a worktree, with a stash pop when
+/// the work may have been stashed.
+///
+/// `git worktree add` reads a branch that starts with `-` as an option, and
+/// after `--` it adds a detached worktree at that commit instead of the
+/// branch, so the step renames the branch first (TSK-416 review). Each
+/// command is rendered from the branch's exact bytes, never its display form
+/// (review round 2).
+fn continue_in_worktree(root: &Path, b: &GitName, saved: bool) -> String {
+    let pop = if saved {
+        ", and git stash pop inside it if you stashed"
+    } else {
+        ""
+    };
+    let add = crate::git::Pasted::new(root, "git worktree add .worktrees/<slug>")
+        .name(b)
+        .without_end_of_options()
+        .render();
+    let rename = crate::git::Pasted::new(root, "git branch -m")
+        .name(b)
+        .placeholder("<new-name>")
+        .render();
+    match (add, rename) {
+        (Some(add), _) => format!(", then {add} to continue it in a worktree{pop}"),
+        (None, Some(rename)) => format!(
+            ", then rename the branch with {rename}, since git worktree add does not take a \
+             branch whose name starts with -, and run git worktree add .worktrees/<slug> \
+             <new-name> to continue it in a worktree{pop}"
+        ),
+        (None, None) => format!(
+            ", then rename the branch with a git client, since its name holds a character a \
+             terminal does not show as itself, or a remote name codeflow withholds, and no \
+             command is printed to paste, and run git \
+             worktree add .worktrees/<slug> <new-name> to continue it in a worktree{pop}"
+        ),
+    }
+}
+
 /// The finding for the root checkout's HEAD: off its root branch or
 /// detached, or on a protected root branch while holding task edits.
 fn head_finding(
@@ -1452,6 +1520,7 @@ fn head_finding(
 ) -> Option<Finding> {
     // Advice only: a status that cannot be read adds no change to the report.
     let changes = tracked_changes(repo).unwrap_or_default();
+    let root = repo.commondir();
     match match head(repo) {
         Ok(head) => head,
         Err(error) => return Some(cannot_read_finding(error)),
@@ -1496,19 +1565,22 @@ fn head_finding(
                 )
             };
             let continue_step = match &found {
-                Head::Branch(b) => {
-                    let pop = if save_step.is_empty() {
-                        ""
-                    } else {
-                        ", and git stash pop inside it if you stashed"
-                    };
-                    format!(
-                        ", then git worktree add .worktrees/<slug> {b} to continue it in a \
-                         worktree{pop}"
-                    )
-                }
+                Head::Branch(b) => continue_in_worktree(root, b, !save_step.is_empty()),
                 Head::Detached(_) => String::new(),
             };
+            let switch = crate::git::Pasted::new(root, "git switch")
+                .name(&root_branch.name)
+                .render()
+                .map_or_else(
+                    || {
+                        "switch the root to its root branch with a git client, since the \
+                         branch name holds a character a terminal does not show as itself, \
+                         or a remote name codeflow withholds, and no command is printed to \
+                         paste"
+                            .to_string()
+                    },
+                    |switch| format!("run {switch} at the root"),
+                );
             Some(Finding {
                 severity: Severity::Warn,
                 rule: ROOT_BRANCH_KEY,
@@ -1519,10 +1591,7 @@ fn head_finding(
                     root_branch.name,
                     root_branch.source
                 ),
-                next_step: format!(
-                    "{save_step}run git switch {} at the root{continue_step}",
-                    root_branch.name
-                ),
+                next_step: format!("{save_step}{switch}{continue_step}"),
             })
         }
     }
@@ -1934,6 +2003,9 @@ pub fn gitignore_with_nested(text: &str, nested: &[NestedRepo]) -> Option<String
 /// What `init --workspace` did, for its report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceReport {
+    /// The repository the report is for, which decides what its printed
+    /// command may name.
+    pub root: PathBuf,
     pub branch: BranchStep,
     pub policy_changed: bool,
     pub ignored: Vec<NestedRepo>,
@@ -2009,6 +2081,7 @@ pub fn finish(root: &Path, branch: BranchStep) -> Result<WorkspaceReport, Worksp
         verify_ignored(root, &ignored)?;
     }
     Ok(WorkspaceReport {
+        root: root.to_path_buf(),
         branch,
         policy_changed,
         ignored,
@@ -2108,11 +2181,23 @@ impl WorkspaceReport {
             "  - bind the nested repositories with the nested-repository inventory once the \
              harness permissions work ships it"
         )?;
+        // Rendered from the raw configured name, so a name holding `$(…)`
+        // pastes back as itself and one starting with `-` follows `--`
+        // (TSK-416 review round 2).
+        let integrate = crate::git::Pasted::new(&self.root, "codeflow integrate")
+            .value(self.branch.name())
+            .trailing_flag("--into main")
+            .render()
+            .unwrap_or_else(|| {
+                "codeflow integrate on the root branch, whose name holds a character a \
+                 terminal does not show as itself, or a remote name codeflow withholds, so no \
+                 command is printed to paste"
+                    .to_string()
+            });
         writeln!(
             f,
             "  - main is the milestone checkpoint: at a milestone the operator moves it \
-             forward with codeflow integrate {} --into main; agents never do",
-            self.branch.name()
+             forward with {integrate}; agents never do"
         )?;
         write!(
             f,

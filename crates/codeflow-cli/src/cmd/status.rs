@@ -25,9 +25,12 @@ pub fn run(args: &StatusArgs) -> i32 {
         }
     };
     let view = collect_status(&root);
-    print_block!(render_status(&view, args.capabilities));
+    print_block!(super::shown_block(
+        &root,
+        &render_status(&view, args.capabilities)
+    ));
     if args.delivery {
-        print_block!(render_delivery(&view));
+        print_block!(super::shown_block(&root, &render_delivery(&view)));
     }
     0
 }

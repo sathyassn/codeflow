@@ -107,7 +107,7 @@ pub fn render_stage(
         // A status line can quote a name a remote supplied (TSK-388).
         eprintln!(
             "codeflow {plane}: {}",
-            codeflow_core::git::display_message(status)
+            codeflow_core::git::display_message(&shown_in(root, status))
         );
     }
     render_findings(
@@ -133,19 +133,24 @@ fn render_findings(
     refused_by: &[String],
     block_code: i32,
 ) -> i32 {
+    let scrub = |text: &str| root.map_or_else(|| text.to_owned(), |root| shown_in(root, text));
     for finding in relayed {
         // Relayed output, escaped where it was read; escaping is idempotent.
         let _ = term_writeln!(
             err,
             "codeflow {plane}: {}",
-            codeflow_core::git::display_output(finding)
+            codeflow_core::git::display_output(&scrub(finding))
         );
     }
     for note in notes {
-        let _ = term_writeln!(err, "{}", note.line(&format!("codeflow {plane}"), "note"));
+        let _ = term_writeln!(
+            err,
+            "{}",
+            scrub(&note.line(&format!("codeflow {plane}"), "note"))
+        );
     }
     for v in violations {
-        let _ = term_writeln!(err, "{}", v.render(plane));
+        let _ = term_writeln!(err, "{}", scrub(&v.render(plane)));
     }
     let stopped = any_blocking(violations);
     if let Some(root) = root {
@@ -328,8 +333,101 @@ pub(crate) fn shown(text: &dyn std::fmt::Display) -> String {
     codeflow_core::git::display_message(&text.to_string())
 }
 
+/// Repository-aware message rendering. Keep exact decision inputs separate
+/// and apply this after constructing the complete diagnostic.
+pub(crate) fn shown_in(root: &Path, text: &str) -> String {
+    codeflow_core::security::git::without_remote_names(root, text)
+}
+
+/// A block already escaped by its renderer. Apply rooted remote withholding
+/// to the display while retaining the exact data in its underlying view.
+pub(crate) fn shown_block(
+    root: &Path,
+    block: &codeflow_core::git::TextBlock,
+) -> codeflow_core::git::TextBlock {
+    codeflow_core::security::git::without_remote_names_block(root, block)
+}
+
 #[cfg(test)]
 mod root_tests {
+    #[test]
+    fn hook_findings_keep_non_repository_text_and_withhold_unreadable_remotes() {
+        let dir = tempfile::tempdir().unwrap();
+        let violations = [codeflow_core::hooks::Violation::always_blocking(
+            "git.hook_integrity",
+            "guard cannot inspect checkout".into(),
+            "the operator inspects the named path",
+        )];
+        let render = || {
+            let mut output = Vec::new();
+            assert_eq!(
+                super::render_outcome_to(
+                    &mut output,
+                    "git-guard",
+                    Some(dir.path()),
+                    &violations,
+                    &[],
+                    2,
+                ),
+                2
+            );
+            String::from_utf8(output).unwrap()
+        };
+        let said = render();
+        assert!(said.contains("git.hook_integrity"), "{said}");
+        assert!(said.contains("guard cannot inspect checkout"), "{said}");
+        assert!(
+            said.contains("the operator inspects the named path"),
+            "{said}"
+        );
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        std::fs::write(repo.path().join("config"), "[unterminated").unwrap();
+        let said = render();
+        assert!(
+            said.contains(codeflow_core::security::git::UNREAD_REMOTES_TEXT),
+            "{said}"
+        );
+        assert!(!said.contains("guard cannot inspect checkout"), "{said}");
+    }
+
+    #[test]
+    fn hook_findings_withhold_names_and_keep_plain_text_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        let violations = [codeflow_core::hooks::Violation::always_blocking(
+            "work.target",
+            "target integration/cred@SECRETVALUE refused".into(),
+            "use ordinary-target",
+        )];
+        let mut output = Vec::new();
+        let code = super::render_outcome_to(
+            &mut output,
+            "pre-push",
+            Some(dir.path()),
+            &violations,
+            &[],
+            9,
+        );
+        assert_eq!(code, 9);
+        let said = String::from_utf8(output).unwrap();
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        assert!(said.contains("use ordinary-target"), "{said}");
+        let plain = [codeflow_core::hooks::Violation::always_blocking(
+            "work.target",
+            "target integration/plain refused".into(),
+            "use ordinary-target",
+        )];
+        let mut output = Vec::new();
+        let code =
+            super::render_outcome_to(&mut output, "pre-push", Some(dir.path()), &plain, &[], 9);
+        assert_eq!(code, 9);
+        let said = String::from_utf8(output).unwrap();
+        assert!(said.contains("target integration/plain refused"), "{said}");
+    }
     /// TSK-388 round 7: a terminal writer applies the sink rule per call,
     /// so a value with a line break cannot start a doctor result line.
     #[test]

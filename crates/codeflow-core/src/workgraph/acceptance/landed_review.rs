@@ -77,10 +77,11 @@ const CHECKPOINT_PRS: &str = "checkpoint-prs";
 /// default branch's commit or the epic record there cannot be read, or the
 /// field holds a value other than `whole-epic` or `checkpoint-prs`.
 pub(super) fn marked(repo: &Repository, line: &str, at: Option<Oid>) -> Result<bool, String> {
+    let root = repo.workdir().unwrap_or_else(|| repo.path());
     let refuse = |reason: String| {
-        format!(
+        crate::security::git::without_remote_names(root, &format!(
             "{line} {LANDING_MARKER}: {reason}; the field is read only from the epic record at the default branch's commit, and accepts `{WHOLE_EPIC}` or `{CHECKPOINT_PRS}` (an absent field means `{CHECKPOINT_PRS}`)"
-        )
+        ))
     };
     let epic = crate::workgraph::line_adoption::epic_id(line).map_err(&refuse)?;
     let tip = match at {
@@ -125,7 +126,7 @@ fn default_tip(repo: &Repository) -> Result<Oid, String> {
         .ok_or_else(|| {
             format!(
                 "the default branch `{}` does not resolve here, and the run was given no default branch's commit",
-                crate::git::display_text(&name.name)
+                crate::security::git::without_remote_names(repo.commondir(), &crate::security::git::shown_ref(repo.commondir(), &name.name))
             )
         })
 }

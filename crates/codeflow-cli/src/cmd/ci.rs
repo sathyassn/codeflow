@@ -407,7 +407,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         Err(error) => {
             eprintln!(
                 "codeflow: cannot read policy: {}",
-                codeflow_core::git::display_message(&error)
+                shown_error(&root, &error)
             );
             return 2;
         }
@@ -418,10 +418,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     {
         Ok(context) => context,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -452,19 +449,13 @@ fn run_checks(args: &CiArgs) -> i32 {
     // Every range reader below, including body-less, task-less CI, shares
     // this refusal. A history error is never a skipped check or clean range.
     if let Err(error) = codeflow_core::workgraph::history::check_command(&root) {
-        eprintln!(
-            "codeflow ci: {}",
-            codeflow_core::git::display_message(&error)
-        );
+        eprintln!("codeflow ci: {}", shown_error(&root, &error));
         return 2;
     }
     let split = match split_range(&root, args.commits_from.as_deref(), base_sha.as_deref()) {
         Ok(value) => value,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -496,10 +487,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     ) {
         Ok(adoption) => adoption,
         Err(error) => {
-            eprintln!(
-                "codeflow ci: {}",
-                codeflow_core::git::display_message(&error)
-            );
+            eprintln!("codeflow ci: {}", shown_error(&root, &error));
             return 2;
         }
     };
@@ -529,10 +517,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         let from = match rev_parse(&root, from) {
             Ok(value) => value.unwrap_or_else(|| from.to_string()),
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         };
@@ -542,7 +527,11 @@ fn run_checks(args: &CiArgs) -> i32 {
         );
         println!(
             "codeflow ci: the commit checks run over {}..{head} (--commits-from), the other checks over {others}",
-            short(&from)
+            if from.len() == 40 && from.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                short(&from).to_string()
+            } else {
+                shown_reference(&root, &from)
+            }
         );
     }
     let (commit_bases, commit_source) = args.commits_from.clone().map_or_else(
@@ -586,7 +575,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     }) {
         Ok(paths) => {
             for note in paths.notes {
-                eprintln!("codeflow ci: {}", super::shown(&note));
+                eprintln!("codeflow ci: {}", shown_error(&root, &note));
             }
             tagged.extend(
                 paths
@@ -617,10 +606,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         None => match origin_url(&root) {
             Ok(url) => url,
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         },
@@ -703,10 +689,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             match verified_epic_line(&root, &branch, &base_candidates, &head, &line_target) {
                 Ok(value) => value,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             },
@@ -727,10 +710,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         println!("{}", finding.line("codeflow ci", "note"));
         skipped.push("branch-naming");
     } else {
-        println!(
-            "codeflow ci: branch '{}'",
-            codeflow_core::git::display_text(&branch)
-        );
+        println!("codeflow ci: branch '{}'", shown_reference(&root, &branch));
         if let Some(v) = evaluate_branch(git, &branch) {
             tagged.push(v);
         }
@@ -775,10 +755,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             let inventory = match change_class::range_inventory(&root, base, &head) {
                 Ok(inventory) => inventory,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             };
@@ -789,10 +766,7 @@ fn run_checks(args: &CiArgs) -> i32 {
             ) {
                 Ok(project) => project,
                 Err(error) => {
-                    eprintln!(
-                        "codeflow ci: {}",
-                        codeflow_core::git::display_message(&error)
-                    );
+                    eprintln!("codeflow ci: {}", shown_error(&root, &error));
                     return 2;
                 }
             };
@@ -866,10 +840,7 @@ fn run_checks(args: &CiArgs) -> i32 {
         }) {
             Ok(protected) => protected,
             Err(error) => {
-                eprintln!(
-                    "codeflow ci: {}",
-                    codeflow_core::git::display_message(&error)
-                );
+                eprintln!("codeflow ci: {}", shown_error(&root, &error));
                 return 2;
             }
         } || git.branch_is_protected(&line_target);
@@ -906,7 +877,7 @@ fn run_checks(args: &CiArgs) -> i32 {
     if let Some(out) = &args.blocking_rules_out {
         write_blocking_rules(out, &tagged);
     }
-    report(&tagged, &ran, &skipped)
+    report(&root, &tagged, &ran, &skipped)
 }
 
 /// The blocking findings' rule ids, one per line, for the pre-push hook's
@@ -1412,10 +1383,16 @@ fn target_tip(
     if let Some(tip) = resolve_base(root, &anchors).map_err(NoTarget::read)? {
         return Ok(tip);
     }
-    let shown = codeflow_core::git::display_text(&branch);
+    // The branch in the prose is scrubbed of withheld remote names; the
+    // renderer keeps them out of the command (TSK-416 review).
+    let shown = codeflow_core::security::git::without_remote_names(
+        root,
+        &codeflow_core::git::display_text(&branch),
+    );
     let remedy = if origin_url(root).map_err(NoTarget::read)?.is_some() {
         format!(
-            "fetch it (`git fetch origin {shown}`), or name the branch this work lands on with `--into <branch>`"
+            "name the branch this work lands on with `--into <branch>`, or {}",
+            codeflow_core::workgraph::work_start::fetch_origin(root, &branch)
         )
     } else {
         format!(
@@ -1472,7 +1449,10 @@ fn target_containment_warning(
             return Ok(None);
         }
         Ok(Some((
-            format!("head does not contain target '{target}' at {tip}"),
+            format!(
+                "head does not contain target '{}' at {tip}",
+                shown_reference(root, target)
+            ),
             tip.clone(),
         )))
     })();
@@ -1483,10 +1463,16 @@ fn target_containment_warning(
             codeflow_core::remedy::WORK_TARGET_TIP.with(&[("tip", &tip)]),
         ),
         Err(error) => (
-            format!("target '{target}' tip is unverified: {error}"),
+            format!(
+                "target '{}' tip is unverified: {error}",
+                shown_reference(root, target)
+            ),
             codeflow_core::remedy::WORK_TARGET_UNVERIFIED.remedy(),
         ),
     };
+    // The target named in the warning can hold a withheld remote name
+    // (TSK-416 review).
+    let message = codeflow_core::security::git::without_remote_names(root, &message);
     tagged.push(TaggedViolation {
         sha: None,
         violation: Violation::new("work.target_tip", PolicyLevel::Warn, message, remedy),
@@ -1677,7 +1663,7 @@ fn evaluate_commit_range(
         }
     };
     let Some(base_sha) = base_sha else {
-        let tried = base_candidates.join(", ");
+        let tried = shown_candidates(root, base_candidates);
         let finding = match base_refusal(root, base_candidates) {
             Some(cause) => codeflow_core::remedy::Finding::new(
                 format!(
@@ -1690,7 +1676,7 @@ fn evaluate_commit_range(
                 codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
             ),
         };
-        eprintln!("{}", finding.line("codeflow ci", "warning"));
+        eprintln!("{}", shown_finding(root, &finding, "warning"));
         return CommitRangeEvaluation {
             base_sha: None,
             violations: Vec::new(),
@@ -1706,7 +1692,7 @@ fn evaluate_commit_range(
                 "codeflow ci: range {}..{} ({}) — {} non-merge commit(s), {} merge(s)",
                 short(&base_sha),
                 head,
-                range_source,
+                codeflow_core::security::git::without_remote_names(root, range_source),
                 commits.len() - merges,
                 merges
             );
@@ -1729,7 +1715,7 @@ fn evaluate_commit_range(
                             ),
                             codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
                         );
-                        eprintln!("{}", finding.line("codeflow ci", "warning"));
+                        eprintln!("{}", shown_finding(root, &finding, "warning"));
                         Some(false)
                     }
                 }
@@ -1751,7 +1737,7 @@ fn evaluate_commit_range(
                 format!("could not enumerate commits ({error}); commit checks skipped"),
                 codeflow_core::remedy::CI_RANGE_UNREADABLE.remedy(),
             );
-            eprintln!("{}", finding.line("codeflow ci", "warning"));
+            eprintln!("{}", shown_finding(root, &finding, "warning"));
             CommitRangeEvaluation {
                 base_sha: None,
                 violations: Vec::new(),
@@ -1778,8 +1764,33 @@ fn work_start_reader_error(error: &codeflow_core::workgraph::work_start::WorkSta
     use codeflow_core::workgraph::work_start::WorkStartError;
     matches!(
         error,
-        WorkStartError::Repository(_) | WorkStartError::InvalidGraph(_)
+        WorkStartError::Repository(_)
+            | WorkStartError::UnresolvableTip(_)
+            | WorkStartError::InvalidGraph(_)
     )
+}
+
+pub(super) fn shown_reference(root: &Path, reference: &str) -> String {
+    codeflow_core::security::git::without_remote_names(
+        root,
+        &codeflow_core::security::git::shown_ref(root, reference),
+    )
+}
+
+fn shown_finding(root: &Path, finding: &codeflow_core::remedy::Finding, level: &str) -> String {
+    super::shown_in(root, &finding.line("codeflow ci", level))
+}
+
+fn shown_candidates(root: &Path, candidates: &[String]) -> String {
+    candidates
+        .iter()
+        .map(|candidate| shown_reference(root, candidate))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn shown_error(root: &Path, text: &str) -> String {
+    codeflow_core::git::display_message(&super::shown_in(root, text))
 }
 
 /// A work branch carrying a task id (any sanctioned prefix) may contain
@@ -1904,9 +1915,16 @@ fn stacked_pins(root: &Path, git: &GitPolicy, branch: &str, head: &str) -> Vec<R
         }
         Err(error) => {
             let finding = codeflow_core::remedy::Finding::new(
-                format!("a predecessor head in this range is not honoured as reviewed: {error}"),
-                codeflow_core::remedy::WORK_START_MERGE_PLANNING
-                    .with(&[("target", &target.target), ("id", &task_id)]),
+                codeflow_core::security::git::without_remote_names(
+                    root,
+                    &format!(
+                        "a predecessor head in this range is not honoured as reviewed: {error}"
+                    ),
+                ),
+                codeflow_core::remedy::WORK_START_MERGE_PLANNING.with(&[
+                    ("target", &shown_reference(root, &target.target)),
+                    ("id", &task_id),
+                ]),
             );
             println!("{}", finding.line("codeflow ci", "note"));
             Vec::new()
@@ -1977,12 +1995,12 @@ fn evaluate_work_start(
                 tagged.push(TaggedViolation {
                     sha: None,
                     violation: if work_start_reader_error(&error) {
-                        tracking_state_violation(error)
+                        tracking_state_violation(error.shown(root))
                     } else {
                         Violation::new(
                             "work.stable_planning_anchor",
                             level,
-                            error.to_string(),
+                            error.shown(root),
                             codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", &task_id)]),
                         )
                     },
@@ -2003,13 +2021,19 @@ fn evaluate_work_start(
             tagged.push(TaggedViolation {
                 sha: None,
                 violation: if work_start_reader_error(&error) {
-                    tracking_state_violation(error)
+                    tracking_state_violation(error.shown(root))
                 } else {
                     Violation::new(
                         "work.stable_planning_anchor",
                         level,
-                        error.to_string(),
-                        error.admission_remedy(&target, &task_id),
+                        error.shown(root),
+                        error.admission_remedy(
+                            &codeflow_core::security::git::without_remote_names(
+                                root,
+                                &codeflow_core::security::git::shown_escaped_ref(root, &target),
+                            ),
+                            &task_id,
+                        ),
                     )
                 },
             });
@@ -2189,25 +2213,26 @@ fn print_source_banner(root: &Path) {
 /// verified in full, which is not a pass), else 0. A skipped branch-naming
 /// check is reported but not fatal: a detached-head run without a CI branch
 /// variable is a legitimate state.
-fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
+fn report(root: &Path, tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     for t in tagged {
         let plane = match &t.sha {
             Some(sha) => format!("ci commit {}", short(sha)),
             None => "ci".to_string(),
         };
-        if t.violation.rule == workflow_change::RULE {
-            eprintln!("{}", workflow_change::render(&t.violation, &plane));
+        let rendered = if t.violation.rule == workflow_change::RULE {
+            workflow_change::render(&t.violation, &plane)
         } else if t.violation.rule.starts_with("work.") {
-            eprintln!(
-                "{}",
-                t.violation.render_invariant(
-                    &plane,
-                    ".codeflow/project.toml full tier or an existing durable task layout"
-                )
-            );
+            t.violation.render_invariant(
+                &plane,
+                ".codeflow/project.toml full tier or an existing durable task layout",
+            )
         } else {
-            eprintln!("{}", t.violation.render(&plane));
-        }
+            t.violation.render(&plane)
+        };
+        eprintln!(
+            "{}",
+            codeflow_core::security::git::without_remote_names(root, &rendered)
+        );
     }
 
     let violations: Vec<Violation> = tagged.iter().map(|t| t.violation.clone()).collect();
@@ -3002,7 +3027,12 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
             .ok()?;
         let said = String::from_utf8_lossy(&out.stderr);
         let first = said.lines().map(str::trim).find(|line| !line.is_empty())?;
-        (!out.status.success()).then(|| first.to_string())
+        (!out.status.success()).then(|| {
+            super::shown_in(
+                root,
+                &first.replace(candidate, &shown_reference(root, candidate)),
+            )
+        })
     })
 }
 
@@ -3013,6 +3043,15 @@ fn base_refusal(root: &Path, candidates: &[String]) -> Option<String> {
 /// a local ref named `refs/remotes/origin/main` could stand in for an absent
 /// remote-tracking ref.
 fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
+    // A full ref that exists and names no readable commit refuses with its
+    // cause and remedy (TSK-416 AC-9), never git's bare refusal.
+    if is_full_ref(rev) {
+        if let Some(refusal) =
+            codeflow_core::workgraph::work_start::unresolvable_reference(root, rev)
+        {
+            return Err(refusal);
+        }
+    }
     if is_full_ref(rev) && !exact_ref_exists(root, rev)? {
         return Ok(None);
     }
@@ -3022,14 +3061,26 @@ fn rev_parse(root: &Path, rev: &str) -> Result<Option<String>, String> {
         .args(["rev-parse", "--verify", "--quiet"])
         .arg(format!("{rev}^{{commit}}"))
         .output()
-        .map_err(|error| format!("cannot read revision {rev}: {error}"))?;
+        .map_err(|error| {
+            super::shown_in(
+                root,
+                &format!(
+                    "cannot read revision {}: {error}",
+                    shown_reference(root, rev)
+                ),
+            )
+        })?;
     if !out.status.success() {
         if out.status.code() == Some(1) && out.stderr.is_empty() {
             return Ok(None);
         }
-        return Err(format!(
-            "cannot read revision {rev}: {}",
-            String::from_utf8_lossy(&out.stderr)
+        return Err(super::shown_in(
+            root,
+            &format!(
+                "cannot read revision {}: {}",
+                shown_reference(root, rev),
+                String::from_utf8_lossy(&out.stderr)
+            ),
         ));
     }
     let text = String::from_utf8(out.stdout)
@@ -3056,11 +3107,20 @@ pub(super) fn exact_ref_exists(root: &Path, name: &str) -> Result<bool, String> 
         .args(["show-ref", "--verify", "--quiet"])
         .arg(name)
         .output()
-        .map_err(|error| format!("cannot read ref {name}: {error}"))?;
+        .map_err(|error| {
+            super::shown_in(
+                root,
+                &format!("cannot read ref {}: {error}", shown_reference(root, name)),
+            )
+        })?;
     match out.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
-        _ => Err(format!("cannot read ref {name}: Git exited {}", out.status)),
+        _ => Err(format!(
+            "cannot read ref {}: Git exited {}",
+            shown_reference(root, name),
+            out.status
+        )),
     }
 }
 
@@ -3545,6 +3605,64 @@ fn read_release_impact() -> i32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn revision_diagnostics_withhold_names_and_keep_plain_names() {
+        let dir = r24_range(&[], &[]);
+        let repo = git2::Repository::open(dir.path()).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        for name in ["refs/heads/cred@SECRETVALUE-bad", "refs/heads/ordinary-bad"] {
+            let file = repo.path().join(name);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, format!("{}\n", "1".repeat(40))).unwrap();
+            let said = super::exact_ref_exists(dir.path(), name).unwrap_err();
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if name.contains("ordinary") {
+                assert!(said.contains(name), "{said}");
+            }
+        }
+    }
+
+    #[test]
+    fn containment_warning_withholds_unknown_tracking_target() {
+        let dir = r24_range(&[], &[]);
+        let names = super::Names {
+            branch: "feat/x",
+            into: None,
+            into_flag: None,
+            destination: None,
+            advertisement: None,
+            candidate: None,
+            limits: codeflow_core::git::remote_query::QueryLimits::default(),
+            token: &super::RunToken::Absent,
+            release: std::cell::OnceCell::default(),
+        };
+        for target in [
+            "refs/remotes/unknown-SECRETVALUE/missing",
+            "ordinary-target",
+        ] {
+            let mut tagged = Vec::new();
+            super::target_containment_warning(
+                dir.path(),
+                target,
+                "HEAD",
+                &Err(super::NoTarget {
+                    message: "unavailable".into(),
+                    remedy: "retry".into(),
+                }),
+                &names,
+                &mut tagged,
+            );
+            assert_eq!(tagged.len(), 1);
+            let said = &tagged[0].violation.message;
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if target == "ordinary-target" {
+                assert!(said.contains("target 'ordinary-target'"), "{said}");
+            }
+        }
+    }
     /// A repository whose `main` holds `base` and whose `HEAD` (`feat/x`)
     /// then commits `head`, each a list of (path, text).
     fn r24_range(base: &[(&str, &str)], head: &[(&str, &str)]) -> tempfile::TempDir {
@@ -3584,6 +3702,62 @@ mod tests {
         git(&["add", "-A"]);
         git(&["commit", "-q", "--allow-empty", "-m", "chore: head"]);
         dir
+    }
+
+    /// TSK-416 AC-10: the base `codeflow ci` reads for a bare branch is its
+    /// remote-tracking ref, so a stale local `main` beside a newer
+    /// `origin/main` never anchors the range; the local branch decides only
+    /// where nothing of that name is fetched.
+    #[test]
+    fn a_stale_local_base_never_anchors_the_range() {
+        let dir = r24_range(&[], &[]);
+        let root = dir.path();
+        let run = |args: &[&str]| {
+            let out = codeflow_core::git::command()
+                .args(args)
+                .current_dir(root)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8(out.stdout).unwrap().trim().to_string()
+        };
+        // The fetched refs belong to a configured remote: a ref of no
+        // configured remote has its remote withheld (TSK-416 review round
+        // 9). The URL is never asked here.
+        run(&["config", "remote.origin.url", "/nonexistent/origin.git"]);
+        let stale = run(&["rev-parse", "main"]);
+        let fetched = run(&["rev-parse", "feat/x"]);
+        run(&["update-ref", "refs/remotes/origin/main", &fetched]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(fetched.clone())
+        );
+        assert_eq!(
+            super::resolve_base(root, &super::base_refs("main")).unwrap(),
+            Some(fetched)
+        );
+        run(&["update-ref", "-d", "refs/remotes/origin/main"]);
+        assert_eq!(
+            super::resolve_base(root, &super::branch_anchors("main")).unwrap(),
+            Some(stale)
+        );
+        // TSK-416 AC-9: a fetched ref that names no readable commit refuses;
+        // it never falls through to the local branch.
+        let missing = "1".repeat(40);
+        std::fs::create_dir_all(root.join(".git/refs/remotes/origin")).unwrap();
+        std::fs::write(
+            root.join(".git/refs/remotes/origin/main"),
+            format!("{missing}\n"),
+        )
+        .unwrap();
+        let error = super::resolve_base(root, &super::branch_anchors("main")).unwrap_err();
+        for part in [
+            "refs/remotes/origin/main",
+            missing.as_str(),
+            "a fresh clone of the remote",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
     }
 
     /// Delete the loose object `spec` names, as a damaged clone lacks it.
@@ -5352,27 +5526,41 @@ mod tests {
 
     #[test]
     fn report_clean_all_ran_exits_zero() {
-        assert_eq!(report(&[], &["commit", "branch-naming"], &[]), 0);
+        assert_eq!(
+            report(Path::new("."), &[], &["commit", "branch-naming"], &[]),
+            0
+        );
     }
 
     #[test]
     fn report_skipped_commit_checks_exits_two() {
         // A skipped commit check verified nothing — never a clean exit 0.
-        assert_eq!(report(&[], &["branch-naming"], &["commit"]), 2);
+        assert_eq!(
+            report(Path::new("."), &[], &["branch-naming"], &["commit"]),
+            2
+        );
     }
 
     #[test]
     fn report_skipped_branch_naming_alone_exits_zero() {
         // A detached-head run without a CI branch variable is legitimate; the
         // skip is named in the summary but is not fatal.
-        assert_eq!(report(&[], &["commit"], &["branch-naming"]), 0);
+        assert_eq!(
+            report(Path::new("."), &[], &["commit"], &["branch-naming"]),
+            0
+        );
     }
 
     #[test]
     fn report_blocking_violation_exits_one_even_when_skipped() {
         // A found violation outranks the incomplete-run signal.
         assert_eq!(
-            report(&[block_violation()], &["branch-naming"], &["commit"]),
+            report(
+                Path::new("."),
+                &[block_violation()],
+                &["branch-naming"],
+                &["commit"]
+            ),
             1
         );
     }

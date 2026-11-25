@@ -49,7 +49,10 @@ pub(super) fn findings(
     let target = super::imports::home_tip(repo, &default.name)?.ok_or_else(|| {
         format!(
             "published home `{}` is unavailable; fetch its full history",
-            default.name
+            crate::security::git::without_remote_names(
+                root,
+                &crate::security::git::shown_ref(root, &default.name)
+            )
         )
     })?;
     let mut homes = BTreeSet::from([target]);
@@ -100,7 +103,7 @@ pub(super) fn findings(
         let refs: Vec<_> = hide.iter().map(String::as_str).collect();
         for path in owned_paths(root, &merge.to_string(), &refs)? {
             if super::super::classify::path_sets().adopter_facing_any_case(&path, &project) {
-                found.push(finding(BINDING_RULE, format!("receiving line `{line}` introduces {path} through merge {merge}, an adopter-facing path brought onto the line outside its verified source and every reviewed task head; land it on the line only from a task head whose completion records an approving review at that head, or, where a task's pull request into the line carries the merge, carry the work through that receiving task's pull request and review the result before landing")));
+                found.push(finding(BINDING_RULE, crate::security::git::without_remote_names(root, &format!("receiving line `{line}` introduces {path} through merge {merge}, an adopter-facing path brought onto the line outside its verified source and every reviewed task head; land it on the line only from a task head whose completion records an approving review at that head, or, where a task's pull request into the line carries the merge, carry the work through that receiving task's pull request and review the result before landing"))));
             }
         }
     }

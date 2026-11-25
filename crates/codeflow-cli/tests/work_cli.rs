@@ -78,6 +78,571 @@ fn succeeds(out: &Output) {
     );
 }
 
+#[test]
+fn next_withholds_the_declared_target_in_text_and_json() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/main");
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: target"]);
+    git(root, &["remote", "add", remote, "/unused"]);
+    git(root, &["update-ref", &target, "HEAD"]);
+    for args in [vec!["work", "next"], vec!["work", "next", "--json"]] {
+        let out = cli(root, &args, None);
+        succeeds(&out);
+        let text = String::from_utf8(out.stdout).unwrap();
+        assert!(text.contains("TSK-001"), "{text}");
+        assert!(!text.contains("SECRETVALUE"), "{text}");
+        assert!(
+            text.contains(codeflow_core::security::git::WITHHELD_REMOTE),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn claim_withholds_a_missing_fetched_source() {
+    let dir = fixture();
+    let root = dir.path();
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/missing");
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", remote, bare.path().to_str().unwrap()],
+    );
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: target"]);
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    assert!(!out.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(text.contains("is not fetched here"), "{text}");
+    assert!(!text.contains("SECRETVALUE"), "{text}");
+}
+
+fn withheld_start_fixture() -> (tempfile::TempDir, tempfile::TempDir, String) {
+    let dir = fixture();
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    let remote = "cred@SECRETVALUE";
+    let target = format!("refs/remotes/{remote}/main");
+    git(
+        dir.path(),
+        &["remote", "add", remote, bare.path().to_str().unwrap()],
+    );
+    write(
+        dir.path(),
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            &format!("integration_target: {target}"),
+        ),
+    );
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-qm", "docs: target"]);
+    git(dir.path(), &["push", "-q", remote, "main"]);
+    (dir, bare, target)
+}
+
+#[test]
+fn start_withholds_an_advanced_claim_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    succeeds(&cli(root, &["work", "claim", "TSK-001"], None));
+    let branch = claimed(root, "TSK-001");
+    git(root, &["commit", "--allow-empty", "-qm", "chore: advance"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", &branch]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(said.contains("advanced to"), "{said}");
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn start_withholds_a_required_claim_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["commit", "--allow-empty", "-qm", "chore: advance"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("HEAD does not contain required base"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn start_withholds_a_mismatched_target() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/cred@SECRETVALUE/other",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: another target"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main:other"]);
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001", "--into", "main"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("not requested target"), "{said}");
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn next_json_withholds_remote_names_inside_claim_branches() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-cred@SECRETVALUE";
+    git(root, &["branch", branch]);
+    git(root, &["branch", "task/TSK-001-other"]);
+    let out = cli(root, &["work", "next", "--json"], None);
+    succeeds(&out);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["state"], "active", "{json}");
+    assert!(!task["branches"].as_array().unwrap().is_empty(), "{json}");
+    assert!(
+        !json["conflicts"]["TSK-001"].as_array().unwrap().is_empty(),
+        "{json}"
+    );
+    assert!(!text(&out).contains("SECRETVALUE"), "{}", text(&out));
+    assert!(
+        task["branches"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("task/TSK-001-other")),
+        "{json}"
+    );
+    assert!(
+        json["conflicts"]["TSK-001"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("task/TSK-001-other")),
+        "{json}"
+    );
+}
+
+#[test]
+fn start_output_withholds_branch_names_and_preserves_plain_names() {
+    for own in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let (dir, _bare, _) = withheld_start_fixture();
+        let root = dir.path();
+        git(root, &["branch", "task/TSK-001-cred@SECRETVALUE-sibling"]);
+        git(root, &["branch", "task/TSK-001-other"]);
+        git(
+            root,
+            &[
+                "push",
+                "-q",
+                "cred@SECRETVALUE",
+                "HEAD:refs/heads/task/TSK-001-remote",
+            ],
+        );
+        git(root, &["switch", "-qc", own]);
+        let out = cli(root, &["work", "start", "TSK-001"], None);
+        succeeds(&out);
+        let said = text(&out);
+        assert!(said.contains("anchored at"), "{said}");
+        assert!(said.contains("task/TSK-001-other"), "{said}");
+        assert!(said.contains("task/TSK-001-remote"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if !own.contains("SECRETVALUE") {
+            assert!(said.contains(&format!("for {own} ->")), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_head_refusal_withholds_names_and_preserves_plain_names() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    for name in ["refs/remotes/cred@SECRETVALUE/missing", "ordinary-missing"] {
+        let out = cli(root, &["ci", "--head", name], None);
+        let said = text(&out);
+        assert!(!out.status.success(), "{said}");
+        assert!(said.contains("does not name a commit"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if name == "ordinary-missing" {
+            assert!(said.contains("head 'ordinary-missing'"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_base_warning_withholds_candidates_and_keeps_plain_names() {
+    let dir = fixture();
+    let root = dir.path();
+    for base in [
+        "refs/remotes/unknown-SECRETVALUE/missing",
+        "ordinary-missing",
+    ] {
+        let out = cli(root, &["ci", "--base", base, "--head", "HEAD"], None);
+        let said = text(&out);
+        assert!(said.contains("could not resolve a base ref"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if base == "ordinary-missing" {
+            assert!(said.contains("tried: ordinary-missing"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_split_range_does_not_print_a_truncated_remote_name() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    for from in ["cred@SECRETVALUE-missing", "ordinary-missing"] {
+        let out = cli(
+            root,
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--commits-from",
+                from,
+            ],
+            None,
+        );
+        let said = text(&out);
+        assert!(said.contains("--commits-from"), "{said}");
+        assert!(!said.contains("cred@SEC"), "{said}");
+        if from == "ordinary-missing" {
+            assert!(said.contains("run over ordinary-missing.."), "{said}");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ci_revision_diagnostic_withholds_names_and_keeps_plain_names() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    let bin = tempfile::tempdir().unwrap();
+    let real = Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    let real = String::from_utf8(real.stdout).unwrap();
+    write(bin.path(), "git", &format!("#!/bin/sh\nfor arg do\n case \"$arg\" in\n 'cred@SECRETVALUE-diagnostic^{{commit}}'|'ordinary-diagnostic^{{commit}}')\n printf 'fatal: fixture cannot read %s\\n' \"$arg\" >&2\n exit 128;;\n esac\ndone\nexec '{}' \"$@\"\n", real.trim()));
+    std::fs::set_permissions(
+        bin.path().join("git"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    for name in ["cred@SECRETVALUE-diagnostic", "ordinary-diagnostic"] {
+        let out = cli(root, &["ci", "--head", name], Some(bin.path()));
+        let said = text(&out);
+        assert!(!out.status.success(), "{said}");
+        assert!(said.contains("cannot read revision"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if name.contains("ordinary") {
+            assert!(said.contains(name), "{said}");
+        }
+    }
+}
+
+#[test]
+fn status_output_withholds_branch_names_and_keeps_plain_names() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        git(root, &["switch", "-qc", branch]);
+        write(root, "dirty", "uncommitted\n");
+        for args in [vec!["status"], vec!["work", "status"]] {
+            let out = cli(root, &args, None);
+            succeeds(&out);
+            let said = text(&out);
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if branch.ends_with("topic") {
+                assert!(said.contains(branch), "{said}");
+            }
+        }
+    }
+}
+
+#[test]
+fn orient_output_withholds_branch_names_and_keeps_plain_names() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        git(root, &["switch", "-qc", branch]);
+        let out = cli(root, &["orient"], None);
+        succeeds(&out);
+        let said = text(&out);
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if branch.ends_with("topic") {
+            assert!(said.contains(branch), "{said}");
+        }
+    }
+}
+
+#[test]
+fn ci_release_announcement_withholds_names_and_keeps_plain_names() {
+    for branch in [
+        "integration/release-cred@SECRETVALUE",
+        "integration/release-plain",
+    ] {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+        let out = cli(
+            root,
+            &[
+                "ci", "--base", "main", "--head", "HEAD", "--branch", branch, "--into", branch,
+            ],
+            None,
+        );
+        let said = text(&out);
+        assert!(said.contains("acceptance: release range"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        if branch.ends_with("plain") {
+            assert!(
+                said.contains(
+                    "release range ('integration/release-plain' into 'integration/release-plain')"
+                ),
+                "{said}"
+            );
+        }
+    }
+}
+
+#[test]
+fn next_preserves_ordinary_dependency_line_text() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/EPC-999-ordinary",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: ordinary line"]);
+    let out = cli(root, &["work", "next"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(
+        said.contains("'integration/EPC-999-ordinary', which is not fetched here: unknown"),
+        "{said}"
+    );
+}
+
+#[test]
+fn start_preserves_ordinary_missing_source_text() {
+    let dir = fixture();
+    let root = dir.path();
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "-q", "--bare"]);
+    git(
+        root,
+        &["remote", "add", "origin", bare.path().to_str().unwrap()],
+    );
+    git(root, &["switch", "-qc", "task/TSK-001-work"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("source 'main' is not fetched here; fetch its remote"),
+        "{said}"
+    );
+}
+
+#[test]
+fn next_json_keeps_ordinary_claim_branches_byte_exact() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    let branch = "task/TSK-001-café@topic";
+    git(root, &["branch", branch]);
+    let out = cli(root, &["work", "next", "--json"], None);
+    succeeds(&out);
+    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let task = json["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["id"] == "TSK-001")
+        .unwrap();
+    assert_eq!(task["branches"], serde_json::json!([branch]), "{json}");
+}
+
+#[test]
+fn next_json_withholds_landed_branches_and_keeps_plain_names_exact() {
+    for branch in ["task/TSK-001-cred@SECRETVALUE", "task/TSK-001-café@topic"] {
+        let (dir, _bare, _) = withheld_start_fixture();
+        let root = dir.path();
+        git(root, &["switch", "-qc", branch]);
+        write(root, "implementation", "work\n");
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "feat: work"]);
+        git(root, &["switch", "-q", "main"]);
+        git(root, &["merge", "--no-ff", "-qm", "merge work", branch]);
+        git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+        let out = cli(root, &["work", "next", "--json"], None);
+        succeeds(&out);
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let task = json["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["id"] == "TSK-001")
+            .unwrap();
+        assert_eq!(task["state"], "landed", "{json}");
+        assert!(
+            !task["landed_branches"].as_array().unwrap().is_empty(),
+            "{json}"
+        );
+        assert!(!text(&out).contains("SECRETVALUE"), "{}", text(&out));
+        if !branch.contains("SECRETVALUE") {
+            assert_eq!(
+                task["landed_branches"],
+                serde_json::json!([branch]),
+                "{json}"
+            );
+        }
+    }
+}
+
+#[test]
+fn next_withholds_an_unknown_dependency_line() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/unknown-SECRETVALUE/other",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: unknown line"]);
+    let out = cli(root, &["work", "next"], None);
+    succeeds(&out);
+    let said = text(&out);
+    assert!(
+        said.contains("which is not fetched here: unknown"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
+#[test]
+fn ci_withholds_rejected_declared_line_in_output() {
+    let dir = fixture();
+    let root = dir.path();
+    git(root, &["remote", "add", "cred@SECRETVALUE", "/unused"]);
+    write(
+        root,
+        "project-management/tasks/TSK-001.md",
+        &record("TSK-001", "[]").replace(
+            "integration_target: main",
+            "integration_target: integration/EPC-999-cred@SECRETVALUE",
+        ),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: declared line"]);
+    for branch in ["task/TSK-001-work", "task/TSK-001-cred@SECRETVALUE"] {
+        for line_tip in [false, true] {
+            let mut args = vec!["ci", "--base", "HEAD", "--head", "HEAD", "--branch", branch];
+            if line_tip {
+                args.extend(["--line-tip", "integration/EPC-999-cred@SECRETVALUE"]);
+            }
+            let out = cli(root, &args, None);
+            let said = text(&out);
+            assert!(said.contains("branch declared target"), "{said}");
+            if line_tip {
+                assert!(said.contains("line tip: the head is judged"), "{said}");
+            }
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+        }
+    }
+}
+
+#[test]
+fn start_withholds_an_unfetched_dependency_source() {
+    let (dir, _bare, _) = withheld_start_fixture();
+    let root = dir.path();
+    // The claim is fixed before introducing the predecessor. Resolving the
+    // dependency source refuses before dependency validation, with a shown ref.
+    succeeds(&cli(root, &["work", "claim", "TSK-001"], None));
+    let branch = claimed(root, "TSK-001");
+    write(
+        root,
+        "project-management/tasks/TSK-002.md",
+        &record("TSK-002", "[]").replace(
+            "integration_target: main",
+            "integration_target: refs/remotes/cred@SECRETVALUE/missing",
+        ),
+    );
+    let task = std::fs::read_to_string(root.join("project-management/tasks/TSK-001.md"))
+        .unwrap()
+        .replace("depends_on: []", "depends_on: [TSK-002]");
+    write(root, "project-management/tasks/TSK-001.md", &task);
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: dependency"]);
+    git(root, &["push", "-q", "cred@SECRETVALUE", "main"]);
+    git(root, &["switch", "-q", &branch]);
+    git(root, &["merge", "-q", "main"]);
+    let out = cli(root, &["work", "start", "TSK-001"], None);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(
+        said.contains("is not fetched here; fetch its remote"),
+        "{said}"
+    );
+    assert!(!said.contains("SECRETVALUE"), "{said}");
+}
+
 #[cfg(unix)]
 #[test]
 fn claim_redacts_remote_userinfo_in_git_diagnostics() {
@@ -1579,8 +2144,8 @@ fn tsk381_a_differently_spelled_line_does_not_land_a_research_pin() {
 
 /// TSK-381 review round 1 (Grok F1 demonstration 1): the local `main`, ahead
 /// of `origin/main`, retargets TSK-003 to an unpushed branch `evil` that
-/// completes it, and TSK-004 pins that forged completion. `work next` waits
-/// and `work claim` refuses, naming `origin/main` and `evil`.
+/// completes it, and TSK-004 pins that forged completion. `work next` waits,
+/// naming `origin/main` and `evil`, and `work claim` refuses.
 #[test]
 fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
     let dir = fixture();
@@ -1646,10 +2211,13 @@ fn tsk381_an_unpushed_branch_cannot_land_a_research_pin() {
     let next = String::from_utf8_lossy(&next.stdout).to_string();
     assert!(next.contains("waiting  TSK-004"), "{next}");
     assert!(next.contains(&reason), "{next}");
+    // The claim refuses before it reads the pin: it cuts from the fetched
+    // `origin/main`, and this local `main` holds commits it lacks (TSK-416).
     let claim = cli(root, &["work", "claim", "TSK-004"], None);
     let said = String::from_utf8_lossy(&claim.stderr).to_string();
     assert_eq!(claim.status.code(), Some(1), "{said}");
-    assert!(said.contains(&reason), "{said}");
+    assert!(said.contains("refs/heads/main at"), "{said}");
+    assert!(said.contains("refs/remotes/origin/main at"), "{said}");
     assert!(git(root, &["branch", "--list", "task/TSK-004-*"]).is_empty());
 }
 
@@ -3043,4 +3611,585 @@ fn a_claim_that_cannot_write_the_config_renames_nothing() {
     assert!(text(&out).contains("nothing was renamed"), "{}", text(&out));
     assert_eq!(git(root, &["branch", "--show-current"]), "fix/standalone");
     assert!(git(root, &["branch", "--list", "task/TSK-003*"]).is_empty());
+}
+
+/// The claim branch `work claim` created for `id`.
+fn claimed(root: &Path, id: &str) -> String {
+    git(
+        root,
+        &[
+            "branch",
+            "--list",
+            "--format=%(refname:short)",
+            &format!("task/{id}-*"),
+        ],
+    )
+}
+
+/// TSK-416 AC-1 (issue 262): a research pin is on the fetched line and not
+/// in the local copy of it, which is behind. The claim passes, names the
+/// fetched line, and leaves the local branch where it was.
+#[test]
+fn tsk416_a_pin_on_the_fetched_line_is_met_beside_a_stale_local_copy() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let line = "integration/test-line";
+    git(root, &["switch", "-qc", line]);
+    let stale = commit_record(root, "TSK-003", &record_on("TSK-003", line, "[]"));
+    git(root, &["push", "-q", "-u", "origin", line]);
+    let pin = complete(root, "TSK-003", "src/findings.rs");
+    let consumer = record_on("TSK-004", line, &research_pin("TSK-003", &pin));
+    let tip = commit_record(root, "TSK-004", &consumer);
+    git(root, &["push", "-q", "origin", line]);
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["branch", "-q", "-f", line, &stale]);
+    // The record is visible in the checkout, so the claim reads the bare name.
+    commit_record(root, "TSK-004", &consumer);
+
+    let out = cli(root, &["work", "claim", "TSK-004"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/{line}@{}", &tip[..9])),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(git(root, &["rev-parse", line]), stale);
+}
+
+/// TSK-416, the sibling of AC-1: a predecessor completes on its own line,
+/// and the local copy of that line is behind `origin`'s. The successor's
+/// claim reads the predecessor's status on the fetched line, never the
+/// stale local copy's `todo`, and cuts from that fetched line (TSK-1047).
+#[test]
+fn tsk416_a_dependency_is_read_on_the_fetched_line_beside_a_stale_local_copy() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let producer = "integration/producer-line";
+    let stale = commit_record(root, "TSK-003", &record_on("TSK-003", producer, "[]"));
+    commit_record(root, "TSK-004", &record_on("TSK-004", "main", "[TSK-003]"));
+    git(root, &["push", "-q", "origin", "main"]);
+    git(root, &["switch", "-qc", producer]);
+    git(root, &["push", "-q", "origin", producer]);
+    let fetched = complete(root, "TSK-003", "src/findings.rs");
+    git(root, &["push", "-q", "origin", producer]);
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["branch", "-q", "-f", producer, &stale]);
+
+    let out = cli(root, &["work", "claim", "TSK-004"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/{producer}@{}", &fetched[..9])),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(git(root, &["rev-parse", producer]), stale);
+}
+
+/// TSK-416 AC-1 and AC-6 (issue 550): with the local line behind
+/// `origin`'s, the claim names `origin/<line>` and cuts from its tip; with
+/// the local line ahead (unpushed commits), the claim refuses, naming both
+/// refs and commits, and creates no branch.
+#[test]
+fn tsk416_a_claim_cuts_from_the_fetched_tip_or_refuses_a_differing_local_line() {
+    let dir = fixture();
+    let root = dir.path();
+    let _remote = with_origin(root);
+    let base = git(root, &["rev-parse", "HEAD"]);
+    let line = "integration/test-line";
+    git(root, &["switch", "-qc", line]);
+    commit_record(root, "TSK-003", &record_on("TSK-003", line, "[]"));
+    let fetched = commit_record(root, "TSK-005", &record_on("TSK-005", line, "[]"));
+    git(root, &["push", "-q", "-u", "origin", line]);
+    git(root, &["switch", "-q", "main"]);
+
+    // Behind: the claim reads and cuts from the fetched tip.
+    git(root, &["branch", "-q", "-f", line, &base]);
+    let out = cli(root, &["work", "claim", "TSK-003"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/{line}@{}", &fetched[..9])),
+        "{}",
+        text(&out)
+    );
+    assert_eq!(
+        git(root, &["rev-parse", &claimed(root, "TSK-003")]),
+        fetched
+    );
+    assert_eq!(git(root, &["rev-parse", line]), base);
+
+    // Ahead: a local commit the fetched line lacks refuses the claim, from
+    // a checkout where the record is visible, so its bare target is read.
+    git(root, &["switch", "-q", "-C", line, &fetched]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: unpushed"],
+    );
+    let ahead = git(root, &["rev-parse", "HEAD"]);
+    let out = cli(root, &["work", "claim", "TSK-005"], None);
+    assert!(!out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    for part in [
+        format!("refs/heads/{line} at {ahead}"),
+        format!("refs/remotes/origin/{line} at {fetched}"),
+        "fetched tip".to_string(),
+    ] {
+        assert!(said.contains(&part), "{part}: {said}");
+    }
+    assert!(claimed(root, "TSK-005").is_empty(), "{said}");
+}
+
+/// `codeflow hook git-guard` on a Claude Code `PreToolUse` Bash payload for
+/// `shell`, run from `root`: the exit code and what it printed.
+fn guard_verdict(root: &Path, shell: &str) -> (Option<i32>, String) {
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": shell},
+        "cwd": root,
+    })
+    .to_string();
+    let mut guard = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(["hook", "git-guard"])
+        .current_dir(root)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(guard.stdin.as_mut().unwrap(), payload.as_bytes()).unwrap();
+    let out = guard.wait_with_output().unwrap();
+    (out.status.code(), text(&out))
+}
+
+/// TSK-416 AC-9: a fetched tip that names no readable commit refuses,
+/// naming the cause, the ref, the object it points at and a remedy, and
+/// the guard passes the remedy, which is run here.
+/// - A missing object stops the claim's own fetch: the refusal names the
+///   ref and a fresh clone, from which the same claim cuts from the
+///   fetched tip.
+/// - An object that is here and is not a commit: `work next` names a plain
+///   fetch, which rewrites the ref, and `work next` then reads the line.
+///
+/// The refusal names the remote, never its URL, and prints no step that
+/// shows the URL (TSK-416 review round 2); the clone is made from the URL
+/// the remote was added with.
+#[test]
+fn tsk416_an_unresolvable_fetched_tip_names_a_remedy_that_runs_under_the_guard() {
+    let dir = fixture();
+    let root = dir.path();
+    // A remote named by URL, as an adopter's is: the guard reads a bare
+    // local path given to `git clone` as repository metadata it would
+    // touch, and refuses it.
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "-q", "--bare", "-b", "main"]);
+    let url = format!("file://{}", remote.path().display());
+    git(root, &["remote", "add", "origin", &url]);
+    git(root, &["push", "-q", "-u", "origin", "main"]);
+    git(root, &["remote", "set-head", "origin", "main"]);
+    let fetched = git(root, &["rev-parse", "refs/remotes/origin/main"]);
+    let missing = "1".repeat(40);
+    write(
+        root,
+        ".git/refs/remotes/origin/main",
+        &format!("{missing}\n"),
+    );
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    assert!(!out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    for part in [
+        format!("refs/remotes/origin/main points at {missing}"),
+        "not a commit this clone can read".to_string(),
+        "a fresh clone of the remote origin, made from outside this clone with that remote's URL (`git clone <url> <path>`)".to_string(),
+        "`git branch -d -r origin/main`, then `git fetch origin`".to_string(),
+        "which the guard leaves to the operator".to_string(),
+    ] {
+        assert!(said.contains(&part), "{part}: {said}");
+    }
+    // The remedy names the remote; git's own fetch error before it may
+    // quote the URL, which display redaction covers.
+    let remedy = &said[said.find("the fetched tip cannot be resolved").unwrap()..];
+    assert!(!remedy.contains(&url), "{said}");
+    assert!(!said.contains("get-url"), "{said}");
+    assert!(!said.contains("update-ref"), "{said}");
+    assert!(claimed(root, "TSK-001").is_empty(), "{said}");
+    assert_eq!(git(root, &["remote", "get-url", "origin"]), url);
+
+    let scratch = tempfile::tempdir().unwrap();
+    let clone = scratch.path().join("fresh");
+    let fresh_clone = format!("git clone {url} {}", clone.display());
+    // The guard reads this clone's policy from the broken ref, so it fails
+    // closed here; the clone is made from outside it, as the remedy says,
+    // here from a session in another, healthy repository.
+    let (code, _) = guard_verdict(root, &fresh_clone);
+    assert_eq!(code, Some(2));
+    let outside = fixture();
+    let (code, printed) = guard_verdict(outside.path(), &fresh_clone);
+    assert_eq!(code, Some(0), "{fresh_clone}: {printed}");
+    assert!(!printed.contains("BLOCKED"), "{fresh_clone}: {printed}");
+    codeflow_fixture::clone(scratch.path(), &url, &clone).run();
+    git(&clone, &["config", "user.name", "t"]);
+    git(&clone, &["config", "user.email", "t@example.test"]);
+    let out = cli(&clone, &["work", "claim", "TSK-001"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/main@{}", &fetched[..9])),
+        "{}",
+        text(&out)
+    );
+
+    let blob = git(root, &["hash-object", "-w", "--stdin"]);
+    write(root, ".git/refs/remotes/origin/main", &format!("{blob}\n"));
+    let out = cli(root, &["work", "next"], None);
+    let said = text(&out);
+    for part in [
+        format!("refs/remotes/origin/main points at {blob}"),
+        "plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main"
+            .to_string(),
+    ] {
+        assert!(said.contains(&part), "{part}: {said}");
+    }
+    let (code, printed) = guard_verdict(root, "git fetch origin");
+    assert_eq!(code, Some(0), "{printed}");
+    assert!(!printed.contains("BLOCKED"), "{printed}");
+    let repaired = fetch_origin(root);
+    assert!(repaired.status.success(), "{}", text(&repaired));
+    assert_eq!(
+        git(root, &["rev-parse", "refs/remotes/origin/main"]),
+        fetched
+    );
+    let next = cli(root, &["work", "next"], None);
+    succeeds(&next);
+    assert!(!text(&next).contains("points at"), "{}", text(&next));
+}
+
+/// TSK-416 AC-11: the pre-push occurrence. Local `main` is behind
+/// `origin/main`. The claim and the task's own push run the real pre-push
+/// hook and pass, the hook reads `refs/remotes/origin/main` as the default
+/// target, and the local branch stays where it was.
+#[test]
+#[cfg(unix)]
+fn tsk416_a_push_beside_a_stale_local_main_passes_the_pre_push_hook() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "chore: add the policy"]);
+    let _remote = with_origin(root);
+    let stale = git(root, &["rev-parse", "HEAD"]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: advance"],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    let fetched = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["reset", "-q", "--hard", &stale]);
+    let hooks = tempfile::tempdir().unwrap();
+    write(
+        hooks.path(),
+        "pre-push",
+        &format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-push \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    );
+    std::fs::set_permissions(
+        hooks.path().join("pre-push"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(
+        root,
+        &["config", "core.hooksPath", hooks.path().to_str().unwrap()],
+    );
+
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains(&format!("from origin/main@{}", &fetched[..9])),
+        "{}",
+        text(&out)
+    );
+    let branch = claimed(root, "TSK-001");
+    assert_eq!(git(root, &["rev-parse", &branch]), fetched);
+    git(root, &["switch", "-q", &branch]);
+    succeeds(&cli(root, &["work", "start", "TSK-001"], None));
+    write(root, "src/a.rs", "pub fn a() {}\n");
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "feat: add the helper"]);
+    git(root, &["push", "-q", "origin", &branch]);
+    assert_eq!(git(root, &["rev-parse", "refs/heads/main"]), stale);
+}
+
+/// TSK-416 AC-3: in a clone where nothing of the target's name is
+/// fetched, the local branch decides, and the output names it in full.
+#[test]
+fn tsk416_a_local_branch_decides_only_where_nothing_is_fetched_and_is_named() {
+    let dir = fixture();
+    let root = dir.path();
+    let out = cli(root, &["work", "claim", "TSK-001"], None);
+    succeeds(&out);
+    assert!(
+        text(&out).contains("from refs/heads/main@"),
+        "{}",
+        text(&out)
+    );
+}
+
+/// TSK-416 AC-12, AC-13, AC-15 and AC-17 (issue 603's wording half): a
+/// local copy of the predecessor branch behind the reviewed pin, or a
+/// remote-tracking copy behind it, no longer reads as "has advanced": the
+/// claim cuts from the pin, and the successor's push to `origin` passes the
+/// installed pre-push hook, whose check honours the pin. A copy ahead of
+/// the pin, or diverged from it, still refuses, naming the shape.
+#[test]
+#[cfg(unix)]
+fn tsk416_a_copy_behind_the_pin_is_accepted_and_an_ahead_or_diverged_one_refused() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        ".codeflow/policy.json",
+        "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "chore: add the policy"]);
+    let origin = tempfile::tempdir().unwrap();
+    git(origin.path(), &["init", "-q", "--bare", "-b", "main"]);
+    git(
+        root,
+        &["remote", "add", "origin", origin.path().to_str().unwrap()],
+    );
+    git(root, &["push", "-q", "origin", "main"]);
+    let hooks = tempfile::tempdir().unwrap();
+    write(
+        hooks.path(),
+        "pre-push",
+        &format!(
+            "#!/bin/sh\nexec '{}' git-hook pre-push \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    );
+    std::fs::set_permissions(
+        hooks.path().join("pre-push"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    git(
+        root,
+        &["config", "core.hooksPath", hooks.path().to_str().unwrap()],
+    );
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    // Reviewed destination history under a non-task branch, as in
+    // `a_claim_on_a_reviewed_head_passes_its_own_push_check`.
+    git(
+        origin.path(),
+        &[
+            "fetch",
+            "-q",
+            root.to_str().unwrap(),
+            &format!("{pin}:refs/heads/chore/reviewed-predecessor"),
+        ],
+    );
+    review_tool(bin.path(), branch, &pin, true);
+    let before = git(root, &["rev-parse", &format!("{pin}^")]);
+    let copy = format!("refs/remotes/review/{branch}");
+    let on = format!("TSK-001@{pin}");
+    let child = "task/TSK-002-work-tsk-002";
+    for (local, remote) in [(&before, &pin), (&pin, &before)] {
+        git(
+            root,
+            &["update-ref", &format!("refs/heads/{branch}"), local],
+        );
+        git(root, &["update-ref", &copy, remote]);
+        let out = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        succeeds(&out);
+        assert_eq!(git(root, &["rev-parse", child]), pin);
+        git(root, &["switch", "-q", child]);
+        git(
+            root,
+            &["commit", "-q", "--allow-empty", "-m", "feat: successor"],
+        );
+        let head = git(root, &["rev-parse", "HEAD"]);
+        // The push runs the installed pre-push hook, which judges it. It is
+        // built by the one git constructor (TSK-416 review).
+        let pushed = codeflow_core::git::command()
+            .args(["push", "-q", "origin", child])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env(
+                "PATH",
+                std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+                    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+                ))
+                .unwrap(),
+            )
+            .output()
+            .unwrap();
+        assert!(pushed.status.success(), "{}", text(&pushed));
+        assert!(!text(&pushed).contains("several tips"), "{}", text(&pushed));
+        assert_eq!(
+            git(
+                origin.path(),
+                &["rev-parse", &format!("refs/heads/{child}")]
+            ),
+            head
+        );
+        git(root, &["switch", "-q", "main"]);
+        let push = push_check(root, child, &head, bin.path());
+        assert!(
+            text(&push).contains("stacks on TSK-001's reviewed head"),
+            "{}",
+            text(&push)
+        );
+        git(root, &["branch", "-q", "-D", child]);
+        git(origin.path(), &["branch", "-q", "-D", child]);
+    }
+    git(root, &["update-ref", &format!("refs/heads/{branch}"), &pin]);
+    git(root, &["switch", "-q", "--detach", &pin]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: after"],
+    );
+    let after = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", "-q", "--detach", &before]);
+    git(
+        root,
+        &["commit", "-q", "--allow-empty", "-m", "feat: aside"],
+    );
+    let aside = git(root, &["rev-parse", "HEAD"]);
+    git(root, &["switch", "-q", "main"]);
+    for (other, shape) in [(&after, "is ahead of"), (&aside, "has diverged from")] {
+        git(root, &["update-ref", &copy, other]);
+        let out = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        assert!(!out.status.success(), "{}", text(&out));
+        let said = text(&out);
+        for part in [shape, other.as_str(), pin.as_str(), branch] {
+            assert!(said.contains(part), "{part}: {said}");
+        }
+        assert!(git(root, &["branch", "--list", child]).is_empty());
+    }
+}
+
+/// TSK-416 AC-21 (issue 603): `work start --on` accepts a pin whose
+/// `depends_on` edge arrives in the task's own committed change, and still
+/// checks the pin. An edge only in the working tree is not read, and the
+/// refusal names the sanctioned path.
+#[test]
+#[cfg(unix)]
+fn tsk416_start_on_accepts_a_pin_whose_edge_the_task_adds() {
+    let dir = fixture();
+    let root = dir.path();
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[]"),
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: plan TSK-003"]);
+    let bin = tempfile::tempdir().unwrap();
+    let branch = "task/TSK-001-work";
+    let (_, pin) = reviewed_predecessor(root, branch);
+    review_tool(bin.path(), branch, &pin, true);
+    let on = format!("TSK-001@{pin}");
+    let child = "task/TSK-003-work-tsk-003";
+    git(root, &["switch", "-q", "-c", child, &pin]);
+    write(
+        root,
+        "project-management/tasks/TSK-003.md",
+        &record("TSK-003", "[TSK-001]"),
+    );
+    let out = cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("add TSK-001 to depends_on in TSK-003's record on its branch"),
+        "{}",
+        text(&out)
+    );
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "docs: TSK-003 builds on TSK-001"]);
+    succeeds(&cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    ));
+    review_tool(bin.path(), branch, &pin, false);
+    let out = cli(
+        root,
+        &["work", "start", "TSK-003", "--on", &on],
+        Some(bin.path()),
+    );
+    assert!(!out.status.success(), "{}", text(&out));
+}
+
+/// TSK-416 AC-18 (issue 547): a failed review lookup names its cause and
+/// the provider's own words, redacted, never only "provider failed".
+#[test]
+#[cfg(unix)]
+fn tsk416_a_failed_review_lookup_names_its_cause_and_the_provider_message() {
+    let (dir, bin, pin) = pinned_review_fixture("block");
+    let root = dir.path();
+    let script = bin.path().join("gh");
+    let on = format!("TSK-001@{pin}");
+    for (said, cause) in [
+        (
+            "no pull requests found for branch \"task/TSK-001-work\"",
+            "no pull request has this branch as its head",
+        ),
+        (
+            "HTTP 401: Bad credentials (https://api.github.com/graphql)",
+            "could not authenticate",
+        ),
+        (
+            "error connecting to api.github.com",
+            "could not reach the host",
+        ),
+    ] {
+        std::fs::write(&script, format!("#!/bin/sh\necho '{said}' >&2\nexit 1\n")).unwrap();
+        let out = cli(
+            root,
+            &["work", "claim", "TSK-002", "--on", &on],
+            Some(bin.path()),
+        );
+        assert!(!out.status.success());
+        let error = String::from_utf8_lossy(&out.stderr);
+        assert!(error.contains(cause), "{cause}: {error}");
+        assert!(error.contains(said), "{said}: {error}");
+    }
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho 'fatal: https://user:hunter2@example.test/x refused' >&2\nexit 1\n",
+    )
+    .unwrap();
+    let out = cli(
+        root,
+        &["work", "claim", "TSK-002", "--on", &on],
+        Some(bin.path()),
+    );
+    let error = String::from_utf8_lossy(&out.stderr);
+    assert!(!error.contains("hunter2"), "{error}");
+    assert!(error.contains("https://***@example.test/x"), "{error}");
 }

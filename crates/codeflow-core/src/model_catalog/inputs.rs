@@ -198,12 +198,20 @@ impl CatalogInputs {
                     // tree: it is the refusal an operator needs to see.
                     if working || reason.contains(crate::workgraph::work_start::RETARGET_REFUSAL) {
                         self.catalog.authority_note =
-                            Some(format!("project design authority not applied: {reason}"));
+                            Some(crate::security::git::without_remote_names(
+                                root,
+                                &format!("project design authority not applied: {reason}"),
+                            ));
                     }
                     return Ok(());
                 }
             };
         let short = &anchored.base[..anchored.base.len().min(9)];
+        // This target is display-only; AnchoredFile keeps its exact identity.
+        let target = crate::security::git::without_remote_names(
+            root,
+            &crate::security::git::shown_ref(root, &anchored.target),
+        );
         let committed = match &anchored.content {
             Some(bytes) => {
                 let selection = ProjectSelection::parse(bytes)
@@ -212,9 +220,9 @@ impl CatalogInputs {
                         Ok(selection)
                     })
                     .map_err(|e| {
-                        format!(
-                            "{SELECTION} committed on {} at {short}: {e}",
-                            anchored.target
+                        crate::security::git::without_remote_names(
+                            root,
+                            &format!("{SELECTION} committed on {target} at {short}: {e}"),
                         )
                     })?;
                 selection.design_authority
@@ -225,14 +233,13 @@ impl CatalogInputs {
             Some(authority) => {
                 self.catalog.authority = Some(AnchoredAuthority {
                     authority,
-                    source: format!("committed on {} at {short}", anchored.target),
+                    source: format!("committed on {target} at {short}"),
                 });
             }
             None if working => {
                 self.catalog.authority_note = Some(format!(
-                    "the working-tree design-authority block is not committed on {} at {short}; \
-                     design stays with the design owner's first line",
-                    anchored.target
+                    "the working-tree design-authority block is not committed on {target} at {short}; \
+                     design stays with the design owner's first line"
                 ));
             }
             None => {}

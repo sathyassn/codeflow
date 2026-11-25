@@ -69,14 +69,14 @@ pub(super) fn resolve(
                 base_candidates = vec![tip];
                 range_source = format!(
                     "{source} '{}' for branch '{}'",
-                    codeflow_core::git::display_text(target),
-                    codeflow_core::git::display_text(&branch)
+                    super::shown_reference(root, target),
+                    super::shown_reference(root, &branch)
                 );
             }
         }
     }
     let named_base = args.base.as_deref().and_then(named_branch);
-    note_base_disagreement(declared.as_deref(), named_base.as_deref());
+    note_base_disagreement(root, declared.as_deref(), named_base.as_deref());
     let commit_base = base_candidates
         .first()
         .is_some_and(|base| named_branch(base).is_none());
@@ -119,7 +119,7 @@ pub(super) fn resolve(
         (inferred, "branches at the resolved base commit")
     };
     let target = super::line_target(root, into.as_deref())?;
-    print_target(&target, into.is_some().then_some(source));
+    print_target(root, &target, into.is_some().then_some(source));
     Ok(Context {
         head,
         base,
@@ -136,17 +136,19 @@ pub(super) fn resolve(
 /// repository default). The pre-push hook hands over the destination's
 /// default branch as `--into`, and the destination names that branch, so
 /// the target is shown escaped (TSK-388).
-fn print_target(target: &str, source: Option<&str>) {
-    let shown = codeflow_core::git::display_text(target);
+fn print_target(root: &Path, target: &str, source: Option<&str>) {
+    let shown = super::shown_reference(root, target);
     match source {
         Some(source) => println!("codeflow ci: acceptance target '{shown}' ({source})"),
         None => println!("codeflow ci: target '{shown}' (repository default)"),
     }
 }
 
-fn note_base_disagreement(declared: Option<&str>, named_base: Option<&str>) {
+fn note_base_disagreement(root: &Path, declared: Option<&str>, named_base: Option<&str>) {
     if let (Some(target), Some(base)) = (declared, named_base) {
         if normalize(target) != base {
+            let target = super::shown_reference(root, target);
+            let base = super::shown_reference(root, base);
             let notice = codeflow_core::remedy::Finding::new(
                 format!("declared target '{target}' differs from named --base '{base}'; the base selects the range and the declared target selects acceptance binding"),
                 codeflow_core::remedy::CI_BASE_TARGET_DIFFER.remedy(),
@@ -196,12 +198,12 @@ pub(in crate::cmd) fn judged_declared_target(
     if !shape || codeflow_core::workgraph::line_adoption::epic_id(&name).is_err() {
         let reason = format!(
             "is not a protected branch or a valid epic line distinct from '{}'",
-            codeflow_core::git::display_text(branch)
+            super::shown_reference(root, branch)
         );
         return Ok(Some(Declared::Rejected { target, reason }));
     }
     let bind = |anchor: &str, place: &str| {
-        epic_line_binding(root, branch, head, &name, anchor, place).map_err(|e| e.to_string())
+        epic_line_binding(root, branch, head, &name, anchor, place).map_err(|e| e.shown(root))
     };
     let tips = detect_range(|_: &str| None, protected).base_candidates;
     let first = match resolve_base(root, &tips).map_err(|error| base_refusal(&error))? {
@@ -216,9 +218,10 @@ pub(in crate::cmd) fn judged_declared_target(
     // line's tip is read even when the protected branch binds, and a
     // refusal or an unreadable record there wins (TSK-1286).
     let remote = format!("origin/{name}");
+    let remote_shown = super::shown_reference(root, &remote);
     let second = match rev_parse(root, &format!("refs/remotes/{remote}"))? {
         None => None,
-        Some(tip) => Some(bind(&tip, &format!("'{remote}'"))?),
+        Some(tip) => Some(bind(&tip, &format!("'{remote_shown}'"))?),
     };
     if let Some(EpicLineBinding::Refused(reason)) = &second {
         let reason = format!("{reason}, so it is not a bound epic line");
@@ -229,12 +232,18 @@ pub(in crate::cmd) fn judged_declared_target(
             return Ok(Some(Declared::Eligible(target)));
         }
         (EpicLineBinding::Unbound(unbound), None) => {
-            format!("{unbound}, and '{remote}' does not exist (a local-only line never counts)")
+            format!(
+                "{unbound}, and '{}' does not exist (a local-only line never counts)",
+                super::shown_reference(root, &remote)
+            )
         }
         (_, Some(EpicLineBinding::Unbound(reason) | EpicLineBinding::Refused(reason)))
         | (EpicLineBinding::Refused(reason), None) => reason,
     };
-    let reason = format!("{reason}, so it is not a bound epic line");
+    let reason = codeflow_core::security::git::without_remote_names(
+        root,
+        &format!("{reason}, so it is not a bound epic line"),
+    );
     Ok(Some(Declared::Rejected { target, reason }))
 }
 
@@ -257,7 +266,13 @@ fn eligible_declared(
         "the acceptance target is chosen without it"
     };
     let warning = codeflow_core::remedy::Finding::new(
-        format!("branch declared target '{target}' {reason}; {effect}"),
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &format!(
+                "branch declared target '{}' {reason}; {effect}",
+                super::shown_reference(root, &target)
+            ),
+        ),
         codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
     );
     println!("{}", warning.line("codeflow ci", "warning"));
@@ -289,7 +304,7 @@ fn local_base(
     if let Some(tip) = resolve_base(root, &candidates)? {
         if local.as_ref().is_some_and(|local| *local != tip) {
             let notice = codeflow_core::remedy::Finding::new(
-                format!("local branch '{name}' differs from 'origin/{name}'; the remote-tracking ref is used"),
+                codeflow_core::security::git::without_remote_names(root, &format!("local branch '{name}' differs from 'origin/{name}'; the remote-tracking ref is used")),
                 codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
             );
             println!("{}", notice.line("codeflow ci", "note"));
@@ -305,7 +320,13 @@ fn local_base(
         "does not resolve".to_string()
     };
     let warning = codeflow_core::remedy::Finding::new(
-        format!("{source} '{target}' {reason}; base falls back to the policy protected branches"),
+        codeflow_core::security::git::without_remote_names(
+            root,
+            &format!(
+                "{source} '{}' {reason}; base falls back to the policy protected branches",
+                super::shown_reference(root, target)
+            ),
+        ),
         codeflow_core::remedy::CI_BASE_UNRESOLVED.remedy(),
     );
     println!("{}", warning.line("codeflow ci", "warning"));
@@ -322,7 +343,7 @@ fn head_context(
     let head = rev_parse(root, head_ref)?.ok_or_else(|| {
         format!(
             "head '{}' does not name a commit; nothing was verified",
-            codeflow_core::git::display_text(head_ref)
+            super::shown_reference(root, head_ref)
         )
     })?;
     let head_source = if args.head.is_some() {
@@ -335,11 +356,11 @@ fn head_context(
     let shown = if branch.is_empty() {
         "none".to_string()
     } else {
-        codeflow_core::git::display_text(&branch)
+        super::shown_reference(root, &branch)
     };
     println!(
         "codeflow ci: head {head} ({head_source}: {}); branch context '{shown}' ({branch_source})",
-        codeflow_core::git::display_text(head_ref)
+        super::shown_reference(root, head_ref)
     );
     if args.head.is_some() && args.branch.is_none() {
         println!("codeflow ci: context: pass --branch <name> if this head belongs to another line; branch context selects frozen or amendable acceptance binding");
@@ -417,7 +438,7 @@ fn declared_target(root: &Path, branch: &str, head: &str) -> Result<Option<Strin
     match names.len() {
         0 => Ok(None),
         1 => Ok(names.into_iter().next()),
-        _ => Err(format!("planning branch '{}' has several epic lines: {}; pass --into <target> and --base <ref>", codeflow_core::git::display_text(branch), names.into_iter().map(|name| codeflow_core::git::display_text(&name)).collect::<Vec<_>>().join(", "))),
+        _ => Err(format!("planning branch '{}' has several epic lines: {}; pass --into <target> and --base <ref>", super::shown_reference(root, branch), names.into_iter().map(|name| super::shown_reference(root, &name)).collect::<Vec<_>>().join(", "))),
     }
 }
 
@@ -438,7 +459,7 @@ fn target_at_commit(
         if !required {
             return Ok(None);
         }
-        return Err(format!("resolved base commit names several branches: {}; pass --into <target> or --branch <name> with a declared target", names.into_iter().collect::<Vec<_>>().join(", ")));
+        return Err(format!("resolved base commit names several branches: {}; pass --into <target> or --branch <name> with a declared target", names.into_iter().map(|name| super::shown_reference(root, &name)).collect::<Vec<_>>().join(", ")));
     }
     Ok(names.into_iter().next())
 }
@@ -507,7 +528,7 @@ fn check_declared_base(
         || tip_id == head_id
         || history::descendant_of(&repository, tip_id, head_id).map_err(|e| e.to_string())?
     {
-        return Err(format!("declared target '{target}' is the head's branch or contains head {head}; pass --base <ref> for the intended range; nothing was verified"));
+        return Err(format!("declared target '{}' is the head's branch or contains head {head}; pass --base <ref> for the intended range; nothing was verified", super::shown_reference(root, target)));
     }
     Ok(())
 }

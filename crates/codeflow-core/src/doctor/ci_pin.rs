@@ -202,8 +202,10 @@ fn checkout_pin(root: &Path) -> Result<(String, Option<String>, String, String),
             ),
         });
     };
-    let verified = digest_mode(&state, &pin).map_err(|problem| PinReport {
-        status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", pin.as_str())])),
+    let verified = digest_mode(root, &state, &pin).map_err(|problem| PinReport {
+        status: Status::Warn(
+            remedy::DOCTOR_CI_DIGEST.with(&[("pin_option", &pin_option(root, &pin))]),
+        ),
         message: problem,
     })?;
     Ok((state, policy, pin, verified))
@@ -258,7 +260,7 @@ pub(super) fn report(root: &Path) -> PinReport {
         return refused(&error);
     }
     let (target_text, target_pin, target_verified) =
-        match target_check(&target, target_state.as_deref()) {
+        match target_check(root, &target, target_state.as_deref()) {
             Ok(checked) => checked,
             Err(report) => return report,
         };
@@ -321,16 +323,27 @@ pub(super) fn report(root: &Path) -> PinReport {
     }
 }
 
+/// The `--pin` option of a printed `codeflow update` step, rendered from
+/// the raw pinned value, which the checkout's state file supplies: a value
+/// holding `$(…)` or a quote stays one argument, and one starting with `-`
+/// is joined with `=`. A value with no printed form leaves a placeholder
+/// (TSK-416 review round 2).
+fn pin_option(root: &Path, version: &str) -> String {
+    crate::git::pasted::option(root, "--pin", version)
+        .unwrap_or_else(|| "--pin <version>".to_string())
+}
+
 /// What the installers check a download of `version` against, read from the
 /// project state's `[scaffold_sha256]` table (sathyassn/codeflow#47); `Err`
 /// names a table the installers refuse, so CI fails closed.
-fn digest_mode(state: &str, version: &str) -> Result<String, String> {
+fn digest_mode(root: &Path, state: &str, version: &str) -> Result<String, String> {
     match pinned_digests(state) {
         PinnedDigests::Unreadable(reason) => Err(format!(
             "the [{TABLE}] table in {STATE} {reason}, so the CI install fails closed"
         )),
         PinnedDigests::Absent => Ok(format!(
-            "its sha256.sum only: no release digest is pinned beside it (`codeflow update --pin {version}` pins one)"
+            "its sha256.sum only: no release digest is pinned beside it (`codeflow update {}` pins one)",
+            pin_option(root, version)
         )),
         PinnedDigests::Table { version: None, .. } => Err(format!(
             "the [{TABLE}] table in {STATE} names no version the CI installers can read (they read `version = \"<version>\"`), so the CI install fails closed"
@@ -371,11 +384,14 @@ fn unreadable(prefix: &str, state: &str, reason: &str) -> PinReport {
 /// that stops the report. CI installs the target's pin first, checked against
 /// the target's table, whatever the checkout raises or lowers it to.
 fn target_check<'s>(
+    root: &Path,
     target: &str,
     state: Option<&'s str>,
 ) -> Result<(&'s str, String, String), PinReport> {
     let digest_warning = |version: &str, problem: String| PinReport {
-        status: Status::Warn(remedy::DOCTOR_CI_DIGEST.with(&[("version", version)])),
+        status: Status::Warn(
+            remedy::DOCTOR_CI_DIGEST.with(&[("pin_option", &pin_option(root, version))]),
+        ),
         message: format!("on {target}, {problem}"),
     };
     let no_pin = || PinReport {
@@ -403,7 +419,7 @@ fn target_check<'s>(
             })
         }
     };
-    match digest_mode(state, &pin) {
+    match digest_mode(root, state, &pin) {
         Ok(verified) => Ok((state, pin, verified)),
         Err(problem) => Err(digest_warning(&pin, problem)),
     }
@@ -1257,5 +1273,43 @@ mod tests {
             carried.unwrap(),
             vec![format!("a new {STATE} schema_version")]
         );
+    }
+
+    /// TSK-416 review round 2, finding 1: the checkout's state file
+    /// supplies the pinned version, so the printed `codeflow update` step
+    /// renders it from the raw value: pasting hands it over as one argument
+    /// and runs no substitution, and a value starting with `-` is joined
+    /// with `=` so it is never read as an option.
+    #[cfg(unix)]
+    #[test]
+    fn the_pin_step_keeps_a_hostile_version_as_one_argument() {
+        let repo = tempfile::tempdir().unwrap();
+        git2::Repository::init(repo.path()).unwrap();
+        let root = repo.path();
+        for (version, expected) in [
+            ("1.2.3", vec!["update", "--pin", "1.2.3"]),
+            ("1$(id)", vec!["update", "--pin", "1$(id)"]),
+            ("-x", vec!["update", "--pin=-x"]),
+        ] {
+            let remedy = remedy::DOCTOR_CI_DIGEST
+                .with(&[("pin_option", &pin_option(root, version))])
+                .to_string();
+            let command = remedy
+                .split('`')
+                .nth(1)
+                .unwrap_or_else(|| panic!("{remedy}"));
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(format!(
+                    "codeflow() {{ printf '%s\\0' \"$@\"; }}; {command}"
+                ))
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{command}");
+            let printed = String::from_utf8(out.stdout).unwrap();
+            let arguments: Vec<&str> = printed.split_terminator('\0').collect();
+            assert_eq!(arguments, expected, "{remedy}");
+        }
+        assert_eq!(pin_option(root, "1\u{200b}2"), "--pin <version>");
     }
 }

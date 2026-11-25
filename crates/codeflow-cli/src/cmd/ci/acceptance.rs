@@ -69,8 +69,8 @@ pub(super) fn dispatch(
                 } else {
                     "frozen"
                 },
-                codeflow_core::git::display_text(branch),
-                codeflow_core::git::display_text(range.target)
+                super::shown_reference(root, branch),
+                super::shown_reference(root, range.target)
             );
             let sync_tip = if push {
                 line_sync_tip(root, git, range, names)
@@ -202,17 +202,14 @@ fn own_line(
         Ok(line) => {
             println!(
                 "codeflow ci: acceptance: {task} changes its own criteria on its bound line '{}' (at {:.9}): the line's tip and the range base are its criteria points; the candidate authority stays the policy and history authority (SPC-013 R-52)",
-                codeflow_core::git::display_text(into),
+                super::shown_reference(root, into),
                 line.tip
             );
             Some(line)
         }
         Err(reason) => {
             if codeflow_core::workgraph::line_adoption::epic_id(into).is_ok() {
-                println!(
-                    "codeflow ci: acceptance: the own-line criteria exception does not apply to {task} on '{}': {reason}",
-                    codeflow_core::git::display_text(into)
-                );
+                println!("{}", codeflow_core::security::git::without_remote_names(root, &format!("codeflow ci: acceptance: the own-line criteria exception does not apply to {task} on '{}': {reason}", super::shown_reference(root, into))));
             }
             None
         }
@@ -358,12 +355,12 @@ fn judge(
     // pre-push hook states a release push's scope itself.
     eprintln!(
         "codeflow ci: acceptance: release range ('{}'{}) under pattern '{}' ({}); each change is judged where it was introduced (SPC-013 R-120)",
-        codeflow_core::git::display_text(names.branch),
+        super::shown_reference(root, names.branch),
         names
             .into
-            .map(|into| format!(" into '{}'", codeflow_core::git::display_text(into)))
+            .map(|into| format!(" into '{}'", super::shown_reference(root, into)))
             .unwrap_or_default(),
-        codeflow_core::git::display_text(&scope.pattern),
+        codeflow_core::security::git::without_remote_names(root, &codeflow_core::git::display_text(&scope.pattern)),
         scope.source
     );
     let head = match release_head(root, range, scope) {
@@ -578,7 +575,7 @@ fn criteria(
             } else {
                 // Only now are the criteria frozen, so only now say why.
                 if let Some(Err(reason)) = line {
-                    frozen_line_note(branch, &reason);
+                    frozen_line_note(root, branch, &reason);
                 }
                 false
             }
@@ -597,11 +594,11 @@ fn criteria(
 /// #341). Printed only once the criteria are frozen, never when the range
 /// falls back to a planning amendment; a pull request's classification
 /// already names the reason.
-fn frozen_line_note(branch: &str, reason: &str) {
+fn frozen_line_note(root: &Path, branch: &str, reason: &str) {
     let note = codeflow_core::remedy::Finding::new(
         format!(
             "'{}' is not a verified epic line, so its completions bind at the range head with frozen criteria: {reason}",
-            codeflow_core::git::display_text(branch)
+            super::shown_reference(root, branch)
         ),
         codeflow_core::remedy::UNVERIFIED_LINE_FROZEN.remedy(),
     );

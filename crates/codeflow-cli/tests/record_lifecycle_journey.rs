@@ -328,7 +328,7 @@ fn every_transition_runs_through_verbs_and_hand_edits_with_one_verdict() {
         ],
         "chore: reopen the first task",
     );
-    assert!(reopened.contains("acceptance_superseded:\n  reason: regression\n"));
+    assert!(reopened.contains("acceptance_superseded:\n  reason: \"regression\"\n"));
     let block = acceptance(&root, &["AC-1"], "none | no journey criterion");
     let block = block.to_string_lossy().to_string();
     verb_then_hand(

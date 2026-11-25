@@ -711,7 +711,8 @@ pub(super) fn dispatch(
             return None;
         }
     };
-    announce(&class, epic_line.as_ref(), &task_shown(root, range, &input));
+    let shown_task = task_shown(root, range, &input);
+    announce(root, &class, epic_line.as_ref(), &shown_task);
     match &class {
         Class::Tracked { task_id } | Class::SecretScanExemption(ExemptionWork::Task(task_id)) => {
             let anchor = Anchor {
@@ -894,7 +895,12 @@ fn exemption_entry(
 }
 
 /// Print the class and the direct commits its reviewer is accepting.
-fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -> bool) {
+fn announce(
+    root: &Path,
+    class: &Class,
+    line: Option<&EpicLineResult>,
+    shown: &dyn Fn(&str) -> bool,
+) {
     let adoptions = line
         .and_then(|result| result.as_ref().ok())
         .map(|(_, report)| report);
@@ -939,7 +945,7 @@ fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -
             }
         }
         Class::RootBranch(name) => {
-            println!("codeflow ci: pull request class: workspace root branch {name}");
+            println!("codeflow ci: pull request class: workspace root branch {}", super::shown_reference(root, name));
         }
         Class::MainSync {
             epic,
@@ -949,7 +955,7 @@ fn announce(class: &Class, line: Option<&EpicLineResult>, shown: &dyn Fn(&str) -
             let merges: Vec<&str> = merges.iter().map(|merge| &merge[..9]).collect();
             println!(
                 "codeflow ci: pull request class: sync of the default branch into {} for {epic} (clean merges {}; the criteria stay frozen)",
-                codeflow_core::git::display_text(line),
+                super::shown_reference(root, line),
                 merges.join(", ")
             );
         }
@@ -1106,7 +1112,7 @@ fn tracked(
         Err(error) if super::work_start_reader_error(&error) => {
             tagged.push(super::TaggedViolation {
                 sha: None,
-                violation: super::tracking_state_violation(error),
+                violation: super::tracking_state_violation(error.shown(root)),
             });
             return;
         }
@@ -1115,7 +1121,7 @@ fn tracked(
             anchor_failure(
                 tagged,
                 anchor.level,
-                error.to_string(),
+                error.shown(root),
                 codeflow_core::remedy::WORK_START_RECONCILE.with(&[("id", task_id)]),
             );
             return;
@@ -1135,13 +1141,19 @@ fn tracked(
         Err(error) if super::work_start_reader_error(&error) => {
             tagged.push(super::TaggedViolation {
                 sha: None,
-                violation: super::tracking_state_violation(error),
+                violation: super::tracking_state_violation(error.shown(root)),
             });
         }
         Err(_) if anchor.own_branch => {}
         Err(error) => {
-            let remedy = error.admission_remedy(&target, task_id);
-            anchor_failure(tagged, anchor.level, error.to_string(), remedy);
+            let remedy = error.admission_remedy(
+                &codeflow_core::security::git::without_remote_names(
+                    root,
+                    &codeflow_core::security::git::shown_escaped_ref(root, &target),
+                ),
+                task_id,
+            );
+            anchor_failure(tagged, anchor.level, error.shown(root), remedy);
         }
     }
 }
@@ -1351,6 +1363,84 @@ fn parse_name_status_raw(stdout: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ci_admission_refusals_withhold_targets_and_remedies() {
+        let (dir, _) = r22_repo(false);
+        let root = dir.path();
+        let repo = git2::Repository::open(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        let record = "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: integration/cred@SECRETVALUE\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n";
+        std::fs::write(root.join("project-management/tasks/TSK-001.md"), record).unwrap();
+        let mut index = repo.index().unwrap();
+        index
+            .add_path(Path::new("project-management/tasks/TSK-001.md"))
+            .unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let who = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let head = repo
+            .commit(Some("HEAD"), &who, &who, "task", &tree, &[&parent])
+            .unwrap()
+            .to_string();
+        for own in [true, false] {
+            let mut tagged = Vec::new();
+            if own {
+                super::super::evaluate_work_start(
+                    root,
+                    "task/TSK-001-fix",
+                    &head,
+                    &[],
+                    PolicyLevel::Block,
+                    false,
+                    &mut tagged,
+                );
+            } else {
+                tracked(
+                    root,
+                    "TSK-001",
+                    Anchor {
+                        own_branch: false,
+                        level: PolicyLevel::Block,
+                        branch: "task/TSK-001-fix",
+                        base: &head,
+                        head: &head,
+                        exemption: false,
+                    },
+                    &[],
+                    &[],
+                    &mut tagged,
+                );
+            }
+            let finding = tagged
+                .iter()
+                .find(|finding| finding.violation.rule == "work.stable_planning_anchor")
+                .expect("the missing target refuses admission");
+            assert!(
+                finding
+                    .violation
+                    .message
+                    .contains("does not resolve to a commit"),
+                "{}",
+                finding.violation.message
+            );
+            assert!(
+                !finding.violation.message.contains("SECRETVALUE"),
+                "{}",
+                finding.violation.message
+            );
+            assert!(
+                !finding.violation.remedy.contains("SECRETVALUE"),
+                "{}",
+                finding.violation.remedy
+            );
+        }
+    }
 
     fn r22_repo(malformed_record: bool) -> (tempfile::TempDir, String) {
         let dir = tempfile::tempdir().unwrap();

@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use git2::{Oid, Repository};
 use thiserror::Error;
 
-use crate::git::GitName;
+use crate::git::pasted::step;
+use crate::git::{GitName, Pasted};
 use crate::workgraph::deps::{parse_dependencies, Dependency, DependencyKind};
 use crate::workgraph::{
     is_canonical_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id,
@@ -26,6 +27,13 @@ pub const TRACKING_STATE_MESSAGE: &str = "cannot determine durable-work tracking
 
 /// Maximum provider wait for the review evidence of one predecessor pin.
 pub const REVIEW_LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
+fn shown_ref(root: &Path, reference: &str) -> String {
+    crate::security::git::without_remote_names(
+        root,
+        &crate::security::git::shown_ref(root, reference),
+    )
+}
 
 /// Render the tracking-state refusal consistently across commands.
 #[must_use]
@@ -63,6 +71,10 @@ pub enum WorkStartError {
     Base(String),
     #[error("git repository unavailable: {0}")]
     Repository(String),
+    /// A ref that exists and names no commit this clone can read, with its
+    /// cause, what it points at and a remedy (TSK-416 AC-9).
+    #[error("{0}")]
+    UnresolvableTip(String),
     #[error("target ref '{0}' does not resolve to a commit")]
     Target(String),
     #[error("current branch '{branch}' does not carry {task_id} on a work prefix (<prefix>/{task_id}-<slug>)")]
@@ -142,18 +154,38 @@ pub enum WorkStartError {
     },
     #[error("target '{0}' is not a stable local or remote-tracking non-task branch")]
     UnstableTarget(String),
-    #[error(
-        "local branch '{local}' and '{remote}' have diverged ({ahead} commit(s) only on \
-         '{local}', {behind} only on '{remote}'), so the work target is ambiguous; \
-         reconcile them (fetch, then rebase '{local}' onto '{remote}' or reset it), or \
-         name one with `--into`"
-    )]
-    DivergedTarget {
-        local: String,
-        remote: String,
-        ahead: usize,
-        behind: usize,
-    },
+    /// Boxed so every `Result` carrying this error stays small.
+    #[error("{0}")]
+    DivergedTarget(Box<DivergedTarget>),
+}
+
+/// A local branch and its fetched upstream that have diverged.
+#[derive(Debug, Error)]
+#[error(
+    "local branch '{shown_local}' and '{shown_remote}' have diverged ('{shown_local}' at {local_tip} \
+     with {ahead} commit(s) only there, '{shown_remote}' at {remote_tip} with {behind} only \
+     there), so the work target is ambiguous; {steps}; a plain fetch of the remote \
+     refreshes '{shown_remote}' without moving '{shown_local}'"
+)]
+pub struct DivergedTarget {
+    pub local: String,
+    /// The local branch as messages show it: escaped, with any withheld
+    /// remote name in it replaced (TSK-416 review).
+    pub shown_local: String,
+    /// The fetched ref the local branch diverged from.
+    pub remote: String,
+    /// The configured remote that ref belongs to.
+    pub line_remote: String,
+    /// The fetched ref as messages show it, its remote's name withheld
+    /// unless plain (TSK-416 review round 7).
+    pub shown_remote: String,
+    /// The two remedies, rendered where the repository is at hand: judge
+    /// against the fetched line, or retry from a fresh clone.
+    pub steps: String,
+    pub local_tip: String,
+    pub remote_tip: String,
+    pub ahead: usize,
+    pub behind: usize,
 }
 
 /// A work target resolved to a ref. A local branch strictly behind its
@@ -180,6 +212,33 @@ pub enum NotReady {
 }
 
 impl WorkStartError {
+    /// Render a refusal for output, keeping exact fields available to decisions.
+    #[must_use]
+    pub fn shown(&self, root: &Path) -> String {
+        let refs: Vec<&str> = match self {
+            Self::Target(target) | Self::MergeBase(target) | Self::UnstableTarget(target) => {
+                vec![target]
+            }
+            Self::DependencyOnOtherLine { line, .. } | Self::DependencyLineUnknown { line, .. } => {
+                vec![line]
+            }
+            Self::TargetMismatch {
+                declared,
+                requested,
+                ..
+            } => vec![declared, requested],
+            _ => Vec::new(),
+        };
+        let mut text = self.to_string();
+        for reference in refs.into_iter().filter(|reference| !reference.is_empty()) {
+            text = text.replace(
+                reference,
+                &crate::security::git::shown_escaped_ref(root, reference),
+            );
+        }
+        crate::security::git::without_remote_names(root, &text)
+    }
+
     /// The catalogued step that clears this refusal of a task's admission:
     /// a task blocked on the target is unblocked in its own pull request
     /// (TSK-1036); any other refusal reconciles the planning anchor.
@@ -316,16 +375,253 @@ fn default_target(repo_root: &Path) -> Result<Option<(&'static str, String)>, Wo
     Ok(None)
 }
 
-fn reference_commit(repo: &Repository, name: &str) -> Result<Option<git2::Oid>, WorkStartError> {
+/// The commit the ref `name` names, `None` when no such ref exists. A ref
+/// that exists and names no readable commit refuses with
+/// [`unresolvable_tip`].
+pub(crate) fn reference_commit(
+    repo: &Repository,
+    name: &str,
+) -> Result<Option<git2::Oid>, WorkStartError> {
     let reference = match repo.find_reference(name) {
         Ok(reference) => reference,
         Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(None),
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        Err(error) => {
+            return Err(WorkStartError::UnresolvableTip(unresolvable_tip(
+                repo, name, &error,
+            )))
+        }
     };
     reference
         .peel_to_commit()
         .map(|commit| Some(commit.id()))
-        .map_err(|error| WorkStartError::Repository(error.to_string()))
+        .map_err(|error| WorkStartError::UnresolvableTip(unresolvable_tip(repo, name, &error)))
+}
+
+/// The unresolvable-tip refusal for the ref `reference` of the repository
+/// at `repo_root`, when it exists and names no readable commit; `None` when it
+/// resolves, is absent, or the repository cannot be opened.
+#[must_use]
+pub fn unresolvable_reference(repo_root: &Path, reference: &str) -> Option<String> {
+    let repo = Repository::discover(repo_root).ok()?;
+    let found = repo.find_reference(reference).ok()?;
+    let error = found.peel_to_commit().err()?;
+    Some(unresolvable_tip(&repo, reference, &error))
+}
+
+/// Why the ref `reference` names no commit this clone can read (TSK-416
+/// AC-9): the cause, the ref and what it points at, and a remedy that runs
+/// under the guard, never `update-ref` or a fetch with a destination.
+/// - A fetched ref whose object is here but is not a commit is rewritten
+///   by a plain fetch of its remote.
+/// - A fetched ref whose object is missing stops every fetch (git refuses
+///   the bad object while it negotiates), so the remedy is a fresh clone;
+///   repairing this clone deletes a remote-tracking ref, which the guard
+///   leaves to the operator.
+/// - Any other ref is damage in this clone, which `git fsck` shows and a
+///   fresh clone avoids.
+pub(crate) fn unresolvable_tip(repo: &Repository, reference: &str, error: &git2::Error) -> String {
+    let found = repo.find_reference(reference).ok();
+    let target = found.as_ref().and_then(git2::Reference::target);
+    let symbolic = found
+        .as_ref()
+        .and_then(|found| found.symbolic_target().ok().flatten());
+    // A ref is the remote's to name, so it is shown escaped (TSK-388), with
+    // a remote's name in it withheld unless plain (TSK-416 review round 7),
+    // and each command is rendered from the raw values (TSK-416 review).
+    let root = repo.commondir();
+    let points_at = match (target, symbolic) {
+        (Some(oid), _) => oid.to_string(),
+        (None, Some(symbolic)) => format!(
+            "the symbolic ref {}",
+            crate::security::git::shown_ref(root, symbolic)
+        ),
+        (None, None) => "a target git cannot read".to_string(),
+    };
+    let present = target.is_some_and(|oid| repo.find_object(oid, None).is_ok());
+    let shown = crate::security::git::shown_ref(root, reference);
+    let remote = reference
+        .strip_prefix("refs/remotes/")
+        .map(|short| (remote_of(repo, reference), short));
+    let named = remote
+        .as_ref()
+        .is_some_and(|(remote, _)| crate::security::git::remote_name_shown(root, remote));
+    // The branch part of a shown remote's ref can hold another remote's
+    // withheld name, so the repair that deletes the ref is offered only for
+    // a ref whose raw name holds none (TSK-416 review); the renderer refuses
+    // such a ref as well.
+    let ref_named = named
+        && remote
+            .as_ref()
+            .is_some_and(|(_, short)| crate::security::git::word_shown(root, short));
+    let remedy = match remote {
+        Some((remote, _)) if present && named => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; fetch it again with a plain fetch of the remote ({}), which rewrites {shown} from the remote and moves no local branch",
+            step(&Pasted::new(root, "git fetch").value(&remote))
+        ),
+        // No command names a withheld remote: its steps are a fresh clone
+        // or a rename through a Git client (TSK-416 review rounds 9 and
+        // 10).
+        Some((remote, _)) if present => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged; {}",
+            crate::security::git::withheld_remote_step(root, &remote)
+        ),
+        Some((remote, short)) if ref_named => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes the ref so a fetch can recreate it ({}, then {}), which the guard leaves to the operator",
+            fresh_clone(&remote),
+            step(&Pasted::new(root, "git branch -d -r").value(short)),
+            step(&Pasted::new(root, "git fetch").value(&remote))
+        ),
+        // Repairing this clone deletes a ref that holds the withheld name,
+        // which no step may name, so only the fresh clone is given.
+        Some((remote, _)) => format!(
+            "the fetched tip cannot be resolved, so the line it names cannot be judged, and a fetch cannot rewrite the ref while its object is missing (git stops on the bad object); {}; repairing this clone deletes that ref, whose name holds a remote name messages withhold, so no step here names it",
+            fresh_clone(&crate::security::git::shown_remote(root, &remote))
+        ),
+        None => format!(
+            "{shown} cannot be resolved, so the line it names cannot be judged; check this clone with `git fsck`, or {}",
+            fresh_clone("origin")
+        ),
+    };
+    let message = crate::git::display_text(error.message());
+    let message = match reference.strip_prefix("refs/remotes/") {
+        Some(_) => {
+            crate::security::git::without_remote_name(root, &remote_of(repo, reference), &message)
+        }
+        None => message,
+    };
+    // A second withheld name can sit in the branch part of a shown remote's
+    // ref, which `shown_ref` leaves, so the whole text is scrubbed; a command
+    // printed above holds no withheld name, so the scrub leaves it whole.
+    crate::security::git::without_remote_names(
+        root,
+        &format!("{shown} points at {points_at}, which is not a commit this clone can read ({message}); {remedy}"),
+    )
+}
+
+/// "fetch it" with the fetch of `branch` from `origin` in the repository at
+/// `root`, rendered from the raw names, for a target that does not resolve
+/// here; when either raw word holds a remote name messages withhold, the
+/// renderer prints no command and gives the steps for such a remote
+/// (TSK-416 review).
+#[must_use]
+pub fn fetch_origin(root: &Path, branch: &str) -> String {
+    if branch.starts_with("refs/remotes/")
+        && crate::security::git::shown_escaped_ref(root, branch) != branch
+    {
+        let remote = Repository::discover(root).map_or_else(
+            |_| {
+                branch
+                    .strip_prefix("refs/remotes/")
+                    .unwrap_or(branch)
+                    .split('/')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            },
+            |repo| remote_of(&repo, branch),
+        );
+        return format!(
+            "fetch its owning remote after checking the target; {}",
+            crate::security::git::withheld_remote_step(root, &remote)
+        );
+    }
+    format!(
+        "fetch it ({})",
+        step(&Pasted::new(root, "git fetch").value("origin").value(branch))
+    )
+}
+
+/// The step that names the fetched line `remote`, a full ref, as the work
+/// target with `--into`, rendered from the raw ref (TSK-416 review); a ref
+/// whose remote's name messages withhold, or whose branch part holds one,
+/// is not printed to paste (review round 7, TSK-416 review).
+pub(crate) fn into_fetched(repo: &Repository, remote: &str) -> String {
+    let root = repo.commondir();
+    if !crate::security::git::remote_name_shown(root, &remote_of(repo, remote))
+        || !crate::security::git::word_shown(root, remote)
+    {
+        return "judge against the fetched line by naming its full ref with `--into` where the command takes it; the ref holds a remote name that can carry a credential, so it is not printed to paste".to_string();
+    }
+    match crate::git::pasted::option(root, "--into", remote) {
+        Some(option) => format!(
+            "judge against the fetched line by naming it with `{option}` where the command takes it"
+        ),
+        None => "judge against the fetched line by naming its full ref with `--into` where the command takes it; the ref holds a character a terminal does not show as itself, so it is not printed to paste".to_string(),
+    }
+}
+
+/// The configured remote a fetched ref (`refs/remotes/<remote>/…` or
+/// `<remote>/…`) belongs to. A remote name may hold `/`, so the longest
+/// configured remote that prefixes the ref wins; a ref of no configured
+/// remote is split at its first `/`, and a name with no `/` gives `origin`.
+pub(crate) fn remote_of(repo: &Repository, reference: &str) -> String {
+    let short = reference.strip_prefix("refs/remotes/").unwrap_or(reference);
+    let remotes = crate::git::name::remote_names(repo).unwrap_or_default();
+    let configured = remotes
+        .iter()
+        .filter_map(|remote| remote.rule_text().ok())
+        .filter(|remote| {
+            short
+                .strip_prefix(remote)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+        .max_by_key(|remote| remote.len());
+    configured
+        .or_else(|| short.split_once('/').map(|(remote, _)| remote))
+        .unwrap_or("origin")
+        .to_string()
+}
+
+/// [`remote_of`] as messages show it: the remote's name withheld unless
+/// plain (TSK-416 review round 7).
+pub(crate) fn shown_remote_of(repo: &Repository, reference: &str) -> String {
+    crate::security::git::shown_remote(repo.commondir(), &remote_of(repo, reference))
+}
+
+/// The fresh-clone step for `remote`, the remote as a message shows it
+/// ([`shown_remote_of`], or a fixed name). It names the remote and prints no
+/// command that shows its URL: the configured URL, or the one an
+/// `insteadOf` rule rewrites it to, can carry a credential in its
+/// userinfo, query or fragment, and a message reaches logs and transcripts
+/// (TSK-416 review). A clone has its own refs, so what made this clone's
+/// judgment refuse is not there; a worktree of this clone would share them.
+pub(crate) fn fresh_clone(remote: &str) -> String {
+    let shown = crate::git::display_text(remote);
+    format!(
+        "work from a fresh clone of the remote {shown}, made from outside this clone with that remote's URL (`git clone <url> <path>`)"
+    )
+}
+
+/// The remedy when this clone's local copy of a line cannot be settled
+/// against the fetched one (diverged, or its ancestry unreadable): rerun
+/// the command from a fresh clone of `line_remote`, whose fetched tip is
+/// the line, on the task branch at the head pushed from here. The task
+/// branch can live on another remote than the line, as with a fork, so the
+/// step fetches it there from the remote it was pushed to. A worktree of
+/// this clone shares its branches, so it would refuse the same way
+/// (TSK-416 review).
+pub(crate) fn fresh_clone_retry(line_remote: &str) -> String {
+    format!(
+        "a worktree of this clone shares its branches and would refuse the same way, so push the task branch to its remote, then {}, which holds the line; when the task branch was pushed to another remote, add that remote there under a name of its own and fetch it (`git remote add <name> <url>`, then `git fetch <name>`); switch to the task branch there at the head pushed from here (`git switch -c <task-branch> <name>/<task-branch>`, or `git switch <task-branch>` when the clone's own remote holds it) and run this again",
+        fresh_clone(line_remote)
+    )
+}
+
+/// [`unresolvable_tip`] for the first ref under `refs/remotes/<remote>/`
+/// that names no readable commit, so a failed fetch of `remote` can say
+/// which ref stopped it. Symbolic refs (`<remote>/HEAD`) are skipped: they
+/// fail through the ref they name.
+pub(crate) fn unresolvable_remote_ref(repo: &Repository, remote: &str) -> Option<String> {
+    let glob = format!("refs/remotes/{remote}/*");
+    repo.references_glob(&glob)
+        .ok()?
+        .flatten()
+        .find_map(|found| {
+            found.target()?;
+            let name = found.name().ok()?.to_string();
+            let error = found.peel_to_commit().err()?;
+            Some(unresolvable_tip(repo, &name, &error))
+        })
 }
 
 /// Resolve a declared target to an available local or remote-tracking ref.
@@ -346,7 +642,11 @@ pub fn resolve_work_target(
 ) -> Result<Option<String>, WorkStartError> {
     match resolve_work_target_checked(repo_root, declared) {
         Ok(resolved) => Ok(resolved.map(|resolved| resolved.target)),
-        Err(WorkStartError::DivergedTarget { .. }) => Ok(declared.map(str::to_owned)),
+        // The local branch, by its exact ref: a bare name now reads the
+        // fetched ref first, so it would not name the branch kept here.
+        Err(WorkStartError::DivergedTarget(diverged)) => {
+            Ok(Some(format!("refs/heads/{}", diverged.local)))
+        }
         Err(error) => Err(error),
     }
 }
@@ -385,7 +685,7 @@ pub fn resolve_work_target_checked(
     // A bare name with a local branch: that branch, unless it is strictly
     // behind the upstream Git has configured for it.
     let local_ref = format!("refs/heads/{target}");
-    if candidates.first() == Some(&local_ref) {
+    if candidates.contains(&local_ref) && !target.starts_with("refs/") {
         if let Some(local_id) = reference_commit(&repo, &local_ref)? {
             return local_or_upstream(&repo, target, &local_ref, local_id);
         }
@@ -416,33 +716,55 @@ fn local_or_upstream(
     local_ref: &str,
     local_id: git2::Oid,
 ) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
-    let keep = || {
-        Ok(Some(ResolvedWorkTarget {
-            target: local.to_string(),
-        }))
+    // The kept local branch, named so that reading the name gives this
+    // branch: the bare name when the ref a bare read takes holds this
+    // commit, else its exact ref (TSK-416).
+    let keep = || -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+        let read = target_reference_read(repo, local)?.map(|(_, commit)| commit.id());
+        let target = if read == Some(local_id) {
+            local.to_string()
+        } else {
+            local_ref.to_string()
+        };
+        Ok(Some(ResolvedWorkTarget { target }))
     };
-    let upstream_ref = match repo.branch_upstream_name(local_ref) {
-        Ok(name) => Some(
-            name.as_str()
-                .map_err(|error| {
-                    WorkStartError::Repository(format!(
-                        "configured upstream is not valid UTF-8: {error}"
-                    ))
-                })?
-                .to_owned(),
-        ),
-        Err(error) if error.code() == git2::ErrorCode::NotFound => {
-            let remote = format!("refs/remotes/origin/{local}");
-            reference_commit(repo, &remote)?.map(|_| remote)
+    // Only the same branch on a configured remote replaces it: an upstream
+    // naming another branch, which git sets when a line is cut from
+    // `origin/main` and which any config write can change, is never the
+    // line (TSK-416).
+    // A configured upstream git cannot decode is an error, never an absent
+    // upstream (issue 79), whichever remote it names.
+    match repo.branch_upstream_name(local_ref) {
+        Ok(name) => {
+            name.as_str().map_err(|_| {
+                WorkStartError::Repository("configured upstream is not valid UTF-8".to_string())
+            })?;
         }
-        Err(error) => return Err(WorkStartError::Repository(error.to_string())),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => {}
+        // libgit2 quotes the remote an upstream setting names, so withheld
+        // remote names are replaced in its text.
+        Err(error) => {
+            return Err(WorkStartError::Repository(
+                crate::security::git::without_remote_names(repo.commondir(), &error.to_string()),
+            ))
+        }
+    }
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let upstream_ref = if let Some(upstream) = configured_upstream(repo, local, &remotes)? {
+        Some(upstream)
+    } else {
+        let remote = format!("refs/remotes/origin/{local}");
+        reference_commit(repo, &remote)?.map(|_| remote)
     };
     let Some(upstream_ref) = upstream_ref else {
         return keep();
     };
     let Some(upstream_id) = reference_commit(repo, &upstream_ref)? else {
         return Err(WorkStartError::Repository(format!(
-            "configured upstream {upstream_ref} does not resolve"
+            "configured upstream {} does not resolve",
+            crate::security::git::shown_ref(repo.commondir(), &upstream_ref)
         )));
     };
     if upstream_id == local_id {
@@ -456,12 +778,30 @@ fn local_or_upstream(
     match (ahead, behind) {
         (_, 0) => keep(),
         (0, _) => Ok(Some(ResolvedWorkTarget { target: upstream })),
-        (ahead, behind) => Err(WorkStartError::DivergedTarget {
+        (ahead, behind) => Err(WorkStartError::DivergedTarget(Box::new(DivergedTarget {
             local: local.to_string(),
+            // Both names can hold a withheld remote name in their branch
+            // part, which `shown_ref` leaves (TSK-416 review).
+            shown_local: crate::security::git::without_remote_names(
+                repo.commondir(),
+                &crate::git::display_text(local),
+            ),
+            line_remote: remote_of(repo, &upstream),
+            shown_remote: crate::security::git::without_remote_names(
+                repo.commondir(),
+                &crate::security::git::shown_ref(repo.commondir(), &upstream),
+            ),
+            steps: format!(
+                "{}, or {}",
+                into_fetched(repo, &upstream),
+                fresh_clone_retry(&shown_remote_of(repo, &upstream))
+            ),
             remote: upstream,
+            local_tip: local_id.to_string(),
+            remote_tip: upstream_id.to_string(),
             ahead,
             behind,
-        }),
+        }))),
     }
 }
 
@@ -736,6 +1076,30 @@ pub fn epic_line_proof(
     base: &str,
     head: &str,
 ) -> Result<EpicLineProof, String> {
+    unchecked_epic_line_proof(repo_root, branch, base_ref, base, head)
+        .map(|proof| match proof {
+            EpicLineProof::NotLine(reason) => {
+                EpicLineProof::NotLine(crate::security::git::without_remote_names(
+                    repo_root,
+                    &if base_ref.is_empty() {
+                        reason
+                    } else {
+                        reason.replace(base_ref, &shown_ref(repo_root, base_ref))
+                    },
+                ))
+            }
+            verified @ EpicLineProof::Verified(..) => verified,
+        })
+        .map_err(|reason| crate::security::git::without_remote_names(repo_root, &reason))
+}
+
+fn unchecked_epic_line_proof(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<EpicLineProof, String> {
     // The name grammar reads nothing, so its refusal is a negative proof.
     let epic_id = match super::line_adoption::epic_id(branch) {
         Ok(epic_id) => epic_id,
@@ -772,7 +1136,7 @@ pub fn epic_line_proof(
         )?),
         None => None,
     };
-    let line_place = format!("'origin/{branch}'");
+    let line_place = format!("'origin/{}'", shown_ref(repo_root, branch));
     let mut anchors = vec![(&at_base, "the target")];
     if let Some(records) = &at_line {
         anchors.push((records, line_place.as_str()));
@@ -802,7 +1166,7 @@ pub fn epic_line_proof(
     // cancelled at an anchor or the head, or a head that changes or removes
     // a trusted declaration or deletes the declaring epic (TSK-1286). A
     // task of the line's own epic only lifts the need for a declared task.
-    let declared = match declared_line_tasks(&anchors, &at_head, branch) {
+    let declared = match declared_line_tasks(repo_root, &anchors, &at_head, branch) {
         Err(refusal) => return Ok(EpicLineProof::NotLine(refusal)),
         Ok(declared) => declared,
     };
@@ -969,9 +1333,16 @@ pub fn epic_line_binding(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
-    let not_own = format!("names {epic_id}, which is not the epic of branch '{branch}'");
+    let not_own = format!(
+        "names {epic_id}, which is not the epic of branch '{}'",
+        shown_ref(repo_root, branch)
+    );
     // A planning branch must name the line's own epic; it never binds
     // through a declaration (TSK-1286 keeps the planning rule as it was).
     let claim = if let Some(plan) = branch.strip_prefix("plan/") {
@@ -997,13 +1368,17 @@ pub fn epic_line_binding(
                 .is_none_or(|reason| reason.trim().is_empty())
             {
                 return Ok(EpicLineBinding::Refused(format!(
-                    "standalone task on branch '{branch}' has no nonblank standalone_reason"
+                    "standalone task on branch '{}' has no nonblank standalone_reason",
+                    shown_ref(repo_root, branch)
                 )));
             }
             let target = record.integration_target.as_deref().unwrap_or_default();
             if logical_target(target) != line {
                 return Ok(EpicLineBinding::Refused(format!(
-                    "standalone task on branch '{branch}' declares target '{target}', not this line '{line}'"
+                    "standalone task on branch '{}' declares target '{}', not this line '{}'",
+                    shown_ref(repo_root, branch),
+                    shown_ref(repo_root, target),
+                    shown_ref(repo_root, line)
                 )));
             }
             Claim::Line
@@ -1017,16 +1392,16 @@ pub fn epic_line_binding(
     };
     let records = anchor_records(repo_root, anchor)?;
     let Claim::Declared(own) = claim else {
-        return Ok(bound_in(&records, line, epic_id, place));
+        return Ok(bound_in(repo_root, &records, line, epic_id, place));
     };
     Ok(declared_binding(
+        repo_root,
         &records,
         line,
         epic_id,
         &own,
         head_value.as_deref(),
-        place,
-        &not_own,
+        (place, &not_own),
     ))
 }
 
@@ -1153,7 +1528,7 @@ pub(crate) fn epic_facts_at(
                 parent_line: record.parent_line,
             })
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.shown(repo_root))
 }
 
 /// Whether the trusted `records` (named `place`) let a task of `own`, an
@@ -1167,16 +1542,16 @@ pub(crate) fn epic_facts_at(
 /// outweigh a declaration at another; then the line itself must be bound
 /// there ([`bound_in`]).
 fn declared_binding(
+    root: &Path,
     records: &BTreeMap<String, Record>,
     line: &str,
     epic_id: &str,
     own: &str,
     head_value: Option<&str>,
-    place: &str,
-    not_own: &str,
+    (place, not_own): (&str, &str),
 ) -> EpicLineBinding {
     let field = super::line_adoption::PARENT_LINE_FIELD;
-    let membership = line_membership(line, own, &record_facts(records), place);
+    let membership = line_membership(root, line, own, &record_facts(records), place);
     // Refusals first, in this order, so no positive result can skip one:
     // the declaring epic closed here, then a head that changes or removes
     // the declaration found here, then the line's own epic closed here
@@ -1185,12 +1560,16 @@ fn declared_binding(
         return EpicLineBinding::Refused(format!("{not_own}: {reason}"));
     }
     if membership == LineMembership::Declared && head_value != Some(line) {
-        let shown = head_value.map_or_else(|| "none".to_string(), |value| format!("'{value}'"));
+        let shown = head_value.map_or_else(
+            || "none".to_string(),
+            |value| format!("'{}'", shown_ref(root, value)),
+        );
+        let line = shown_ref(root, line);
         return EpicLineBinding::Refused(format!(
             "{not_own}: {own} declares {field} '{line}' on {place}, but the head's {own} record declares {shown}; a branch cannot change the line its own epic lands on, so restore the field and change it through a planning pull request into the line"
         ));
     }
-    let binding = bound_in(records, line, epic_id, place);
+    let binding = bound_in(root, records, line, epic_id, place);
     if binding != EpicLineBinding::Bound {
         return binding;
     }
@@ -1227,10 +1606,14 @@ pub fn epic_line_bound_at(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
     let records = anchor_records(repo_root, anchor)?;
-    Ok(bound_in(&records, line, epic_id, place))
+    Ok(bound_in(repo_root, &records, line, epic_id, place))
 }
 
 /// Whether the trusted records at commit `tip` bind `line`, judged by
@@ -1248,14 +1631,24 @@ pub(crate) fn line_bound_at_tip(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo.commondir(), &reason),
+            ))
+        }
     };
     let tree = repo
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| format!("{tip}: {error}"))?;
     let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
-    Ok(bound_in(&records, line, epic_id, "the tip"))
+    Ok(bound_in(
+        repo.commondir(),
+        &records,
+        line,
+        epic_id,
+        "the tip",
+    ))
 }
 
 /// Whether one trusted record set (named `place`) binds `line`, whose name
@@ -1263,6 +1656,7 @@ pub(crate) fn line_bound_at_tip(
 /// archived, and a task there targets this exact line as a task of that
 /// epic or of an epic that declares the line as its `parent_line` there.
 fn bound_in(
+    root: &Path,
     records: &BTreeMap<String, Record>,
     line: &str,
     epic_id: &str,
@@ -1282,10 +1676,11 @@ fn bound_in(
             epic.status
         ));
     }
-    if let Some(reason) = chained_owner(records, line, place) {
+    if let Some(reason) = chained_owner(root, records, line, place) {
         return EpicLineBinding::Refused(reason);
     }
-    if !line_has_member_task(records, line, place) {
+    if !line_has_member_task(root, records, line, place) {
+        let line = shown_ref(root, line);
         return EpicLineBinding::Unbound(format!(
             "is not the target of any task of {epic_id} on {place}, nor of a task of an epic declaring {} '{line}' there",
             super::line_adoption::PARENT_LINE_FIELD
@@ -1324,6 +1719,7 @@ pub(crate) struct EpicFacts {
 /// never binds and no prefix or case spelling of the line matches, and a
 /// line whose own epic itself declares a `parent_line` refuses.
 pub(crate) fn line_membership(
+    root: &Path,
     line: &str,
     epic: &str,
     lookup: &dyn Fn(&str) -> Option<EpicFacts>,
@@ -1346,16 +1742,18 @@ pub(crate) fn line_membership(
     match facts.parent_line.as_deref() {
         None => LineMembership::Not(format!("{epic} declares no {field} on {place}")),
         Some(declared) if declared != line => LineMembership::Not(format!(
-            "{epic} declares {field} '{declared}' on {place}, not '{line}'"
+            "{epic} declares {field} '{}' on {place}, not '{}'",
+            shown_ref(root, declared),
+            shown_ref(root, line)
         )),
         Some(_) => match lookup(line_epic) {
             None => LineMembership::Not(format!(
                 "{epic}'s {field} names {line_epic}, which has no epic record on {place}"
             )),
             Some(owner) => match owner.parent_line.as_deref() {
-                Some(parent) => {
-                    LineMembership::Refused(owner_parent_refusal(line, line_epic, parent, place))
-                }
+                Some(parent) => LineMembership::Refused(owner_parent_refusal(
+                    root, line, line_epic, parent, place,
+                )),
                 None => LineMembership::Declared,
             },
         },
@@ -1364,8 +1762,16 @@ pub(crate) fn line_membership(
 
 /// The refusal when `line`'s own epic `line_epic` itself declares a
 /// `parent_line` (`parent`) on `place`: one level only (TSK-1286 AC-3).
-fn owner_parent_refusal(line: &str, line_epic: &str, parent: &str, place: &str) -> String {
+fn owner_parent_refusal(
+    root: &Path,
+    line: &str,
+    line_epic: &str,
+    parent: &str,
+    place: &str,
+) -> String {
     let field = super::line_adoption::PARENT_LINE_FIELD;
+    let line = shown_ref(root, line);
+    let parent = shown_ref(root, parent);
     format!(
         "{line_epic}, the epic of '{line}', itself declares {field} '{parent}' on {place}; one level only, so no other epic's {field} binds this line"
     )
@@ -1375,7 +1781,12 @@ fn owner_parent_refusal(line: &str, line_epic: &str, parent: &str, place: &str) 
 /// a `parent_line` in `records` (named `place`) and a task there targets
 /// the line as a task of an epic declaring it, the refusal naming the cause.
 /// A line with only its own epic's tasks is untouched.
-fn chained_owner(records: &BTreeMap<String, Record>, line: &str, place: &str) -> Option<String> {
+fn chained_owner(
+    root: &Path,
+    records: &BTreeMap<String, Record>,
+    line: &str,
+    place: &str,
+) -> Option<String> {
     let line_epic = super::line_adoption::epic_id(line).ok()?;
     let epic_record = |id: &str| {
         records
@@ -1395,7 +1806,7 @@ fn chained_owner(records: &BTreeMap<String, Record>, line: &str, place: &str) ->
                         .is_some_and(|declarer| declarer.parent_line.as_deref() == Some(line))
             })
     });
-    declaring.then(|| owner_parent_refusal(line, line_epic, parent, place))
+    declaring.then(|| owner_parent_refusal(root, line, line_epic, parent, place))
 }
 
 /// The epic facts of a parsed record set, for [`line_membership`].
@@ -1413,7 +1824,12 @@ fn record_facts(records: &BTreeMap<String, Record>) -> impl Fn(&str) -> Option<E
 
 /// Whether a task in `records` targets exactly `line` as a task of the
 /// line's epic or of an epic that declares the line there.
-fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &str) -> bool {
+fn line_has_member_task(
+    root: &Path,
+    records: &BTreeMap<String, Record>,
+    line: &str,
+    place: &str,
+) -> bool {
     records.values().any(|record| {
         record.kind == RecordKind::Task
             && record
@@ -1422,7 +1838,7 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
                 .is_some_and(|target| logical_target(target) == line)
             && record.epic_id.as_deref().is_some_and(|epic| {
                 matches!(
-                    line_membership(line, epic, &record_facts(records), place),
+                    line_membership(root, line, epic, &record_facts(records), place),
                     LineMembership::Own | LineMembership::Declared
                 )
             })
@@ -1443,6 +1859,7 @@ fn line_has_member_task(records: &BTreeMap<String, Record>, line: &str, place: &
 /// Returns the refusal for a cancelled or archived declaring epic, or for
 /// a head that changes, removes or deletes a trusted declaration.
 fn declared_line_tasks(
+    root: &Path,
     anchors: &[(&BTreeMap<String, Record>, &str)],
     head: &BTreeMap<String, Record>,
     line: &str,
@@ -1450,7 +1867,7 @@ fn declared_line_tasks(
     let field = super::line_adoption::PARENT_LINE_FIELD;
     let mut declared = BTreeMap::new();
     for (records, place) in anchors {
-        if let Some(reason) = chained_owner(records, line, place) {
+        if let Some(reason) = chained_owner(root, records, line, place) {
             return Err(reason);
         }
         for record in records.values() {
@@ -1462,7 +1879,7 @@ fn declared_line_tasks(
                     .integration_target
                     .as_deref()
                     .is_some_and(|target| logical_target(target) == line)
-                && line_membership(line, epic, &record_facts(records), place)
+                && line_membership(root, line, epic, &record_facts(records), place)
                     == LineMembership::Declared
             {
                 declared.entry(epic.to_string()).or_insert(*place);
@@ -1472,16 +1889,19 @@ fn declared_line_tasks(
     for (epic, trusted_at) in &declared {
         for (records, place) in anchors.iter().copied().chain([(head, "the head")]) {
             if let LineMembership::Refused(reason) =
-                line_membership(line, epic, &record_facts(records), place)
+                line_membership(root, line, epic, &record_facts(records), place)
             {
-                return Err(format!("{epic} declares {field} '{line}', but {reason}"));
+                return Err(format!(
+                    "{epic} declares {field} '{}', but {reason}",
+                    shown_ref(root, line)
+                ));
             }
         }
         if let LineMembership::Not(reason) =
-            line_membership(line, epic, &record_facts(head), "the head")
+            line_membership(root, line, epic, &record_facts(head), "the head")
         {
             return Err(format!(
-                "{epic} declares {field} '{line}' on {trusted_at}, but {reason}; a branch cannot change or remove the line an epic lands on, so change it through a planning pull request into the line"
+                "{epic} declares {field} '{}' on {trusted_at}, but {reason}; a branch cannot change or remove the line an epic lands on, so change it through a planning pull request into the line", shown_ref(root, line)
             ));
         }
     }
@@ -1555,7 +1975,11 @@ pub fn task_line_binding(
     let line = logical_target(line);
     let epic_id = match super::line_adoption::epic_id(line) {
         Ok(epic_id) => epic_id,
-        Err(reason) => return Ok(EpicLineBinding::Refused(reason)),
+        Err(reason) => {
+            return Ok(EpicLineBinding::Refused(
+                crate::security::git::without_remote_names(repo_root, &reason),
+            ))
+        }
     };
     let Some(record) = task_record_at_revision(repo_root, task, head)? else {
         return Ok(EpicLineBinding::Refused(format!(
@@ -1593,15 +2017,15 @@ pub fn task_line_binding(
         let records = anchor_records(repo_root, anchor)?;
         let binding = match &claim {
             Claim::Declared(own) => declared_binding(
+                repo_root,
                 &records,
                 line,
                 epic_id,
                 own,
                 head_value.as_deref(),
-                place,
-                &not_own,
+                (place, &not_own),
             ),
-            Claim::Line => bound_in(&records, line, epic_id, place),
+            Claim::Line => bound_in(repo_root, &records, line, epic_id, place),
         };
         match binding {
             EpicLineBinding::Bound => bound = true,
@@ -1838,9 +2262,17 @@ impl PinBranches {
 
     /// The one branch whose tip is the pin, the branch not advanced past it.
     ///
+    /// Each copy of that branch (the local branch and its remote-tracking
+    /// refs) is judged against the pin by ancestry alone (TSK-416): a copy
+    /// behind the pin, a strict ancestor of it, is a stale copy and does not
+    /// refuse; a copy ahead of the pin or diverged from it refuses, naming
+    /// the branch, the pin, the copy and its shape; ancestry that cannot be
+    /// read refuses with that cause.
+    ///
     /// # Errors
-    /// Refuses a pin that is not the unique predecessor branch tip.
-    pub(crate) fn pin_name(&self, pin: &ReviewedPin) -> Result<GitName, String> {
+    /// Refuses a pin that is not the unique predecessor branch tip, a copy
+    /// ahead of or diverged from it, and unreadable ancestry.
+    pub(crate) fn pin_name(&self, repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
         let visible: Vec<_> = self.of(&pin.task_id)?.collect();
         let heads = visible
             .iter()
@@ -1851,16 +2283,55 @@ impl PinBranches {
             .collect::<Vec<_>>()
             .join(", ");
         let matching: Vec<_> = visible
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|(_, tips)| tips.contains(&pin.revision))
             .collect();
         let [(name, tips)] = matching.as_slice() else {
+            // Issue 603: every visible copy behind the pin means the
+            // reviewed head is not pushed or fetched yet, not that the
+            // branch advanced.
+            if matching.is_empty() && !visible.is_empty() {
+                let mut behind = true;
+                for tip in visible.iter().flat_map(|(_, tips)| tips.iter()) {
+                    behind &= history::descendant_of(repo, pin.revision, *tip).map_err(|error| {
+                        format!(
+                            "{} predecessor branch: cannot read the ancestry of its copy at {tip} against the pin {}: {}; fetch the branch again and recheck",
+                            pin.task_id,
+                            pin.revision,
+                            error.message()
+                        )
+                    })?;
+                }
+                if behind {
+                    return Err(format!("{} predecessor branch is behind the pin {}; visible heads: {heads}; push the reviewed head to the predecessor's branch or wait for its push, then fetch and recheck", pin.task_id, pin.revision));
+                }
+            }
             return Err(format!("{} pin is not the unique predecessor branch tip; visible heads: {heads}; rebase on its new reviewed head and recheck", pin.task_id));
         };
-        if tips.len() != 1 {
+        for other in tips.iter().filter(|tip| **tip != pin.revision) {
+            let unreadable = |error: git2::Error| {
+                format!(
+                    "{} predecessor branch {}: cannot read the ancestry of its copy at {other} against the pin {}: {}; fetch the branch again and recheck",
+                    pin.task_id,
+                    name.display(),
+                    pin.revision,
+                    error.message()
+                )
+            };
+            if history::descendant_of(repo, pin.revision, *other).map_err(unreadable)? {
+                continue;
+            }
+            let shape = if history::descendant_of(repo, *other, pin.revision).map_err(unreadable)? {
+                "is ahead of"
+            } else {
+                "has diverged from"
+            };
             return Err(format!(
-                "{} predecessor branch has advanced; visible heads: {heads}; rebase on its new reviewed head and recheck",
-                pin.task_id
+                "{} predecessor branch {} has a copy at {other} that {shape} the pin {}; visible heads: {heads}; rebase on its new reviewed head and recheck, or delete or reset the stray copy",
+                pin.task_id,
+                name.display(),
+                pin.revision
             ));
         }
         Ok((*name).clone())
@@ -1926,7 +2397,7 @@ impl PinBranches {
         repo: &Repository,
         pin: &ReviewedPin,
     ) -> Result<GitName, String> {
-        let name = self.pin_name(pin)?;
+        let name = self.pin_name(repo, pin)?;
         self.pin_holds_record(repo, pin)?;
         Ok(name)
     }
@@ -2077,6 +2548,7 @@ pub fn reviewed_pins(
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     let mut branches = None;
     reviewed_pins_in(&repo, &mut branches, values, lookup, false)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
 }
 
 /// [`reviewed_pins`] over branches read at most once. `review_first` asks
@@ -2109,7 +2581,7 @@ pub(crate) fn reviewed_pins_in(
             revision,
         };
         let branches = PinBranches::once(branches, repo)?;
-        let branch = branches.pin_name(&pin)?;
+        let branch = branches.pin_name(repo, &pin)?;
         if !review_first {
             branches.pin_holds_record(repo, &pin)?;
         }
@@ -2219,6 +2691,7 @@ fn pin_branch(repo: &Repository, pin: &ReviewedPin) -> Result<GitName, String> {
 pub fn stack_base(root: &Path, pins: &[ReviewedPin]) -> Result<Option<git2::Oid>, String> {
     let repo = Repository::discover(root).map_err(|e| e.to_string())?;
     stack_base_in(&repo, &mut None, pins)
+        .map_err(|reason| crate::security::git::without_remote_names(root, &reason))
 }
 
 /// [`stack_base`] over branches read at most once.
@@ -2480,9 +2953,9 @@ pub fn stacked_pins(
     lookup: &ReviewLookup<'_>,
 ) -> Result<Vec<ReviewedPin>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let head_id = head_commit(&repo, Some(head)).map_err(|error| error.to_string())?;
+    let head_id = head_commit(&repo, Some(head)).map_err(|error| error.shown(repo_root))?;
     let (merge_base, mut records) =
-        anchored_records(&repo, target, head_id).map_err(|error| error.to_string())?;
+        anchored_records(&repo, target, head_id).map_err(|error| error.shown(repo_root))?;
     let merge_base = Oid::from_str(&merge_base).map_err(|error| error.to_string())?;
     if !records.contains_key(task_id) {
         // A standalone record new on this branch carries its edges at head.
@@ -2517,13 +2990,37 @@ pub fn stacked_pins(
                 format!("cannot read the ancestry of {ancestor} from {of}: {error}")
             })
         };
+        // Each branch of the predecessor with the tips the head contains
+        // and the target does not.
+        let mut by_branch: Vec<Vec<Oid>> = Vec::new();
+        for (_, tips) in PinBranches::once(&mut branches, &repo)?.of(&dependency.id)? {
+            let mut inside = Vec::new();
+            for tip in tips {
+                if (*tip == head_id || descends(head_id, *tip)?)
+                    && *tip != merge_base
+                    && !descends(merge_base, *tip)?
+                {
+                    inside.push(*tip);
+                }
+            }
+            by_branch.push(inside);
+        }
+        // A copy of one branch that another contained copy of the same
+        // branch descends from is a stale copy behind it, never a second
+        // stack (TSK-416); `pin_name` then judges every copy against the pin.
         let mut contained = std::collections::BTreeSet::new();
-        for tip in PinBranches::once(&mut branches, &repo)?.tips_of(&dependency.id)? {
-            if (tip == head_id || descends(head_id, tip)?)
-                && tip != merge_base
-                && !descends(merge_base, tip)?
-            {
-                contained.insert(tip);
+        for inside in &by_branch {
+            for tip in inside {
+                let mut behind = false;
+                for other in inside.iter().filter(|other| *other != tip) {
+                    if descends(*other, *tip)? {
+                        behind = true;
+                        break;
+                    }
+                }
+                if !behind {
+                    contained.insert(*tip);
+                }
             }
         }
         match contained.len() {
@@ -2667,6 +3164,7 @@ fn check_task_anchor(
         pins,
     )
     .map_err(WorkStartError::Repository)?;
+    own_pin_edges(&repo, &mut records, task_id, head_id, pins)?;
     let anchored = validate_task_structure(
         &repo,
         &records,
@@ -2731,8 +3229,9 @@ pub fn anchored_task_content(repo_root: &Path, task_id: &str) -> Result<String, 
     if !is_stable_work_target(&target) {
         return Err("override target must be a stable non-task branch".into());
     }
-    let (base, records) = anchored_records(&repo, &target, head.id()).map_err(|e| e.to_string())?;
-    validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.to_string())?;
+    let (base, records) =
+        anchored_records(&repo, &target, head.id()).map_err(|e| e.shown(repo_root))?;
+    validate_anchored_task(&repo, &records, task_id, &target).map_err(|e| e.shown(repo_root))?;
     let commit = repo
         .find_commit(git2::Oid::from_str(&base).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -2823,7 +3322,7 @@ pub fn anchored_project_file(
         })?
         .to_owned();
     let base = check_work_start_for_branch(repo_root, task_id, &target, &branch)
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.shown(repo_root))?
         .merge_base;
     let base = Oid::from_str(&base).map_err(|e| e.to_string())?;
     let tree = repo
@@ -2840,18 +3339,36 @@ pub fn anchored_project_file(
         Err(e) if e.code() == git2::ErrorCode::NotFound => {
             refuse_retarget(&repo, head.id(), &record, task_id, &target)?;
         }
-        Err(e) => return Err(format!("cannot read {record} on {target}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {record} on {}: {}",
+                shown_ref(repo_root, &target),
+                crate::security::git::without_remote_names(repo_root, &e.to_string())
+            ))
+        }
     }
     let content = match tree.get_path(Path::new(path)) {
         Err(e) if e.code() == git2::ErrorCode::NotFound => None,
-        Err(e) => return Err(format!("cannot read {path} on {target}: {e}")),
+        Err(e) => {
+            return Err(format!(
+                "cannot read {path} on {}: {}",
+                shown_ref(repo_root, &target),
+                crate::security::git::without_remote_names(repo_root, &e.to_string())
+            ))
+        }
         Ok(entry) => {
             if entry.filemode() != 0o100_644 && entry.filemode() != 0o100_755 {
-                return Err(format!("{path} on {target} must be a regular file"));
+                return Err(format!(
+                    "{path} on {} must be a regular file",
+                    shown_ref(repo_root, &target)
+                ));
             }
             let blob = repo.find_blob(entry.id()).map_err(|e| e.to_string())?;
             if blob.size() > MAX_BYTES {
-                return Err(format!("{path} on {target} exceeds {MAX_BYTES} bytes"));
+                return Err(format!(
+                    "{path} on {} exceeds {MAX_BYTES} bytes",
+                    shown_ref(repo_root, &target)
+                ));
             }
             Some(blob.content().to_vec())
         }
@@ -2911,6 +3428,8 @@ fn refuse_retarget(
             .filter(|declared| !declared.trim_matches([' ', '\t']).is_empty())
             .filter(|declared| logical_target(declared) != logical_target(target))
         {
+            let declared = shown_ref(repo.commondir(), declared);
+            let target = shown_ref(repo.commondir(), target);
             return Err(format!(
                 "an earlier version of task {task_id} declares integration target \
                  '{declared}', not '{target}'; {RETARGET_REFUSAL}"
@@ -3164,6 +3683,53 @@ pub(crate) fn validate_anchored_task_in(
     Ok(result)
 }
 
+/// Issue 603: a reviewed pin may name a code dependency that the task's
+/// own change adds. The edge is read from the task's record in the judged
+/// head commit, never the working tree, and projected onto the anchored
+/// record only for a pinned predecessor the merge-base record does not name
+/// at all. The pin itself is then checked as every pinned code dependency
+/// is; every other planning input keeps the merge-base's authority.
+///
+/// # Errors
+/// Returns why the head's records cannot be read.
+fn own_pin_edges(
+    repo: &Repository,
+    records: &mut BTreeMap<String, Record>,
+    task_id: &str,
+    head: Oid,
+    pins: &[ReviewedPin],
+) -> Result<(), WorkStartError> {
+    let Some(task) = records.get_mut(task_id) else {
+        return Ok(());
+    };
+    let unnamed: Vec<&str> = pins
+        .iter()
+        .map(|pin| pin.task_id.as_str())
+        .filter(|id| !task.depends_on.iter().any(|dep| dep.id == *id))
+        .collect();
+    if unnamed.is_empty() {
+        return Ok(());
+    }
+    let tree = repo
+        .find_commit(head)
+        .and_then(|commit| commit.tree())
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let at_head = records_from_tree_matching(repo, &tree, |path, kind| {
+        kind == RecordKind::Task && path.rsplit('/').next().and_then(markdown_stem) == Some(task_id)
+    })?;
+    if let Some(own) = at_head.get(task_id) {
+        task.depends_on.extend(
+            own.depends_on
+                .iter()
+                .filter(|dep| {
+                    dep.kind == DependencyKind::Code && unnamed.contains(&dep.id.as_str())
+                })
+                .cloned(),
+        );
+    }
+    Ok(())
+}
+
 fn validate_task_structure(
     repo: &Repository,
     records: &BTreeMap<String, Record>,
@@ -3230,15 +3796,16 @@ fn validate_task_structure(
         }
     }
     validate_specs(records, task_id, &specs)?;
-    if pins.iter().any(|pin| {
+    if let Some(pin) = pins.iter().find(|pin| {
         !task
             .depends_on
             .iter()
             .any(|dep| dep.id == pin.task_id && dep.kind == DependencyKind::Code)
     }) {
-        return Err(WorkStartError::InvalidGraph(
-            "--on pin does not name a code dependency of this task".into(),
-        ));
+        return Err(WorkStartError::InvalidGraph(format!(
+            "--on pin does not name a code dependency of this task: {task_id} does not depend on {} at the target or in its own committed record; add {} to depends_on in {task_id}'s record on its branch, commit it and rerun",
+            pin.task_id, pin.task_id
+        )));
     }
     if dependencies_required {
         validate_dependencies(
@@ -3428,6 +3995,28 @@ fn pinned_dependency(
         }
     }
     if !landed {
+        // With a remote configured, each ref read is a tracking ref
+        // `<remote>/<branch>` ([`tracking_reference`]), whose remote name is
+        // shown only when plain (TSK-416 review round 7); without one, each
+        // is a local branch, which names no remote.
+        let local = repo
+            .remotes()
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?
+            .is_empty();
+        let read: Vec<String> = read
+            .iter()
+            .map(|name| {
+                if local {
+                    crate::git::display_text(name)
+                } else {
+                    crate::security::git::shown_tracking(repo.commondir(), name)
+                }
+            })
+            .collect();
+        let unfetched: Vec<_> = unfetched
+            .iter()
+            .map(|name| shown_ref(repo.commondir(), name))
+            .collect();
         return Err(refuse(not_landed_reason(&read, &unfetched)));
     }
     let at_pin = commit
@@ -3465,13 +4054,32 @@ pub(crate) fn tracking_reference(
     let Some(candidates) = target_reference_names(name) else {
         return Ok(None);
     };
-    let exact = &candidates[0];
+    // A bare name is the branch of that name; any other spelling names one ref.
+    let exact = candidates
+        .iter()
+        .find(|candidate| candidate.starts_with("refs/heads/"))
+        .unwrap_or(&candidates[0]);
     // A landing ref counts only under the exact spelling git lists
     // (TSK-381 SF-4).
     let read = |reference: &str| {
         crate::hooks::repo::listed_ref_commit(repo, reference)
             .map(|tip| tip.map(|tip| (reference_display_name(reference), tip)))
-            .map_err(|error| WorkStartError::Repository(error.to_string()))
+            .map_err(|error| {
+                // The listing reads every ref; only this ref's own failure
+                // is reported as its unresolvable tip.
+                let own = repo
+                    .find_reference(reference)
+                    .map(|found| found.peel_to_commit().err());
+                match own {
+                    Ok(Some(own)) => {
+                        WorkStartError::UnresolvableTip(unresolvable_tip(repo, reference, &own))
+                    }
+                    _ => WorkStartError::Repository(crate::security::git::without_remote_names(
+                        repo.commondir(),
+                        &error.to_string(),
+                    )),
+                }
+            })
     };
     let remotes = repo
         .remotes()
@@ -3490,6 +4098,17 @@ pub(crate) fn tracking_reference(
     let landing = configured_upstream(repo, branch, &remotes)?
         .unwrap_or_else(|| format!("refs/remotes/{}/{branch}", crate::ids::AUTHORITY));
     read(&landing)
+}
+
+/// [`configured_upstream`] for a caller outside this module.
+pub(crate) fn same_branch_upstream(
+    repo: &Repository,
+    branch: &str,
+) -> Result<Option<String>, WorkStartError> {
+    let remotes = repo
+        .remotes()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    configured_upstream(repo, branch, &remotes)
 }
 
 /// The upstream configured for local branch `branch`, when it is
@@ -3861,24 +4480,56 @@ fn accepted_block(content: &str) -> Option<String> {
     }
 }
 
+/// The commit a target names, read through [`target_reference_names`]: for
+/// a bare name the fetched `origin/<name>` when it exists, else the local
+/// branch.
 pub(crate) fn target_reference<'repo>(
     repo: &'repo Repository,
     target: &str,
 ) -> Result<Option<git2::Commit<'repo>>, WorkStartError> {
-    let Some(candidates) = target_reference_names(target) else {
+    Ok(target_reference_read(repo, target)?.map(|(_, commit)| commit))
+}
+
+/// The full ref [`target_reference`] reads for `target`, with its commit,
+/// so a caller can say which reference decided.
+pub(crate) fn target_reference_read<'repo>(
+    repo: &'repo Repository,
+    target: &str,
+) -> Result<Option<(String, git2::Commit<'repo>)>, WorkStartError> {
+    let Some(mut candidates) = target_reference_names(target) else {
         return Ok(None);
     };
+    // A bare name whose local branch tracks the same branch on another
+    // configured remote reads that ref first: a fork's `origin/<name>` is not
+    // the line the branch follows. An upstream naming another branch is never
+    // read, so a config write cannot point the line elsewhere (TSK-416).
+    if candidates.len() > 1 {
+        let remotes = repo
+            .remotes()
+            .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+        if let Some(upstream) = configured_upstream(repo, target, &remotes)? {
+            candidates.insert(0, upstream);
+        }
+    }
     for name in candidates {
         if let Some(oid) = reference_commit(repo, &name)? {
             return repo
                 .find_commit(oid)
-                .map(Some)
+                .map(|commit| Some((name, commit)))
                 .map_err(|error| WorkStartError::Repository(error.to_string()));
         }
     }
     Ok(None)
 }
 
+/// The refs a target name may be read through, in the order they are tried.
+///
+/// A full ref (`refs/heads/...`, `refs/remotes/...`) and an `origin/<name>`
+/// spelling name one ref. A bare name tries the fetched
+/// `refs/remotes/origin/<name>` first and the local `refs/heads/<name>` only
+/// after it, so a stale local branch of the same name never decides where
+/// the fetched line exists (TSK-416). `None` for a name that is not a
+/// target.
 pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
     if target.is_empty() || logical_target(target) == "HEAD" {
         return None;
@@ -3891,8 +4542,8 @@ pub(crate) fn target_reference_names(target: &str) -> Option<Vec<String>> {
         vec![format!("refs/remotes/origin/{remote_branch}")]
     } else {
         vec![
-            format!("refs/heads/{target}"),
             format!("refs/remotes/origin/{target}"),
+            format!("refs/heads/{target}"),
         ]
     };
     candidates
@@ -4047,10 +4698,10 @@ impl ReviewRepositories {
         match config.get_bytes(&format!("branch.{branch}.remote")) {
             Ok(bytes) => {
                 let name = GitName::from_bytes(bytes);
-                let text = name.rule_text().map_err(|error| {
+                let text = name.rule_text().map_err(|_| {
                     format!(
-                        "cannot verify review for this pin: the configured remote is not valid UTF-8 ({})",
-                        error.display()
+                        "cannot verify review for this pin: the configured remote is not valid UTF-8; {}",
+                        crate::security::git::WITHHELD_REMOTE_STEP
                     )
                 })?;
                 names.insert(text.to_string());
@@ -4066,10 +4717,12 @@ impl ReviewRepositories {
                 // be looked up, so the answer is a refusal, never another
                 // remote's repository.
                 let remote = GitName::from_bytes(remote);
-                let remote = remote.rule_text().map_err(|error| {
+                // The name is withheld: configuration text can hold a
+                // credential (TSK-416 review round 7).
+                let remote = remote.rule_text().map_err(|_| {
                     format!(
-                        "cannot verify review for this pin: a remote name is not valid UTF-8 ({})",
-                        error.display()
+                        "cannot verify review for this pin: a remote name is not valid UTF-8; {}",
+                        crate::security::git::WITHHELD_REMOTE_STEP
                     )
                 })?;
                 names.insert(remote.to_string());
@@ -4162,6 +4815,133 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn fetch_recovery_withholds_unclassified_tracking_targets() {
+        let dir = fixture();
+        let said = fetch_origin(dir.path(), "refs/remotes/unknown-SECRETVALUE/main");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+        assert!(!said.contains("git fetch origin refs/remotes"), "{said}");
+        assert!(
+            said.contains("no remote is configured under that name now"),
+            "{said}"
+        );
+        let plain = fetch_origin(dir.path(), "integration/plain");
+        assert!(plain.contains("integration/plain"), "{plain}");
+        assert!(plain.contains("git fetch"), "{plain}");
+    }
+
+    #[test]
+    fn retarget_refusal_withholds_names_and_preserves_plain_targets() {
+        for declared in ["integration/cred@SECRETVALUE", "integration/plain"] {
+            let dir = fixture();
+            let root = dir.path();
+            let repo = Repository::open(root).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            let record = "project-management/tasks/TSK-002.md";
+            let path = root.join(record);
+            let text = fs::read_to_string(&path).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {declared}"),
+            );
+            fs::write(&path, text).unwrap();
+            git(root, &["add", "."]);
+            git(root, &["commit", "-qm", "test: previous target"]);
+            let said = refuse_retarget(
+                &repo,
+                repo.head().unwrap().target().unwrap(),
+                record,
+                "TSK-002",
+                "main",
+            )
+            .unwrap_err();
+            assert!(said.contains(RETARGET_REFUSAL), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+            if declared == "integration/plain" {
+                assert!(said.contains("'integration/plain', not 'main'"), "{said}");
+            }
+        }
+    }
+
+    #[test]
+    fn stack_base_refusals_withhold_visible_branch_names() {
+        let dir = fixture();
+        let root = dir.path();
+        let repo = Repository::open(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let who = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let advanced = repo
+            .commit(None, &who, &who, "advance", &head.tree().unwrap(), &[&head])
+            .unwrap();
+        repo.reference(
+            "refs/heads/task/TSK-001-cred@SECRETVALUE",
+            advanced,
+            true,
+            "test",
+        )
+        .unwrap();
+        let pin = ReviewedPin {
+            task_id: "TSK-001".into(),
+            revision: head.id(),
+        };
+        let said = stack_base(root, &[pin]).unwrap_err();
+        assert!(said.contains("visible heads"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
+
+    #[test]
+    fn pin_refusal_withholds_unfetched_tracking_targets() {
+        let dir = fixture();
+        let root = dir.path();
+        let repo = Repository::open(root).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        let tree = head.tree().unwrap();
+        let who = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        let future = repo
+            .commit(None, &who, &who, "future pin", &tree, &[&head])
+            .unwrap();
+        let mut records = records_from_tree(&repo, &tree).unwrap();
+        records.get_mut("TSK-001").unwrap().integration_target =
+            Some("refs/remotes/unknown-SECRETVALUE/other".into());
+        let dependency = &mut records.get_mut("TSK-002").unwrap().depends_on[0];
+        dependency.kind = DependencyKind::Research;
+        dependency.pin = Some(future.to_string());
+        let error = pinned_dependency(
+            &repo,
+            &records,
+            "TSK-002",
+            "main",
+            &records["TSK-002"].depends_on[0],
+        )
+        .unwrap_err();
+        let said = error.shown(root);
+        assert!(said.contains("not fetched"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
+
+    #[test]
+    fn pin_review_withholds_an_unreadable_remote_name() {
+        use std::io::Write as _;
+        let dir = fixture();
+        let repo = Repository::open(dir.path()).unwrap();
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(repo.path().join("config"))
+            .unwrap();
+        file.write_all(b"\n[branch \"task/TSK-002-work\"]\nremote = cred-SECRETVALUE\xff\n")
+            .unwrap();
+        drop(file);
+        let said = review_repository(dir.path(), "task/TSK-002-work").unwrap_err();
+        assert!(said.contains("not valid UTF-8"), "{said}");
+        assert!(!said.contains("SECRETVALUE"), "{said}");
+    }
 
     /// Round 23: only git's "not found" from the merge-base walk is a
     /// missing common ancestor; a history object that cannot be read is a
@@ -4554,6 +5334,120 @@ mod tests {
             "protected branch",
         )
         .unwrap()
+    }
+
+    #[test]
+    fn line_binding_parser_refusals_withhold_invalid_parent_lines() {
+        let declared = second_epic(Some(DECLARED_LINE), "planning");
+        let changed = second_epic(Some("refs/remotes/unknown-SECRETVALUE/other"), "planning");
+        let dir = declared_fixture(Some(&declared), Some(&changed));
+        let binding = bind_declared(dir.path());
+        let EpicLineBinding::Refused(reason) = binding else {
+            panic!("{binding:?}")
+        };
+        assert!(reason.contains("parent_line"), "{reason}");
+        assert!(!reason.contains("SECRETVALUE"), "{reason}");
+        let own = serde_yaml::Value::String("integration/EPC-001-cred@SECRETVALUE".into());
+        let reason =
+            super::super::line_adoption::check_parent_line("EPC-001", Some(&own)).unwrap_err();
+        assert!(reason.contains("own line"), "{reason}");
+        assert!(!reason.contains("SECRETVALUE"), "{reason}");
+    }
+
+    #[test]
+    fn line_binding_refusals_withhold_changed_parent_lines() {
+        for hidden in [
+            "integration/EPC-009-cred@SECRETVALUE",
+            "integration/EPC-009-cred@SECRETVALUE/child",
+        ] {
+            let declared = second_epic(Some(DECLARED_LINE), "planning");
+            let changed = second_epic(Some(hidden), "planning");
+            let dir = declared_fixture(Some(&declared), Some(&changed));
+            let repo = Repository::open(dir.path()).unwrap();
+            repo.config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            let binding = bind_declared(dir.path());
+            let EpicLineBinding::Refused(reason) = binding else {
+                panic!("{binding:?}")
+            };
+            assert!(
+                reason.contains("head's EPC-002 record declares"),
+                "{reason}"
+            );
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+            let binding = task_line_binding(
+                dir.path(),
+                "TSK-002",
+                "HEAD",
+                DECLARED_LINE,
+                &[("main", "target")],
+            )
+            .unwrap();
+            let EpicLineBinding::Refused(reason) = binding else {
+                panic!("{binding:?}")
+            };
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+            let proof_dir = declared_fixture(Some(&declared), Some(&declared));
+            let proof_root = proof_dir.path();
+            let proof_repo = Repository::open(proof_root).unwrap();
+            proof_repo
+                .config()
+                .unwrap()
+                .set_str("remote.cred@SECRETVALUE.url", "/unused")
+                .unwrap();
+            git(proof_root, &["branch", "-f", "main", "HEAD"]);
+            fs::write(
+                proof_root.join("project-management/epics/EPC-002.md"),
+                &changed,
+            )
+            .unwrap();
+            git(proof_root, &["commit", "-am", "change declaration"]);
+            let proof = epic_line_proof(proof_root, DECLARED_LINE, "main", "main", "HEAD").unwrap();
+            let EpicLineProof::NotLine(reason) = proof else {
+                panic!("{proof:?}")
+            };
+            assert!(reason.contains("cannot change or remove"), "{reason}");
+            assert!(!reason.contains("SECRETVALUE"), "{reason}");
+        }
+    }
+
+    #[test]
+    fn design_authority_file_refusals_withhold_tracking_targets() {
+        let dir = fixture();
+        let root = dir.path();
+        git(root, &["switch", "main"]);
+        let target = "refs/remotes/cred@SECRETVALUE/main";
+        let path = root.join("project-management/tasks/TSK-002.md");
+        fs::write(
+            &path,
+            fs::read_to_string(&path).unwrap().replace(
+                "integration_target: main",
+                &format!("integration_target: {target}"),
+            ),
+        )
+        .unwrap();
+        fs::write(root.join("large"), vec![b'x'; 1024 * 1024 + 1]).unwrap();
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "design authority"]);
+        let repo = Repository::open(root).unwrap();
+        repo.config()
+            .unwrap()
+            .set_str("remote.cred@SECRETVALUE.url", "/unused")
+            .unwrap();
+        repo.reference(target, repo.head().unwrap().target().unwrap(), true, "test")
+            .unwrap();
+        git(root, &["switch", "task/TSK-002-work"]);
+        git(root, &["merge", "--ff-only", "main"]);
+        for (path, phrase) in [
+            ("project-management", "must be a regular file"),
+            ("large", "exceeds"),
+        ] {
+            let said = anchored_project_file(root, "TSK-002", path).unwrap_err();
+            assert!(said.contains(phrase), "{said}");
+            assert!(!said.contains("SECRETVALUE"), "{said}");
+        }
     }
 
     /// TSK-1286: a task of an epic whose record at the trusted anchor declares
@@ -5503,6 +6397,138 @@ mod tests {
         dir
     }
 
+    /// TSK-416 review round 7: a remote's name is configuration text and
+    /// can carry a credential. A diverged target, and a fetched ref that
+    /// names no commit or a missing object, show that remote withheld, and
+    /// no step pastes its name. The
+    /// credential is synthetic.
+    #[test]
+    fn work_target_refusals_never_print_a_credential_remote_name() {
+        let name = "user-OPAQUECANARY@host.invalid";
+        let check = |text: &str, case: &str| {
+            assert!(!text.contains("OPAQUECANARY"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
+        };
+        let dir = fixture();
+        add_remote(dir.path(), name, true);
+        git(
+            dir.path(),
+            &["update-ref", &format!("refs/remotes/{name}/main"), "HEAD"],
+        );
+        advance_remote_main(dir.path(), name);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local"],
+        );
+        let diverged = resolve_work_target_checked(dir.path(), Some("main")).unwrap_err();
+        assert!(
+            matches!(diverged, WorkStartError::DivergedTarget(_)),
+            "{diverged:?}"
+        );
+        check(&diverged.to_string(), "diverged");
+        let repo = Repository::open(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap();
+        let not_commit = format!("refs/remotes/{name}/blob");
+        repo.reference(&not_commit, blob, true, "fixture").unwrap();
+        check(
+            &unresolvable_reference(dir.path(), &not_commit).unwrap(),
+            "not a commit",
+        );
+        let missing = format!("refs/remotes/{name}/missing");
+        let file = repo.path().join(&missing);
+        std::fs::write(&file, format!("{}\n", "1".repeat(40))).unwrap();
+        let error = repo
+            .find_reference(&missing)
+            .and_then(|found| found.peel_to_commit())
+            .unwrap_err();
+        check(&unresolvable_tip(&repo, &missing, &error), "missing object");
+    }
+
+    /// TSK-416 review: a shown remote's ref whose branch part holds another
+    /// remote's withheld name prints no command naming it and keeps it out
+    /// of the prose: the missing-object repair (`git branch -d -r`) and the
+    /// diverged target's `--into`. A plain `origin/main` keeps its command.
+    #[test]
+    fn a_withheld_name_in_a_shown_remotes_ref_is_printed_nowhere() {
+        let withheld = "u'p@host.invalid";
+        let check = |text: &str, case: &str| {
+            assert!(!text.contains("u'p"), "{case}: {text}");
+            assert!(!text.contains("host.invalid"), "{case}: {text}");
+            assert!(!text.contains("git branch -d"), "{case}: {text}");
+            assert!(!text.contains("--into refs"), "{case}: {text}");
+            assert!(
+                text.contains(crate::security::git::WITHHELD_REMOTE),
+                "{case}: {text}"
+            );
+        };
+        let dir = fixture();
+        add_remote(dir.path(), "origin", false);
+        add_remote(dir.path(), withheld, false);
+        let repo = Repository::open(dir.path()).unwrap();
+        let missing_ref = |branch: &str| {
+            let missing = format!("refs/remotes/origin/{branch}");
+            let file = repo.path().join(&missing);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, format!("{}\n", "1".repeat(40))).unwrap();
+            let error = repo
+                .find_reference(&missing)
+                .and_then(|found| found.peel_to_commit())
+                .unwrap_err();
+            unresolvable_tip(&repo, &missing, &error)
+        };
+        check(&missing_ref(withheld), "missing object");
+        let shown = missing_ref("plain");
+        assert!(shown.contains("`git branch -d -r origin/plain`"), "{shown}");
+        let into = into_fetched(&repo, &format!("refs/remotes/origin/{withheld}"));
+        assert!(!into.contains("u'p"), "{into}");
+        assert!(!into.contains("--into refs"), "{into}");
+        let into = into_fetched(&repo, "refs/remotes/origin/main");
+        assert!(into.contains("`--into refs/remotes/origin/main`"), "{into}");
+        // The diverged refusal names the local branch and its upstream.
+        git(dir.path(), &["branch", "-q", withheld]);
+        git(
+            dir.path(),
+            &["config", &format!("branch.{withheld}.remote"), "origin"],
+        );
+        git(
+            dir.path(),
+            &[
+                "config",
+                &format!("branch.{withheld}.merge"),
+                &format!("refs/heads/{withheld}"),
+            ],
+        );
+        git(dir.path(), &["checkout", "-q", "-b", "ahead"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "remote"],
+        );
+        git(
+            dir.path(),
+            &[
+                "update-ref",
+                &format!("refs/remotes/origin/{withheld}"),
+                "HEAD",
+            ],
+        );
+        git(dir.path(), &["checkout", "-q", withheld]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local"],
+        );
+        git(dir.path(), &["checkout", "-q", "main"]);
+        let diverged = resolve_work_target_checked(dir.path(), Some(withheld)).unwrap_err();
+        assert!(
+            matches!(diverged, WorkStartError::DivergedTarget(_)),
+            "{diverged:?}"
+        );
+        check(&diverged.to_string(), "diverged");
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_configured_upstream_never_falls_back_to_origin() {
@@ -5580,14 +6606,31 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
+        // The bare name, which reads the configured `upstream/main`, never
+        // the fork's `origin/main` (TSK-416).
         assert_eq!(resolved.target, "main");
+        let repo = Repository::open(dir.path()).unwrap();
+        assert_eq!(
+            target_reference(&repo, &resolved.target)
+                .unwrap()
+                .unwrap()
+                .id(),
+            repo.find_reference("refs/remotes/upstream/main")
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        );
     }
 
     #[test]
     fn a_local_upstream_is_anchored_by_its_exact_ref() {
         // SR-2: `main` tracks the local branch `origin/main`
         // (`branch.main.remote = .`), while a remote `origin/main` exists
-        // too. The ref compared must be the ref anchored on.
+        // too. The ref compared must be the ref anchored on. A local
+        // upstream is not a fetched line, so the fetched `origin/main` is
+        // read, by its exact ref, never the author-made local branch
+        // (TSK-416).
         let dir = fixture();
         add_remote(dir.path(), "origin", false);
         git(
@@ -5610,19 +6653,19 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        assert_eq!(resolved.target, "refs/heads/origin/main");
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
         let repo = Repository::discover(dir.path()).unwrap();
         let anchored = target_reference(&repo, &resolved.target)
             .unwrap()
             .unwrap()
             .id();
-        let local_upstream = repo
-            .find_reference("refs/heads/origin/main")
+        let fetched = repo
+            .find_reference("refs/remotes/origin/main")
             .unwrap()
             .peel_to_commit()
             .unwrap()
             .id();
-        assert_eq!(anchored, local_upstream);
+        assert_eq!(anchored, fetched);
         assert!(is_stable_work_target(&resolved.target));
     }
 
@@ -5688,11 +6731,8 @@ mod tests {
         assert!(
             matches!(
                 &error,
-                WorkStartError::DivergedTarget {
-                    ahead: 1,
-                    behind: 1,
-                    ..
-                }
+                WorkStartError::DivergedTarget(diverged)
+                    if diverged.ahead == 1 && diverged.behind == 1
             ),
             "{error:?}"
         );
@@ -5701,13 +6741,392 @@ mod tests {
             message.contains("'main' and 'refs/remotes/origin/main' have diverged"),
             "{message}"
         );
-        // The unchecked resolver keeps its old answer for non-anchoring callers.
+        // TSK-416 AC-9: both tips by commit, and a remedy that runs under the
+        // guard, never a rebase or reset of the local branch.
+        let repo = Repository::open(dir.path()).unwrap();
+        for reference in ["refs/heads/main", "refs/remotes/origin/main"] {
+            let tip = repo
+                .find_reference(reference)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+                .to_string();
+            assert!(message.contains(&tip), "{reference}: {message}");
+        }
+        // TSK-416 review: a worktree shares the diverged branch, so the
+        // remedy is `--into` or a fresh clone, named by its remote. Round 2:
+        // no step prints the remote's URL, and the task branch is fetched
+        // from the remote it was pushed to when that is another remote.
+        for part in [
+            "`--into refs/remotes/origin/main`",
+            "a worktree of this clone shares its branches",
+            "push the task branch to its remote",
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+            "`git remote add <name> <url>`, then `git fetch <name>`",
+            "`git switch -c <task-branch> <name>/<task-branch>`",
+            "switch to the task branch there",
+        ] {
+            assert!(message.contains(part), "{part}: {message}");
+        }
+        assert!(!message.contains("get-url"), "{message}");
+        assert!(!message.contains("worktree add"), "{message}");
+        assert!(
+            !message.contains("rebase") && !message.contains("reset"),
+            "{message}"
+        );
+        // The unchecked resolver keeps its old answer, the local branch, by
+        // its exact ref, for non-anchoring callers.
         assert_eq!(
             resolve_work_target(dir.path(), Some("main"))
                 .unwrap()
                 .as_deref(),
-            Some("main")
+            Some("refs/heads/main")
         );
+    }
+
+    /// TSK-416 AC-9: a fetched tip that names no readable commit, a missing
+    /// object or a blob, refuses in every reader of the target, naming the
+    /// cause, the ref, the object it points at and a remedy that runs under
+    /// the guard, never `update-ref` or a fetch with a destination.
+    #[test]
+    fn an_unresolvable_fetched_tip_refuses_naming_the_ref_and_a_guarded_remedy() {
+        let dir = tracking_fixture(false, false);
+        let repo = Repository::open(dir.path()).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap().to_string();
+        let missing = "1".repeat(40);
+        // A missing object stops every fetch, so the remedy is a fresh
+        // clone; an object that is here and is not a commit is rewritten by
+        // a plain fetch.
+        let fresh_clone = [
+            "a fetch cannot rewrite the ref while its object is missing",
+            "a fresh clone of the remote origin, made from outside this clone with that remote's URL",
+            "`git branch -d -r origin/main`, then `git fetch origin`",
+            "which the guard leaves to the operator",
+        ];
+        let fetch = ["plain fetch of the remote (`git fetch origin`), which rewrites refs/remotes/origin/main"];
+        for (points_at, remedy) in [(missing, &fresh_clone[..]), (blob, &fetch[..])] {
+            fs::write(
+                dir.path().join(".git/refs/remotes/origin/main"),
+                format!("{points_at}\n"),
+            )
+            .unwrap();
+            let repo = Repository::open(dir.path()).unwrap();
+            for (reader, error) in [
+                (
+                    "resolve_work_target_checked",
+                    resolve_work_target_checked(dir.path(), Some("main")).unwrap_err(),
+                ),
+                (
+                    "target_reference_read",
+                    target_reference_read(&repo, "main").unwrap_err(),
+                ),
+                (
+                    "tracking_reference",
+                    tracking_reference(&repo, "main").unwrap_err(),
+                ),
+            ] {
+                let message = error.to_string();
+                for part in [
+                    "refs/remotes/origin/main points at",
+                    points_at.as_str(),
+                    "not a commit this clone can read",
+                    "the fetched tip cannot be resolved",
+                ]
+                .iter()
+                .chain(remedy)
+                {
+                    assert!(message.contains(part), "{reader}: {part}: {message}");
+                }
+                assert!(!message.contains("update-ref"), "{reader}: {message}");
+                assert!(!message.contains("unavailable"), "{reader}: {message}");
+            }
+        }
+    }
+
+    /// TSK-416 review: the remedy names the remote and never prints its
+    /// URL, whose userinfo, query or path a reader must not see or paste,
+    /// and each command it prints reaches a shell as the arguments it
+    /// names, whatever the remote's name holds. Each command without a
+    /// `<placeholder>` runs here under a shell whose `git` prints its
+    /// arguments.
+    #[test]
+    #[cfg(unix)]
+    fn an_unresolvable_tip_remedy_prints_no_url_and_quotes_each_argument() {
+        for (remote, url) in [
+            (
+                "origin",
+                "https://u:FAKE_TOKEN_3b9@h.invalid/x.git?access_token=FAKE_TOKEN_3b9#FAKE_TOKEN_3b9",
+            ),
+            ("origin", "/srv/with space/x.git"),
+            // A backtick would split the message's own code spans, which
+            // this test reads; the renderer's own test covers it.
+            ("o$(id);x", "/nowhere"),
+            // A remote name may hold `/`: the configured remote is named,
+            // never the part before the first `/`.
+            ("up/stream", "/nowhere"),
+            // Git reads an operand that starts with `-` as an option
+            // wherever it stands, unless `--` ends the options first.
+            ("-x", "/nowhere"),
+            ("--upload-pack=touch_pwned", "/nowhere"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            Repository::init(root).unwrap();
+            git(root, &["config", &format!("remote.{remote}.url"), url]);
+            let refs = root.join(".git/refs/remotes").join(remote);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{}\n", "1".repeat(40))).unwrap();
+            let message =
+                unresolvable_reference(root, &format!("refs/remotes/{remote}/main")).unwrap();
+            let commands: Vec<&str> = message
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("git ") && !span.contains('<'))
+                .collect();
+            // Review round 7: a name that is not plain is withheld; round 9:
+            // no command names it, and the clone's repair, which deletes a
+            // ref holding the name, gets no step.
+            if !crate::security::git::remote_name_shown(root, remote) {
+                assert!(!message.contains(remote), "{message}");
+                assert!(
+                    message.contains(crate::security::git::WITHHELD_REMOTE),
+                    "{message}"
+                );
+                assert!(commands.is_empty(), "{message}");
+                assert!(!message.contains("`git fetch"), "{message}");
+                assert!(!message.contains("`git branch"), "{message}");
+                assert!(message.contains("no step here names it"), "{message}");
+                assert!(!message.contains("/nowhere"), "{message}");
+                continue;
+            }
+            for command in &commands {
+                let out = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+                    .output()
+                    .unwrap();
+                assert!(out.status.success(), "{command}");
+                let printed = String::from_utf8_lossy(&out.stdout);
+                let last = printed.lines().last().unwrap_or_default();
+                assert!(
+                    last == remote || last == format!("{remote}/main"),
+                    "{command} gave {printed}"
+                );
+                assert!(!printed.contains("uid="), "{command} ran id: {printed}");
+                // Before `--`, the only dashed arguments are the command's
+                // own options.
+                for argument in printed.lines().take_while(|argument| *argument != "--") {
+                    assert!(
+                        !argument.starts_with('-') || ["-d", "-r"].contains(&argument),
+                        "{command} passes {argument} where git reads options: {printed}"
+                    );
+                }
+            }
+            for hidden in ["FAKE_TOKEN", "with space", "/nowhere", "h.invalid"] {
+                assert!(!message.contains(hidden), "{hidden}: {message}");
+            }
+            // The ref deletion and the fetch. Round 2: no step prints the
+            // URL, which `git remote get-url` would show with its
+            // credential.
+            assert_eq!(commands.len(), 2, "{message}");
+            assert!(!message.contains("get-url"), "{message}");
+        }
+    }
+
+    /// TSK-416 review: for a remote named like an option, git runs each
+    /// command the remedy prints as written, and following them in order
+    /// repairs the fetched ref: the deletion removes the ref whose object
+    /// is missing and the fetch recreates it from the remote. Since review
+    /// round 7 only a plain name is pasted, so `--upload-pack=touch_pwned`
+    /// is covered by the withheld case of the test above.
+    #[test]
+    #[cfg(unix)]
+    fn a_dashed_remote_remedy_runs_with_git_as_printed() {
+        for remote in ["-x"] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let source = root.to_str().unwrap();
+            git(root, &["init", "-q", "-b", "main"]);
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "tip",
+                ],
+            );
+            git(root, &["config", &format!("remote.{remote}.url"), source]);
+            git(
+                root,
+                &[
+                    "config",
+                    &format!("remote.{remote}.fetch"),
+                    &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+                ],
+            );
+            let refs = root.join(".git/refs/remotes").join(remote);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{}\n", "1".repeat(40))).unwrap();
+            let fetched = format!("refs/remotes/{remote}/main");
+            let message = unresolvable_reference(root, &fetched).unwrap();
+            let commands: Vec<&str> = message
+                .split('`')
+                .skip(1)
+                .step_by(2)
+                .filter(|span| span.starts_with("git ") && !span.contains('<'))
+                .collect();
+            assert_eq!(commands.len(), 2, "{message}");
+            for command in commands {
+                let out = std::process::Command::new("sh")
+                    .arg("-c")
+                    .arg(format!("git() {{ printf '%s\\n' \"$@\"; }}; {command}"))
+                    .output()
+                    .unwrap();
+                let printed = String::from_utf8_lossy(&out.stdout).into_owned();
+                let arguments: Vec<&str> = printed.lines().collect();
+                let ran = crate::git::command()
+                    .arg("-C")
+                    .arg(root)
+                    .args(&arguments)
+                    .output()
+                    .unwrap();
+                assert!(
+                    ran.status.success(),
+                    "{command}: {}",
+                    String::from_utf8_lossy(&ran.stderr)
+                );
+            }
+            let repo = Repository::open(root).unwrap();
+            let head = repo.head().unwrap().target().unwrap();
+            assert_eq!(
+                repo.find_reference(&fetched).unwrap().target(),
+                Some(head),
+                "{message}"
+            );
+        }
+    }
+
+    /// TSK-416 review rounds 9 and 10: a withheld remote that
+    /// `remote.<name>.skipFetchAll` keeps out of `git fetch --all`, whose
+    /// tip names an object that is not a commit or one that is missing,
+    /// gets no shell step that names it and no place in a file: a fresh
+    /// clone or a rename through a Git client, or, for a missing object, a
+    /// fresh clone. A fresh clone of the same source, whose remote has the
+    /// plain name `origin`, resolves the line; the failing clone is left as
+    /// it was, with no ref added. The credentials are synthetic; the remote
+    /// fetches from a local path, and its push URL only carries the
+    /// password `abc12` into the inventory.
+    #[test]
+    #[cfg(unix)]
+    fn a_skip_fetch_all_remote_tip_recovers_from_a_fresh_clone() {
+        let cases = ["o$(id)", "user-OPAQUECANARY@host.invalid", "fork-abc12"]
+            .into_iter()
+            .flat_map(|name| [(name, false), (name, true)]);
+        for (name, missing) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let source = root.to_str().unwrap();
+            git(root, &["init", "-q", "-b", "main"]);
+            git(
+                root,
+                &[
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.test",
+                    "commit",
+                    "-q",
+                    "--allow-empty",
+                    "-m",
+                    "chore: seed",
+                ],
+            );
+            for (key, value) in [
+                ("url", source.to_string()),
+                (
+                    "pushurl",
+                    "https://user:abc12@host.invalid/x.git".to_string(),
+                ),
+                ("fetch", format!("+refs/heads/*:refs/remotes/{name}/*")),
+                ("skipFetchAll", "true".to_string()),
+            ] {
+                git(root, &["config", &format!("remote.{name}.{key}"), &value]);
+            }
+            let target = if missing {
+                "1".repeat(40)
+            } else {
+                Repository::open(root)
+                    .unwrap()
+                    .blob(b"x")
+                    .unwrap()
+                    .to_string()
+            };
+            let refs = root.join(".git/refs/remotes").join(name);
+            fs::create_dir_all(&refs).unwrap();
+            fs::write(refs.join("main"), format!("{target}\n")).unwrap();
+            let fetched = format!("refs/remotes/{name}/main");
+            let message = unresolvable_reference(root, &fetched).unwrap();
+            for hidden in [
+                "$(",
+                "OPAQUECANARY",
+                "host.invalid",
+                "abc12",
+                "`git fetch",
+                "`git branch",
+                "`git remote",
+                "1st",
+                "[remote]",
+                "remote 1",
+            ] {
+                assert!(!message.contains(hidden), "{name}: {hidden}: {message}");
+            }
+            assert!(message.contains("fresh clone"), "{message}");
+            if missing {
+                assert!(message.contains("no step here names it"), "{message}");
+            } else {
+                assert!(
+                    message.contains(crate::security::git::WITHHELD_REMOTE_STEP),
+                    "{message}"
+                );
+            }
+            // A fresh clone of the same source, whose remote takes the
+            // plain name `origin`, resolves the line; the failing clone is
+            // left as it was.
+            let fresh = tempfile::tempdir().unwrap();
+            codeflow_fixture::clone(fresh.path(), source, "copy").run();
+            let copy = fresh.path().join("copy");
+            assert!(
+                unresolvable_reference(root, &fetched).is_some(),
+                "{name}: the failing clone is unchanged"
+            );
+            assert!(
+                unresolvable_reference(&copy, "refs/remotes/origin/main").is_none(),
+                "{name}: {message}"
+            );
+            let head = Repository::open(root)
+                .unwrap()
+                .head()
+                .unwrap()
+                .target()
+                .unwrap();
+            assert_eq!(
+                Repository::open(&copy)
+                    .unwrap()
+                    .find_reference("refs/remotes/origin/main")
+                    .unwrap()
+                    .target(),
+                Some(head),
+                "{message}"
+            );
+        }
     }
 
     #[test]
@@ -6189,7 +7608,16 @@ permission_preset = "strict"
             "1111111111111111111111111111111111111111\n",
         )
         .unwrap();
-        assert!(target_reference(&repo, "main").is_err());
+        // A bare name reads the fetched ref first (TSK-416), so the broken
+        // local branch is never read there; anchoring work still compares
+        // the local branch with it and refuses.
+        assert_eq!(
+            target_reference(&repo, "main")
+                .unwrap()
+                .map(|commit| commit.id()),
+            Some(oid)
+        );
+        assert!(target_reference(&repo, "refs/heads/main").is_err());
         assert!(resolve_work_target_checked(dir.path(), Some("main")).is_err());
     }
 
@@ -6328,5 +7756,428 @@ permission_preset = "strict"
             let error = stack_base(dir.path(), &pins).unwrap_err();
             assert!(error.contains("cannot verify"), "{error}");
         }
+    }
+}
+
+/// TSK-416: a stale copy of a branch, local or remote-tracking, never
+/// decides a target read or a reviewed pin; ancestry alone judges a copy.
+#[cfg(test)]
+mod stale_copy_tests {
+    use super::*;
+    use std::fs;
+
+    fn git(root: &Path, args: &[&str]) -> String {
+        let out = crate::git::command()
+            .arg("-C")
+            .arg(root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    fn commit(root: &Path, message: &str) -> String {
+        git(root, &["commit", "-q", "--allow-empty", "-m", message]);
+        git(root, &["rev-parse", "HEAD"])
+    }
+
+    /// `main` holding TSK-001 (todo) and TSK-002, which depends on it, with
+    /// an `origin` remote configured but nothing fetched.
+    fn fixture() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        git(root, &["init", "-q", "-b", "main"]);
+        git(root, &["config", "user.email", "test@example.com"]);
+        git(root, &["config", "user.name", "Test"]);
+        git(root, &["config", "remote.origin.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/*:refs/remotes/origin/*",
+            ],
+        );
+        fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        for (id, deps) in [("TSK-001", "[]"), ("TSK-002", "[TSK-001]")] {
+            fs::write(
+                root.join(format!("project-management/tasks/{id}.md")),
+                format!("---\nid: {id}\nepic_id: null\nstandalone_reason: bounded\nintegration_target: main\ntitle: work {id}\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: {deps}\ncreated: 2026-11-05\n---\n"),
+            )
+            .unwrap();
+        }
+        git(root, &["add", "."]);
+        git(root, &["commit", "-q", "-m", "plan"]);
+        dir
+    }
+
+    /// A commit object whose parent is missing, so its ancestry cannot be read.
+    fn unreadable_commit(root: &Path) -> String {
+        let tree = git(root, &["rev-parse", "HEAD^{tree}"]);
+        let body = format!(
+            "tree {tree}\nparent {}\nauthor T <t@example.test> 1700000000 +0000\ncommitter T <t@example.test> 1700000000 +0000\n\nbroken\n",
+            "1".repeat(40)
+        );
+        let path = root.join(".git/broken-commit");
+        fs::write(&path, body).unwrap();
+        let path = path.to_str().unwrap().to_string();
+        git(
+            root,
+            &["hash-object", "-t", "commit", "-w", "--literally", &path],
+        )
+    }
+
+    #[test]
+    fn a_bare_target_reads_the_fetched_ref_before_a_stale_local_branch() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/origin/main");
+        assert_eq!(tip.id().to_string(), fetched);
+        assert_eq!(
+            target_reference(&repo, "main")
+                .unwrap()
+                .unwrap()
+                .id()
+                .to_string(),
+            fetched
+        );
+        // Only when nothing of that name is fetched does the local branch decide.
+        git(root, &["update-ref", "-d", "refs/remotes/origin/main"]);
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/heads/main");
+        assert_eq!(tip.id().to_string(), stale);
+    }
+
+    /// TSK-416 AC-3: the other readers of a bare target read the fetched
+    /// line beside a stale local copy: `work_target_resolves`,
+    /// `anchored_records` (readiness and the pre-push range),
+    /// `tracking_reference` and `resolve_work_target` (the redaction and
+    /// reopen resolver in `status_verb.rs`).
+    #[test]
+    fn the_other_bare_target_readers_read_the_fetched_line() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        let head = commit(root, "task work");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        let repo = Repository::open(root).unwrap();
+        assert!(work_target_resolves(root, "main"));
+        let head = Oid::from_str(&head).unwrap();
+        let (base, _) = anchored_records(&repo, "main", head).unwrap();
+        assert_eq!(base, fetched);
+        let (name, tip) = tracking_reference(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "origin/main");
+        assert_eq!(tip.to_string(), fetched);
+        assert_eq!(
+            resolve_work_target(root, Some("main")).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+    }
+
+    /// An upstream naming another branch is never read for the line: a
+    /// config write (`git branch -u`, `branch.<b>.merge`) or a line cut from
+    /// `origin/main` and pushed without `-u` cannot point it elsewhere.
+    #[test]
+    fn an_upstream_naming_another_branch_is_never_read_for_the_line() {
+        let dir = fixture();
+        let root = dir.path();
+        let base = git(root, &["rev-parse", "HEAD"]);
+        let other = commit(root, "another branch");
+        git(
+            root,
+            &["update-ref", "refs/remotes/origin/feat/fake", &other],
+        );
+        git(root, &["update-ref", "refs/heads/main", &base]);
+        git(root, &["update-ref", "refs/remotes/origin/main", &base]);
+        git(root, &["config", "branch.main.remote", "origin"]);
+        git(
+            root,
+            &["config", "branch.main.merge", "refs/heads/feat/fake"],
+        );
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/origin/main");
+        assert_eq!(tip.id().to_string(), base);
+        let resolved = resolve_work_target_checked(root, Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+
+        // A line cut from `origin/main` tracks it; pushed without `-u`, its
+        // own fetched copy is the one read, and a local copy behind that
+        // copy resolves to it, never to `origin/main`.
+        let line = "integration/x";
+        git(root, &["update-ref", &format!("refs/heads/{line}"), &base]);
+        git(
+            root,
+            &["update-ref", &format!("refs/remotes/origin/{line}"), &other],
+        );
+        git(
+            root,
+            &["config", &format!("branch.{line}.remote"), "origin"],
+        );
+        git(
+            root,
+            &["config", &format!("branch.{line}.merge"), "refs/heads/main"],
+        );
+        let (name, tip) = target_reference_read(&repo, line).unwrap().unwrap();
+        assert_eq!(name, format!("refs/remotes/origin/{line}"));
+        assert_eq!(tip.id().to_string(), other);
+        let resolved = resolve_work_target_checked(root, Some(line))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, format!("refs/remotes/origin/{line}"));
+        // Equal copies keep the bare name, which reads the same commit.
+        git(root, &["update-ref", &format!("refs/heads/{line}"), &other]);
+        let resolved = resolve_work_target_checked(root, Some(line))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, line);
+    }
+
+    /// A fork's `origin/main` never replaces the upstream `main` tracks.
+    #[test]
+    fn a_bare_target_reads_the_configured_upstream_before_a_fork_origin() {
+        let dir = fixture();
+        let root = dir.path();
+        let upstream = git(root, &["rev-parse", "HEAD"]);
+        let fork = commit(root, "fork");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fork]);
+        git(
+            root,
+            &["update-ref", "refs/remotes/upstream/main", &upstream],
+        );
+        git(root, &["update-ref", "refs/heads/main", &upstream]);
+        git(root, &["config", "remote.upstream.url", "/nowhere"]);
+        git(
+            root,
+            &[
+                "config",
+                "remote.upstream.fetch",
+                "+refs/heads/*:refs/remotes/upstream/*",
+            ],
+        );
+        git(root, &["config", "branch.main.remote", "upstream"]);
+        git(root, &["config", "branch.main.merge", "refs/heads/main"]);
+        let repo = Repository::open(root).unwrap();
+        let (name, tip) = target_reference_read(&repo, "main").unwrap().unwrap();
+        assert_eq!(name, "refs/remotes/upstream/main");
+        assert_eq!(tip.id().to_string(), upstream);
+    }
+
+    /// AC-11: the pre-push hook's default target (`git_hook.rs`
+    /// `epic_line_push`) is read through `default_work_target_ref`, which
+    /// names `refs/remotes/origin/main` before the local `main`, so a stale
+    /// local `main` never decides the push check.
+    #[test]
+    fn the_pre_push_default_target_is_the_fetched_main_beside_a_stale_local_one() {
+        let dir = fixture();
+        let root = dir.path();
+        let stale = git(root, &["rev-parse", "HEAD"]);
+        let fetched = commit(root, "fetched");
+        git(root, &["update-ref", "refs/remotes/origin/main", &fetched]);
+        git(root, &["update-ref", "refs/heads/main", &stale]);
+        assert_eq!(
+            default_work_target_ref(root).unwrap().as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+    }
+
+    /// AC-4: every other spelling keeps its one ref, and a name that is not
+    /// a target stays refused.
+    #[test]
+    fn other_target_spellings_keep_their_one_ref() {
+        assert_eq!(
+            target_reference_names("main").unwrap(),
+            ["refs/remotes/origin/main", "refs/heads/main"]
+        );
+        for (name, read) in [
+            ("origin/main", "refs/remotes/origin/main"),
+            ("refs/heads/main", "refs/heads/main"),
+            ("refs/remotes/upstream/main", "refs/remotes/upstream/main"),
+        ] {
+            assert_eq!(target_reference_names(name).unwrap(), [read], "{name}");
+        }
+        for bad in ["", "HEAD", "refs/tags/v1", "bad..name"] {
+            assert!(target_reference_names(bad).is_none(), "{bad}");
+        }
+    }
+
+    /// The pin `P`, a commit `A` before it and one `C` after it, each on
+    /// `task/TSK-001-work` history, and a sibling `D` of `P`.
+    struct Shapes {
+        before: String,
+        pin: String,
+        after: String,
+        sibling: String,
+    }
+
+    fn shapes(root: &Path) -> Shapes {
+        git(root, &["switch", "-q", "-c", "task/TSK-001-work"]);
+        let before = commit(root, "before");
+        let pin = commit(root, "pin");
+        let after = commit(root, "after");
+        git(root, &["switch", "-q", "--detach", &before]);
+        let sibling = commit(root, "sibling");
+        git(root, &["switch", "-q", "main"]);
+        Shapes {
+            before,
+            pin,
+            after,
+            sibling,
+        }
+    }
+
+    fn copies(root: &Path, local: &str, remote: &str) {
+        git(root, &["update-ref", "refs/heads/task/TSK-001-work", local]);
+        git(
+            root,
+            &[
+                "update-ref",
+                "refs/remotes/origin/task/TSK-001-work",
+                remote,
+            ],
+        );
+    }
+
+    fn pin_name_of(root: &Path, pin: &str) -> Result<GitName, String> {
+        let repo = Repository::open(root).unwrap();
+        let branches = PinBranches::read(&repo, root).unwrap();
+        branches.pin_name(
+            &repo,
+            &ReviewedPin {
+                task_id: "TSK-001".into(),
+                revision: Oid::from_str(pin).unwrap(),
+            },
+        )
+    }
+
+    /// AC-12: a copy behind the pin, local or remote-tracking, is accepted.
+    #[test]
+    fn pin_name_accepts_a_copy_behind_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        for (local, remote) in [(&s.before, &s.pin), (&s.pin, &s.before)] {
+            copies(root, local, remote);
+            assert_eq!(
+                pin_name_of(root, &s.pin).unwrap(),
+                GitName::from_text("task/TSK-001-work")
+            );
+        }
+    }
+
+    /// AC-13: a copy ahead of the pin or diverged from it still refuses,
+    /// naming the branch, the pin, the copy and its shape.
+    #[test]
+    fn pin_name_refuses_a_copy_ahead_of_or_diverged_from_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        for (other, shape) in [(&s.after, "is ahead of"), (&s.sibling, "has diverged from")] {
+            copies(root, &s.pin, other);
+            let error = pin_name_of(root, &s.pin).unwrap_err();
+            for part in [
+                "TSK-001 predecessor branch task/TSK-001-work",
+                other.as_str(),
+                shape,
+                s.pin.as_str(),
+                "rebase on its new reviewed head",
+                "delete or reset the stray copy",
+            ] {
+                assert!(error.contains(part), "{part}: {error}");
+            }
+        }
+    }
+
+    /// AC-14: a copy whose ancestry cannot be read refuses with that cause.
+    #[test]
+    fn pin_name_refuses_a_copy_whose_ancestry_cannot_be_read() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        let broken = unreadable_commit(root);
+        copies(root, &s.pin, &broken);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        assert!(error.contains("cannot read the ancestry"), "{error}");
+        assert!(error.contains(&broken), "{error}");
+    }
+
+    /// Issue 603: when every copy of the predecessor branch is behind the
+    /// pin, the refusal says so and names the push, never "advanced" or a
+    /// rebase; a copy beside the pin that is not behind it keeps the old
+    /// refusal.
+    #[test]
+    fn pin_name_says_behind_when_every_copy_is_behind_the_pin() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        copies(root, &s.before, &s.before);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        for part in [
+            "TSK-001 predecessor branch is behind the pin",
+            s.pin.as_str(),
+            s.before.as_str(),
+            "push the reviewed head",
+        ] {
+            assert!(error.contains(part), "{part}: {error}");
+        }
+        assert!(!error.contains("rebase"), "{error}");
+        copies(root, &s.before, &s.sibling);
+        let error = pin_name_of(root, &s.pin).unwrap_err();
+        assert!(
+            error.contains("not the unique predecessor branch tip"),
+            "{error}"
+        );
+    }
+
+    /// The task branch of TSK-002 with one commit on the pin, and its head.
+    fn stacked_head(root: &Path, pin: &str) -> String {
+        git(root, &["switch", "-q", "-c", "task/TSK-002-work", pin]);
+        let head = commit(root, "successor");
+        git(root, &["switch", "-q", "main"]);
+        head
+    }
+
+    fn stacked(root: &Path, head: &str) -> Result<Vec<ReviewedPin>, String> {
+        stacked_pins(root, "TSK-002", "main", head, &|_, _, _| Ok(true))
+    }
+
+    /// AC-15: the push check honours the pin when a copy is behind it, and
+    /// still refuses a copy ahead of it or one whose ancestry cannot be read.
+    #[test]
+    fn stacked_pins_honour_a_copy_behind_the_pin_and_refuse_the_rest() {
+        let dir = fixture();
+        let root = dir.path();
+        let s = shapes(root);
+        let head = stacked_head(root, &s.pin);
+        for (local, remote) in [(&s.before, &s.pin), (&s.pin, &s.before)] {
+            copies(root, local, remote);
+            let pins = stacked(root, &head).unwrap();
+            assert_eq!(pins.len(), 1);
+            assert_eq!(pins[0].revision.to_string(), s.pin);
+        }
+        for (other, cause) in [(&s.after, "is ahead of"), (&s.sibling, "has diverged from")] {
+            copies(root, &s.pin, other);
+            let error = stacked(root, &head).unwrap_err();
+            assert!(error.contains(cause), "{error}");
+        }
+        let broken = unreadable_commit(root);
+        copies(root, &s.pin, &broken);
+        let error = stacked(root, &head).unwrap_err();
+        assert!(error.contains("cannot read the ancestry"), "{error}");
     }
 }

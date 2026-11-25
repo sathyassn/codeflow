@@ -209,11 +209,16 @@ fn landing_line_problem(
                 },
             )
     };
-    match line_membership(line, epic, &lookup, &format!("the target tip {tip}")) {
+    match line_membership(root, line, epic, &lookup, &format!("the target tip {tip}")) {
         LineMembership::Own | LineMembership::Declared => None,
-        LineMembership::Refused(why) | LineMembership::Not(why) => Some(format!(
+        LineMembership::Refused(why) | LineMembership::Not(why) => {
+            Some(crate::security::git::without_remote_names(
+                root,
+                &format!(
             "commit {commit} moves the task to {epic}, whose tasks do not land on {line} ({why})"
-        )),
+        ),
+            ))
+        }
     }
 }
 
