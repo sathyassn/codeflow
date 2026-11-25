@@ -788,6 +788,9 @@ pub(crate) fn unresolved_form(
         if segment == NESTING_UNREAD {
             return Some("it nests commands deeper than the guard reads".to_string());
         }
+        if let Some(refused) = crate::security::option_commands::refusal_marker(segment) {
+            return refused.refusal();
+        }
         let mut words = command_argv(segment);
         strip_reserved_words(&mut words);
         segment_form(&words, names_target, &assigned)

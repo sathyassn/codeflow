@@ -1424,6 +1424,300 @@ fn spelled_or_expanded_program_words_still_refuse_a_line_push() {
     report(&wrong);
 }
 
+/// AC-15 with TSK-1490: a line push after a launcher option the guards do
+/// not read, or carried by another program's option, is refused by both
+/// guards under the rule, with hook integrity at block, at warn and off: an
+/// earlier finding on the same command never hides the rule. Assignments a
+/// launcher reads among its options, before or between them, do not hide
+/// the program. A prefix launcher's option outside its grammar, a `--` that
+/// a carrier's other option takes as its value, any form of a command
+/// runner the guard keeps no grammar for, and an `xargs` or `find` form
+/// outside their closed daily grammar (an option, a replacement string, a
+/// nested shell or split string, or a missing terminator) leave the command
+/// unresolved, which refuses. So do an `xargs` whose command is a program
+/// that reads its words for a push or a command, and a `find` action that
+/// gives a found path to such a program or runs it as the command. exec-guard holds the rule with the privilege rule at block
+/// and off, so a privilege refusal is never what stops the push; git-guard
+/// has no privilege rule.
+#[test]
+#[allow(clippy::too_many_lines)] // One table of launched and carried push forms.
+fn launched_or_carried_line_pushes_still_refuse() {
+    if !isolated("launched_or_carried_line_pushes_still_refuse") {
+        return;
+    }
+    let lines = rows(&[
+        "taskset --cpu-l 0 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "env --bogus v git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "nice -n 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "fd -x git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "man -P 'git push origin HEAD:refs/heads/integration/EPC-001-line' ls",
+        "sudo LC_ALL=C -n git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "sudo -n LC_ALL=C -u root git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "sudo A=1 B=2 -n git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "sudo LC_ALL=C -n bash -c 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "sudo -n -- LC_ALL=C git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "taskset -c 0 env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "sudo -n env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "gsudo run git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "gsudo '!git'",
+        "sudo -s <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "printf 'git push origin HEAD:refs/heads/integration/EPC-001-line' | pkexec",
+        "doas -s",
+        "su <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "runuser -u root git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "script -q /dev/null <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "/usr/bin/nice --adjust 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "timeout --sig KILL 5 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "stdbuf --out L git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "ionice --cl 3 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "/usr/bin/time --out /dev/null git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "nice --adjust 5 man -P 'git push origin HEAD:refs/heads/integration/EPC-001-line' ls",
+        "tar -cf -- -I 'git push origin HEAD:refs/heads/integration/EPC-001-line' input.txt",
+        "tar --file -- --use-compress-program='git push origin HEAD:refs/heads/integration/EPC-001-line' input.txt",
+        "ssh -l -- -o 'ProxyCommand=git push origin HEAD:refs/heads/integration/EPC-001-line' host",
+        "rsync --log-file -- -e 'git push origin HEAD:refs/heads/integration/EPC-001-line' a b",
+        "sort -o -- --compress-program='git push origin HEAD:refs/heads/integration/EPC-001-line' f",
+        "parallel -- <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel :::: /tmp/jobs",
+        "parallel -a /tmp/jobs",
+        "parallel {} :::: /tmp/jobs",
+        "parallel sh -c :::: /tmp/jobs",
+        "parallel --bogus x ::: 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -0 sh -c <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I{} sh -c {} <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I{} sh -c 'echo {}' <<< 'x; git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs env <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs --a /tmp/jobs git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "find . -exec sh -c {} ';'",
+        "find . -exec {} ';'",
+        "parallel --limit 'git push origin HEAD:refs/heads/integration/EPC-001-line' echo ::: x",
+        "parallel --retry-failed --joblog /tmp/jobs echo",
+        "parallel -I CMD sh -c CMD ::: 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -I CMD env -S CMD < /tmp/jobs",
+        "watch --inter 1 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock --conflict 75 /tmp/lock git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "gh repo clone o/r --upstream-remote-name -- -- -u 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "parallel -j 2 git push origin HEAD:refs/heads/integration/EPC-001-line ::: x",
+        "watch -n 1 git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock /tmp/lock git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "flock -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' /tmp/lock",
+        "setsid git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "unbuffer -p git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "script -q -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' /dev/null",
+        "xargs -n 1 sh -c 'git push origin HEAD:refs/heads/integration/EPC-001-line' <<< x",
+        "xargs -P 2 git push origin HEAD:refs/heads/integration/EPC-001-line <<< x",
+        "find . -exec env -S 'git push origin HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find . -ok git push origin HEAD:refs/heads/integration/EPC-001-line ';'",
+        "find . -exec git push origin HEAD:refs/heads/integration/EPC-001-line",
+        "printf '%s\\n' push origin 'HEAD:refs/heads/integration/EPC-001-line' | xargs -n 3 git",
+        "xargs git push origin <<< 'HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs -n 3 /usr/bin/git <<< 'push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs taskset -c 0 <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs xargs <<< 'git push origin HEAD:refs/heads/integration/EPC-001-line'",
+        "xargs tar -cf a.tar <<< \"-I 'git push origin HEAD:refs/heads/integration/EPC-001-line'\"",
+        "find /usr/bin -name git -exec {} push origin 'HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find /usr/bin -name git -exec env {} push origin 'HEAD:refs/heads/integration/EPC-001-line' ';'",
+        "find push -maxdepth 0 -exec git {} origin HEAD:refs/heads/integration/EPC-001-line ';'",
+    ]);
+    let off = SecuritySection {
+        privilege_escalation: PolicyLevel::Off,
+        ..SecuritySection::default()
+    };
+    let mut wrong = Vec::new();
+    for (level, integrity) in [
+        ("block", PolicyLevel::Block),
+        ("warn", PolicyLevel::Warn),
+        ("off", PolicyLevel::Off),
+    ] {
+        let landed = LANDED_POLICY.replacen(
+            r#"{"git":{"#,
+            &format!(r#"{{"git":{{"hook_integrity":"{level}","#),
+            1,
+        );
+        let f = Fixture::landed(&landed, "", |_, _| {});
+        let before = wrong.len();
+        for row in &lines {
+            // git-guard reads the level from the landed policy; exec-guard
+            // takes it, and the privilege level, as its inputs.
+            let git = git_guard_verdict(&f.root, row);
+            if !agent_push_refused(&git) {
+                wrong.push(format!(
+                    "git-guard should refuse under {AGENT_PUSH}: {row}: {}",
+                    shown(&git)
+                ));
+            }
+            for (privilege, levels) in [
+                ("default", SecuritySection::default()),
+                ("off", off.clone()),
+            ] {
+                let found = evaluate_at(row, &levels, integrity, &f.root, &f.root);
+                let privileged = privilege == "off"
+                    && found
+                        .iter()
+                        .any(|finding| finding.rule == "security.privilege_escalation");
+                if privileged || !agent_push_refused(&found) {
+                    wrong.push(format!(
+                        "exec-guard, privilege rule {privilege}, should refuse under {AGENT_PUSH}: {row}: {}",
+                        shown(&found)
+                    ));
+                }
+            }
+        }
+        for entry in &mut wrong[before..] {
+            write!(entry, " [hook integrity: {level}]").unwrap();
+        }
+    }
+    report(&wrong);
+}
+
+/// TSK-1490: the cost side of the launcher grammar's fail-closed default.
+/// Ordinary commands through the launchers it models, a privilege
+/// launcher's name given only as another launcher's option value, a split
+/// string behind a modelled launcher, and a privilege launcher's quiet
+/// verb, keep passing both guards with no finding
+/// (`security/guard_forms.rs` `LAUNCHER_ORDINARY`).
+#[test]
+fn ordinary_launcher_commands_stay_allowed() {
+    if !isolated("ordinary_launcher_commands_stay_allowed") {
+        return;
+    }
+    let f = Fixture::landed(LANDED_POLICY, "", |_, _| {});
+    let mut wrong = Vec::new();
+    for row in crate::security::guard_forms::LAUNCHER_ORDINARY {
+        for (guard, found) in [
+            ("exec-guard", verdict(&f.root, row)),
+            ("git-guard", git_guard_verdict(&f.root, row)),
+        ] {
+            if blocked(&found) {
+                wrong.push(format!("{guard} should pass: {row}: {}", shown(&found)));
+            }
+        }
+    }
+    // exec-guard's deletion reader does not model `xargs -n`, so it fails
+    // closed there; the launcher grammar adds no refusal of its own.
+    for row in crate::security::guard_forms::XARGS_COUNT_DELETION_UNPROVEN {
+        let git = git_guard_verdict(&f.root, row);
+        if blocked(&git) {
+            wrong.push(format!("git-guard should pass: {row}: {}", shown(&git)));
+        }
+        let found = verdict(&f.root, row);
+        let deletion = found.iter().any(|finding| {
+            finding.rule == "security.dangerous_commands" && finding.level == PolicyLevel::Block
+        });
+        let other = found.iter().any(|finding| {
+            finding.level == PolicyLevel::Block && finding.rule != "security.dangerous_commands"
+        });
+        if !deletion || other {
+            wrong.push(format!(
+                "exec-guard should refuse only under security.dangerous_commands: {row}: {}",
+                shown(&found)
+            ));
+        }
+    }
+    report(&wrong);
+}
+
+/// TSK-1490: a command runner or carrier the guard keeps no grammar for is
+/// refused under the rule in any spelling, with any options and whatever
+/// command it runs, a harmless one included; so is an `xargs` or `find`
+/// form outside their closed daily grammar, a program that reads its words
+/// for a push or a command among them. Both guards, with hook
+/// integrity off, so no integrity finding is what refuses. The refusal
+/// names the way through: the inner command run directly.
+#[test]
+fn runners_without_a_grammar_refuse_in_any_spelling() {
+    if !isolated("runners_without_a_grammar_refuse_in_any_spelling") {
+        return;
+    }
+    let mut lines = Vec::new();
+    for name in crate::hooks::git_guard::UNREAD_RUNNERS {
+        for spelling in [(*name).to_string(), format!("/usr/bin/{name}")] {
+            for options in ["", "-x", "--bogus v", "-n 1", "--"] {
+                lines.push(
+                    format!("{spelling} {options} echo hi")
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                );
+            }
+        }
+    }
+    lines.extend(
+        [
+            "fd -x echo hi",
+            "fd -H -X echo hi",
+            "fdfind --exec echo hi",
+            "fd --exec-batch=echo hi",
+            "xargs -I{} wc -l {} <<< a",
+            "xargs -i wc -l <<< a",
+            "xargs -P 2 wc -l <<< a",
+            "xargs --null wc -l <<< a",
+            "xargs -0r wc -l <<< a",
+            "xargs -n x wc -l <<< a",
+            "xargs -- wc -l <<< a",
+            "xargs sh -c 'wc -l' <<< a",
+            "xargs env -S 'wc -l' <<< a",
+            "xargs {} x <<< a",
+            "xargs parallel wc ::: a <<< a",
+            "find . -ok wc -l {} ';'",
+            "find . -okdir wc -l {} ';'",
+            "find . -exec wc -l {}",
+            "find . -exec wc -l ';' -exec wc -c {}",
+            "find . -exec wc -l '+'",
+            "find . -exec sh -c 'wc -l' ';'",
+            "find . -exec env -S 'wc -l {}' ';'",
+            "find . -exec wc -l {}.bak ';'",
+            "find . -exec {} ';'",
+            "find . -exec watch wc {} ';'",
+            "xargs git status <<< a",
+            "xargs -n 1 /usr/bin/git <<< a",
+            "xargs gh <<< a",
+            "xargs taskset -c 0 <<< a",
+            "xargs sort <<< a",
+            "xargs rg x <<< a",
+            "find . -exec {} wc ';'",
+            "find . -exec env {} wc ';'",
+            "find . -exec nice {} wc ';'",
+            "find . -exec git log {} ';'",
+            "find . -exec rg x {} +",
+        ]
+        .map(str::to_string),
+    );
+    let landed = LANDED_POLICY.replacen(r#"{"git":{"#, r#"{"git":{"hook_integrity":"off","#, 1);
+    let f = Fixture::landed(&landed, "", |_, _| {});
+    let mut wrong = Vec::new();
+    for row in &lines {
+        let git = git_guard_verdict(&f.root, row);
+        if !agent_push_refused(&git) {
+            wrong.push(format!("git-guard should refuse: {row}: {}", shown(&git)));
+        }
+        let found = evaluate_at(
+            row,
+            &SecuritySection::default(),
+            PolicyLevel::Off,
+            &f.root,
+            &f.root,
+        );
+        if !agent_push_refused(&found) {
+            wrong.push(format!(
+                "exec-guard should refuse: {row}: {}",
+                shown(&found)
+            ));
+        }
+        if !found
+            .iter()
+            .any(|finding| finding.remedy.contains("run the inner command directly"))
+        {
+            wrong.push(format!(
+                "exec-guard should name the way through: {row}: {}",
+                shown(&found)
+            ));
+        }
+    }
+    report(&wrong);
+}
+
 /// AC-15: a push into another repository whose authority the guard cannot
 /// read is refused by exec-guard under the rule, explicit refspecs
 /// included, instead of being judged by the session's policy. Here the

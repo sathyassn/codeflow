@@ -1011,6 +1011,10 @@ fn evaluate_report_with_runners(
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
     let mut earlier_mutation = command.contains("GIT_INDEX_FILE");
+    // A segment that may run git but ends at an earlier finding below is
+    // still judged by the agent push rule after the walk, so a finding at
+    // warn never hides that rule's refusal.
+    let mut push_unjudged = false;
     // The refusals of a reading of a program word the guard cannot fill in
     // carry their way through (TSK-1456): from `.0` on, the hint `.1`.
     let mut reading: (usize, String) = (violations.len(), String::new());
@@ -1041,6 +1045,17 @@ fn evaluate_report_with_runners(
             continue;
         }
 
+        // An option value in a command language the guard does not read
+        // may hold any command (TSK-1490).
+        if let Some(refused) = crate::security::option_commands::refusal_marker(segment) {
+            if ctx.policy.hook_integrity.is_active() {
+                violations.extend(crate::security::option_commands::unread_violation(
+                    &refused,
+                    ctx.policy.hook_integrity,
+                ));
+            }
+            continue;
+        }
         // Text nested deeper than the reader follows may hide any command.
         if segment == NESTING_UNREAD || segment == "__unresolved_shell_code" {
             if ctx.policy.hook_integrity.is_active() {
@@ -1101,6 +1116,7 @@ fn evaluate_report_with_runners(
                 let beside = path_writers::is_finding(&v);
                 violations.push(v);
                 if !beside {
+                    push_unjudged |= agent_push_segment(segment);
                     continue;
                 }
             }
@@ -1110,6 +1126,7 @@ fn evaluate_report_with_runners(
         // override — block it before evaluating whatever it prefixed.
         if let Some(var) = laundered_override(&tokens) {
             violations.push(laundering_violation(var));
+            push_unjudged |= agent_push_segment(segment);
             continue;
         }
 
@@ -1121,6 +1138,7 @@ fn evaluate_report_with_runners(
                     ctx.policy.hook_integrity,
                     format!("command sets the hook-skip env var `{var}`"),
                 ));
+                push_unjudged |= agent_push_segment(segment);
                 continue;
             }
         }
@@ -1144,6 +1162,7 @@ fn evaluate_report_with_runners(
                 ctx.policy.hook_integrity,
                 "command injects core.hooksPath via GIT_CONFIG_* env".to_string(),
             ));
+            push_unjudged |= agent_push_segment(segment);
             continue;
         }
 
@@ -1158,6 +1177,14 @@ fn evaluate_report_with_runners(
             // A redirection can fail, and the assignment with it.
             let redirected = words.len() != tokens.len();
             shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
+        }
+        if let Some(v) = unresolved_push(&words) {
+            if !violations
+                .iter()
+                .any(|f| f.rule == v.rule && f.message == v.message)
+            {
+                violations.push(v);
+            }
         }
         let Some((program, args)) = launched else {
             continue;
@@ -1212,6 +1239,47 @@ fn evaluate_report_with_runners(
                 );
             }
             ProgramKind::Other => {}
+        }
+        // After a launcher option the guard does not read, any later word
+        // may start the command: each Git or GitHub CLI call that may start
+        // there is judged, with the repository left unresolved by that
+        // launcher, so each rule keeps its verdict with hook integrity off
+        // (TSK-1490).
+        let chosen = words.len() - args.len() - 1;
+        for at in unread_starts(&words) {
+            if at == chosen {
+                continue;
+            }
+            let (program, args) = (words[at].as_str(), &words[at + 1..]);
+            match program_kind(program) {
+                ProgramKind::Git => {
+                    let moved = line.moves_for(&shell, top_level, &tokens);
+                    check_git(
+                        args,
+                        &mut branches,
+                        &moved,
+                        ctx,
+                        violations,
+                        &mut notes,
+                        0,
+                        cwd,
+                    );
+                }
+                ProgramKind::Gh => check_gh(args, ctx, violations),
+                ProgramKind::Other => {}
+            }
+        }
+    }
+    if push_unjudged {
+        let mut found = Vec::new();
+        agent_push_walk(command, &expanded, ctx, cwd, &mut found);
+        for v in found {
+            if !violations
+                .iter()
+                .any(|f| f.rule == v.rule && f.message == v.message)
+            {
+                violations.push(v);
+            }
         }
     }
     hint(violations, &reading);
@@ -1283,9 +1351,10 @@ fn evaluate_report_with_runners(
 /// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
 /// `command`, `builtin` and `exec` launchers stripped. The first element is
 /// the program as written, which may still hold a substitution. Each comes
-/// with the same words as written ([`ShellWord::marked`]) and the program
+/// with the same words as written ([`ShellWord::marked`]), the program
 /// words the guard could not fill in that it is a reading of
-/// ([`unread_words`], TSK-1456).
+/// ([`unread_words`], TSK-1456), and whether the launcher walk in front of
+/// it is unresolved ([`SimpleCommand::guessed`], TSK-1490).
 pub(crate) fn simple_commands(command: &str) -> Vec<SimpleCommand> {
     let expanded = expand_commands_read(command);
     expanded
@@ -1297,11 +1366,25 @@ pub(crate) fn simple_commands(command: &str) -> Vec<SimpleCommand> {
             let written = words.len();
             strip_reserved_words(&mut words);
             marks.drain(..written - words.len());
-            let (at, _) = launched_at_written(&words, Some(&marks))?;
+            let walk = Walk::read_written(&words, Some(&marks));
+            let guessed = walk.unread.is_some() || walk.implicit_shell;
+            // An unresolved walk that names no program still comes back,
+            // empty and marked, so a caller treats the line as unresolved.
+            let at = match walk.program {
+                Some(at) => at,
+                None if guessed => words.len(),
+                None => return None,
+            };
+            let taker = match walk.launchers.last() {
+                Some(&last) if matches!(launcher_name(&words[last]), "sudo" | "doas") => Taker::Env,
+                _ => Taker::Shell,
+            };
             Some(SimpleCommand {
                 words: words.split_off(at),
                 marks: marks.split_off(at),
                 unread: unread_words(&expanded.readings, index),
+                guessed,
+                taker,
             })
         })
         .collect()
@@ -1316,6 +1399,16 @@ pub(crate) struct SimpleCommand {
     /// The program words the guard could not fill in that this command is
     /// a reading of.
     pub(crate) unread: Vec<String>,
+    /// The launcher walk in front of the program is unresolved
+    /// ([`Walk::unread`], or a privilege launcher running a shell on its
+    /// input): the program is only the walk's first guess, so a caller
+    /// treats the command as unresolved (TSK-1490).
+    pub(crate) guessed: bool,
+    /// Who reads the program word, for a reader that keeps every reading of
+    /// it: [`Taker::Env`] right after `sudo` or `doas`, whose program word
+    /// a reader of assignments may take for one; else [`Taker::Shell`], as
+    /// past `env`, whose words the walk has already read (TSK-1456).
+    pub(crate) taker: Taker,
 }
 
 /// Shell reserved words that can open a segment of a control structure
@@ -3839,6 +3932,11 @@ pub(crate) fn run_dirs_from_home(
     let mut repeats = false;
     let mut moves = false;
     for segment in segments {
+        // A refusal marker for an option value refuses on its own, by the
+        // reason it names; it never runs, so it moves nothing.
+        if crate::security::option_commands::refusal_marker(segment).is_some() {
+            continue;
+        }
         let mut tokens = command_argv(segment);
         repeats |= tokens.first().is_some_and(|t| {
             matches!(
@@ -7528,6 +7626,7 @@ pub(crate) fn command_segments(command: &str) -> Vec<String> {
 /// Each body level counts toward [`NESTING_LIMIT`]; a body past it is the
 /// [`NESTING_UNREAD`] marker, which refuses the line (TSK-242 review round
 /// 14).
+#[allow(clippy::too_many_lines)] // One pass per segment: its carried bodies, readings and markers.
 fn expand_segments(
     segments: Vec<String>,
     out: &mut Expanded,
@@ -7550,6 +7649,10 @@ fn expand_segments(
         };
         let mut bodies: Vec<String> = carried.iter().map(|body| literals.fill(body)).collect();
         bodies.extend(crate::security::composed::paths::literal_input_script(&seg));
+        // An option value in a command language the guard does not read
+        // stands as a marker the integrity check refuses (TSK-1490).
+        let unread_option = crate::security::option_commands::first_unread(&toks)
+            .and_then(|refused| refused.marker());
         let words = toks;
         let mut unreadable = false;
         // Other readings of this command (TSK-1456): each runs in its place,
@@ -7654,6 +7757,12 @@ fn expand_segments(
         }
         if unreadable && !out.segments.iter().any(|s| s == PROGRAM_UNREAD) {
             out.segments.push(PROGRAM_UNREAD.to_string());
+        }
+        // After the readings, which name the segment by its index.
+        if let Some(marker) = unread_option {
+            if !out.segments.contains(&marker) {
+                out.segments.push(marker);
+            }
         }
         expand_bodies(bodies, out, depth, literals, git_bodies);
     }
@@ -8103,6 +8212,11 @@ impl Literals {
 /// Known shells and shell builtins that consume inline code. Unknown programs
 /// and file operands retain their own best-effort input rules.
 pub(crate) fn script_reader(words: &[String]) -> Option<(&str, &[String])> {
+    // A privilege launcher given no command runs a shell that reads its
+    // input, read here as a shell with no words of its own (TSK-1490).
+    if Walk::read(words).implicit_shell {
+        return Some(("sh", &[]));
+    }
     let (program, args) = strip_launchers(words)?;
     let name = basename(program);
     if args
@@ -8151,7 +8265,28 @@ pub(crate) fn reads_shell_stdin(words: &[String]) -> bool {
 
 /// The command texts a simple command carries: env -S, shell -c, eval,
 /// launcher strings, runner bodies, and commands supplied to xargs or find.
+/// After a launcher option the guard does not read, the commands carried
+/// from each later word that may start the command too, each as run in an
+/// unknown directory, since that launcher's effects are unknown (TSK-1490).
+/// Those starts cover every later unread launcher as well, so they are
+/// read without looking for further starts.
 fn carried_commands(toks: &[String]) -> Vec<String> {
+    let mut out = carried_from(toks);
+    let mut words = toks.to_vec();
+    strip_reserved_words(&mut words);
+    for at in unread_starts(&words) {
+        for body in carried_from(&words[at..]) {
+            let body = crate::security::option_commands::unknown_directory(&body);
+            if !out.contains(&body) {
+                out.push(body);
+            }
+        }
+    }
+    out
+}
+
+/// [`carried_commands`] for the command [`strip_launchers`] finds.
+fn carried_from(toks: &[String]) -> Vec<String> {
     let mut words = toks.to_vec();
     strip_reserved_words(&mut words);
     let toks = words.as_slice();
@@ -8185,13 +8320,39 @@ fn carried_commands(toks: &[String]) -> Vec<String> {
     } else if name == "sed" {
         sed_run_commands(args)
     } else {
-        launcher_commands(name, args)
+        // A command a program runs from an option value, by the inventory
+        // both guards share (TSK-1490), in the directory its launchers
+        // move to, as a shell `-c` body is.
+        // Each in every directory the program's options move it to; one
+        // moved where the guard cannot follow refuses by its marker.
+        let mut out = crate::security::option_commands::relocated_bodies(
+            prog,
+            args,
+            launcher_commands(name, args),
+        );
+        for carried in crate::security::option_commands::option_values(prog, args) {
+            if let crate::security::option_commands::Carried::Command(body) = carried {
+                let body = launched_script(toks, &body);
+                if !out.contains(&body) {
+                    out.push(body);
+                }
+            }
+        }
+        out
     }
 }
 
-/// Carry launcher directory changes with code from every input route.
+/// Carry launcher directory changes with code from every input route. A
+/// launcher that runs the code as another user leaves the repository
+/// unresolved, as it does for a Git command it runs directly, so the code
+/// is judged as run in a directory the guard cannot read (TSK-1490).
+/// Only words the launcher grammar read as launchers count: a launcher's
+/// name given as another launcher's option value is not one.
 pub(crate) fn launched_script(words: &[String], script: &str) -> String {
     let mut text = String::new();
+    if Walk::read(words).as_another_user(words) {
+        text.push_str(&crate::security::option_commands::unknown_directory(""));
+    }
     for dir in launcher_effects(words).0 {
         text.push_str("cd ");
         text.push_str(&quote_words(&[dir.to_string()]));
@@ -8397,6 +8558,32 @@ pub(crate) fn launcher_commands(name: &str, args: &[String]) -> Vec<String> {
     }
 }
 
+/// The option of `find` that runs a command [`launcher_commands`] judges in
+/// the directory of each path it finds (`-execdir`, `-okdir`), a directory
+/// the guard cannot establish, so the command refuses (TSK-1490 AC-7).
+/// `None` for any other program or command.
+pub(crate) fn found_path_directory(name: &str, args: &[String]) -> Option<&'static str> {
+    if name != "find" {
+        return None;
+    }
+    args.iter().enumerate().find_map(|(at, word)| {
+        let option = match word.as_str() {
+            "-execdir" => "-execdir",
+            "-okdir" => "-okdir",
+            _ => return None,
+        };
+        let tail = &args[at + 1..];
+        let end = tail
+            .iter()
+            .position(|w| w == ";" || w == "+")
+            .unwrap_or(tail.len());
+        let words = &tail[..end];
+        let judged = strip_launchers(words).is_some_and(|(program, _)| basename(program) == "git")
+            || !carried_commands(words).is_empty();
+        judged.then_some(option)
+    })
+}
+
 /// The command `flock` runs: after its options (`-w` and `-E` take a
 /// value) and the lock file, either a `-c CMD`, `-cCMD`, `--command CMD`
 /// or `--command=CMD` string run by `sh -c` (TSK-242 review round 15), or
@@ -8542,12 +8729,8 @@ fn watch_command(args: &[String]) -> Option<String> {
     (!words.is_empty()).then(|| words.join(" "))
 }
 
-/// The commands `parallel` runs: its command template, and the template
-/// with each `:::` input, quoted as one word, put in for `{}` or after it;
-/// with no template,
-/// each input is a command. moreutils' `parallel CMD -- ARGS` reads the
-/// same way. `::::` names input files, which the guard cannot read.
-/// The options GNU `parallel` reads a value for, as a separate word.
+/// The options GNU `parallel` reads a value for, as a separate word or
+/// attached (`-j4`, `--jobs=4`).
 const PARALLEL_VALUED: &[&str] = &[
     "-j",
     "-P",
@@ -8563,7 +8746,10 @@ const PARALLEL_VALUED: &[&str] = &[
     "-s",
     "-C",
     "--jobs",
+    "--max-procs",
     "--sshlogin",
+    "--slf",
+    "--sshloginfile",
     "--arg-file",
     "--delimiter",
     "--colsep",
@@ -8577,16 +8763,31 @@ const PARALLEL_VALUED: &[&str] = &[
     "--delay",
     "--retries",
     "--tagstring",
+    "--ctagstring",
     "--workdir",
     "--wd",
     "--basefile",
     "--return",
     "--halt",
     "--memfree",
+    "--memsuspend",
     "--load",
     "--block",
-    "--sshloginfile",
     "--env",
+    "--header",
+    "--nice",
+    "--trim",
+    "--ssh",
+    "--sshdelay",
+    "--transferfile",
+    "--tf",
+    "--trc",
+    "--id",
+    "--semaphorename",
+    "--recstart",
+    "--recend",
+    "--termseq",
+    "--limit",
 ];
 
 /// A GNU `parallel` input separator, or the `--` that ends its options.
@@ -8594,30 +8795,105 @@ fn parallel_separator(word: &str) -> bool {
     matches!(word, ":::" | ":::+" | "::::" | "::::+" | "--")
 }
 
-/// Where GNU `parallel`'s command template starts in `args`, after its
-/// options, and whether `-q` or `--quote` is given, so the template's
-/// words reach the command as written rather than through a shell.
-pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
+/// How GNU `parallel` reads its words: options (to the first word that is
+/// not one, a separator, or the `--` that ends them), the command template,
+/// then the inputs after `:::` (on the line) or `::::` (in files). This is
+/// a first guess for the readers that add commands to judge; the guard
+/// keeps no grammar for `parallel`, so a line that runs it is unresolved
+/// whatever this reads ([`runner_mode`]).
+#[derive(Debug, Default)]
+pub(crate) struct ParallelLine {
+    /// Where the template starts, after the options and an ending `--`.
+    pub template: usize,
+    /// Where the template ends: the first separator after it, or the end.
+    pub end: usize,
+    /// `-q` or `--quote`: the template's words reach the command as written
+    /// rather than through a shell.
+    pub quoted: bool,
+    /// Inputs from a file: `::::` or `-a`/`--arg-file`.
+    pub files: bool,
+    /// Inputs on the line, after `:::`.
+    pub literal: bool,
+}
+
+/// Read GNU `parallel`'s `args` ([`ParallelLine`]).
+pub(crate) fn parallel_line(args: &[String]) -> ParallelLine {
+    let mut line = ParallelLine::default();
     let mut at = 0;
-    let mut quoted = false;
     while let Some(a) = args.get(at).map(String::as_str) {
+        if a == "--" {
+            at += 1;
+            break;
+        }
         if parallel_separator(a) || !a.starts_with('-') || a.len() < 2 {
             break;
         }
-        quoted |= matches!(a, "-q" | "--quote");
-        at += 1 + usize::from(PARALLEL_VALUED.contains(&a));
+        at += 1;
+        if a.starts_with("--") {
+            let (option, attached) = a.split_once('=').map_or((a, None), |(o, v)| (o, Some(v)));
+            if PARALLEL_VALUED.contains(&option) {
+                if attached.is_none() {
+                    at += 1;
+                }
+                line.files |= option == "--arg-file";
+            } else {
+                line.quoted |= option == "--quote";
+            }
+            continue;
+        }
+        let cluster = &a[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let rest = &cluster[offset + letter.len_utf8()..];
+            let short = format!("-{letter}");
+            if PARALLEL_VALUED.contains(&short.as_str()) {
+                if rest.is_empty() {
+                    at += 1;
+                }
+                line.files |= letter == 'a';
+                break;
+            }
+            line.quoted |= letter == 'q';
+        }
     }
-    (at.min(args.len()), quoted)
+    line.template = at.min(args.len());
+    line.end = args[line.template..]
+        .iter()
+        .position(|w| parallel_separator(w))
+        .map_or(args.len(), |e| line.template + e);
+    let mut on_line = false;
+    for word in &args[line.end..] {
+        if parallel_separator(word) {
+            on_line = word.starts_with(":::") && !word.starts_with("::::");
+            line.files |= word.starts_with("::::");
+        } else if on_line {
+            line.literal = true;
+        }
+    }
+    line
 }
 
+/// Where GNU `parallel`'s command template starts in `args`, after its
+/// options and the `--` that ends them, and whether `-q` or `--quote` is
+/// given ([`parallel_line`]).
+pub(crate) fn parallel_template(args: &[String]) -> (usize, bool) {
+    let line = parallel_line(args);
+    (line.template, line.quoted)
+}
+
+/// The commands `parallel` runs: its command template, and the template
+/// with each `:::` input, quoted as one word, put in for `{}` or after it;
+/// with no template, each input is a command. moreutils' `parallel CMD --
+/// ARGS` reads the same way, and its `parallel -- CMD...` runs each word
+/// after the `--` as a command, which is read as well. These are only extra
+/// commands to judge: the guard keeps no grammar for `parallel`, so a line
+/// that runs it is unresolved ([`runner_mode`]).
 fn parallel_commands(args: &[String]) -> Vec<String> {
-    let separator = parallel_separator;
-    let (at, quoted) = parallel_template(args);
-    let rest = args.get(at..).unwrap_or_default();
-    let end = rest.iter().position(|w| separator(w)).unwrap_or(rest.len());
+    let line = parallel_line(args);
+    let rest = &args[line.template..];
+    let end = line.end - line.template;
     // With `-q` each word of the command reaches it as written; without,
     // parallel joins them into a shell line.
-    let template = if quoted {
+    let template = if line.quoted {
         quote_words(&rest[..end])
     } else {
         rest[..end].join(" ")
@@ -8625,7 +8901,7 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
     let mut inputs = Vec::new();
     let mut files = false;
     for word in &rest[end..] {
-        if separator(word) {
+        if parallel_separator(word) {
             files = word.starts_with("::::");
         } else if !files {
             inputs.push(word.as_str());
@@ -8635,6 +8911,13 @@ fn parallel_commands(args: &[String]) -> Vec<String> {
         return inputs.into_iter().map(str::to_string).collect();
     }
     let mut commands = vec![template.clone()];
+    if line.template > 0 && args[line.template - 1] == "--" && end > 1 {
+        for word in &rest[..end] {
+            if !commands.contains(word) {
+                commands.push(word.clone());
+            }
+        }
+    }
     for input in inputs {
         // parallel quotes an input it puts into the template.
         let input = quote_words(&[input.to_string()]);
@@ -8691,41 +8974,52 @@ fn env_split_option(word: &str) -> Option<SplitString<'_>> {
 /// it. env splits that string into the words it runs, at blanks and at the
 /// `\_` escape, and they may hold more env options, assignments or a shell
 /// `-c`, so the text is expanded like any other command. `None` when no
-/// launcher in front uses `-S`.
+/// launcher in front uses `-S`. The words in front keep their reading
+/// ([`quote_leading_words`]).
 pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
-    let mut idx = 0;
-    loop {
-        idx += tokens
-            .get(idx..)
-            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
-        let t = tokens.get(idx)?.as_str();
-        if is_prefix_launcher(t) {
-            idx = skip_launcher_options(t, tokens, idx + 1)?;
-            continue;
-        }
-        if launcher_name(t) != "env" {
-            return None;
-        }
-        // An env whose words the grammar cannot read has no split string
-        // here; `launcher_effects` refuses it as a launcher it cannot read.
-        let words = env_words(tokens, idx + 1).ok()?;
-        let Some(at) = words.split else {
-            idx = words.end;
-            continue;
-        };
-        let (operand, after) = match env_split_option(&tokens[at])? {
-            SplitString::Attached(text) => (text, at + 1),
-            SplitString::NextWord => (tokens.get(at + 1)?.as_str(), at + 2),
-        };
-        // env reads `\_` in the string as a field separator, which the
-        // shell kept inside one word (TSK-242 review round 15).
-        let operand = operand.replace("\\_", " ");
-        let rest = tokens.get(after..).unwrap_or_default();
-        return Some(format!(
-            "{} {operand} {}",
-            quote_words(&tokens[..at]),
-            quote_words(rest)
-        ));
+    let (at, operand, after) = env_split_at(tokens)?;
+    // env reads `\_` in the string as a field separator, which the shell
+    // kept inside one word.
+    let operand = operand.replace("\\_", " ");
+    let rest = tokens.get(after..).unwrap_or_default();
+    Some(format!(
+        "{} {operand} {}",
+        quote_leading_words(&tokens[..at]),
+        quote_words(rest)
+    ))
+}
+
+/// [`quote_words`] for the words in front of an `env -S` option, read as
+/// [`env_split_at`] read them. A word that reads as an assignment keeps its
+/// name and `=` unquoted, with only its value quoted: the shell runs a word
+/// whose name or `=` is quoted as the program (TSK-1456), so quoting the
+/// whole word would make the rebuilt text run a program the line does not.
+/// How the line itself wrote that word is judged on the line.
+fn quote_leading_words(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|word| match word.split_once('=') {
+            Some((name, value)) if leading_word(word, Taker::Shell) == LeadingWord::Assignment => {
+                format!("{name}={}", quote_words(&[value.to_string()]))
+            }
+            _ => quote_words(std::slice::from_ref(word)),
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The `-S` option of the `env` the launcher grammar finds holding the
+/// command ([`Walk::split`]), behind every launcher the grammar reads in
+/// front of it, so the string is read with each launcher's context: the
+/// option's index, its string and the index after it.
+fn env_split_at(tokens: &[String]) -> Option<(usize, &str, usize)> {
+    let env = Walk::read(tokens).split?;
+    // An env whose words the grammar cannot read has no split string here;
+    // `launcher_effects` refuses it as a launcher it cannot read.
+    let at = env_words(tokens, env + 1).ok()?.split?;
+    match env_split_option(&tokens[at])? {
+        SplitString::Attached(text) => Some((at, text, at + 1)),
+        SplitString::NextWord => Some((at, tokens.get(at + 1)?.as_str(), at + 2)),
     }
 }
 
@@ -8737,44 +9031,22 @@ pub(crate) fn env_split_command(tokens: &[String]) -> Option<String> {
 /// launcher uses `-S`; an error when the string uses a form the guard does
 /// not read exactly.
 pub(crate) fn env_split_argv(tokens: &[String]) -> Option<Result<Vec<String>, String>> {
-    let mut idx = 0;
-    loop {
-        idx += tokens
-            .get(idx..)
-            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
-        let t = tokens.get(idx)?.as_str();
-        if is_prefix_launcher(t) {
-            idx = skip_launcher_options(t, tokens, idx + 1)?;
-            continue;
-        }
-        if launcher_name(t) != "env" {
-            return None;
-        }
-        let words = env_words(tokens, idx + 1).ok()?;
-        let Some(at) = words.split else {
-            idx = words.end;
-            continue;
-        };
-        let (operand, after) = match env_split_option(&tokens[at])? {
-            SplitString::Attached(text) => (text, at + 1),
-            SplitString::NextWord => (tokens.get(at + 1)?.as_str(), at + 2),
-        };
-        // The option word itself goes; a cluster before it (`-iS`) keeps
-        // its other letters.
-        let mut out: Vec<String> = tokens[..at].to_vec();
-        if let Some(letters) = tokens[at].strip_prefix('-').filter(|w| !w.starts_with('-')) {
-            if let Some((before, _)) = letters.split_once('S') {
-                if !before.is_empty() {
-                    out.push(format!("-{before}"));
-                }
+    let (at, operand, after) = env_split_at(tokens)?;
+    // The option word itself goes; a cluster before it (`-iS`) keeps its
+    // other letters.
+    let mut out: Vec<String> = tokens[..at].to_vec();
+    if let Some(letters) = tokens[at].strip_prefix('-').filter(|w| !w.starts_with('-')) {
+        if let Some((before, _)) = letters.split_once('S') {
+            if !before.is_empty() {
+                out.push(format!("-{before}"));
             }
         }
-        return Some(env_split_string(operand).map(|split| {
-            out.extend(split);
-            out.extend(tokens.get(after..).unwrap_or_default().iter().cloned());
-            out
-        }));
     }
+    Some(env_split_string(operand).map(|split| {
+        out.extend(split);
+        out.extend(tokens.get(after..).unwrap_or_default().iter().cloned());
+        out
+    }))
 }
 
 /// `env -S`'s string split into words by env's grammar (GNU coreutils):
@@ -9516,6 +9788,13 @@ const NESTING_LIMIT: usize = 8;
 /// The segment that stands for text nested deeper than [`NESTING_LIMIT`].
 /// It is not a command any shell runs, and the integrity check refuses it.
 pub(crate) const NESTING_UNREAD: &str = "\u{1}codeflow: nested deeper than the guard reads";
+
+/// Whether `segment` stands for text the command reader could not read:
+/// [`NESTING_UNREAD`] or an option value's refusal marker
+/// ([`crate::security::option_commands::refusal_marker`]).
+pub(crate) fn unread_marker(segment: &str) -> bool {
+    segment == NESTING_UNREAD || crate::security::option_commands::refusal_marker(segment).is_some()
+}
 
 /// The segment that stands for a program word the guard cannot read
 /// (TSK-1456 AC-9): a file substitution in the program position (`<(…)`,
@@ -12956,6 +13235,37 @@ fn agent_push_segment(segment: &str) -> bool {
     marks.drain(..written - words.len());
     configuration_launch(&words, Some(&marks))
         .is_some_and(|(program, _)| matches!(program_kind(program), ProgramKind::Git))
+        || {
+            let walk = Walk::read(&words);
+            walk.unread.is_some() || walk.option_program.is_some()
+        }
+}
+
+/// The agent push rule's refusal for a command the launcher grammar does
+/// not resolve to its final program and words ([`Walk::unread`]): any
+/// program may run there, a push among them, so the rule fails closed in
+/// both guards at every `git.hook_integrity` level (TSK-1490).
+fn unresolved_push(words: &[String]) -> Option<Violation> {
+    let walk = Walk::read(words);
+    if let (None, Some(at)) = (walk.unread, walk.option_program) {
+        return Some(Violation::always_blocking(
+            AGENT_PUSH_RULE,
+            format!(
+                "`{}` runs an option-shaped word as a program, which the guard does not admit",
+                words[at]
+            ),
+            "write the program the launcher or runner runs as a word that does not start with `-`, so the guard reads the command it runs",
+        ));
+    }
+    let at = walk.unread?;
+    Some(Violation::always_blocking(
+        AGENT_PUSH_RULE,
+        format!(
+            "the command after `{}` is one the guard cannot resolve to its program, so it may push to branches agents never push",
+            words[at]
+        ),
+        "run the inner command directly, one command per call, such as a Git command written with its paths on the line instead of fed by `xargs` or `find`, and write each launcher with its documented options, so the guard reads the program it runs; `xargs` and `find` still run a program whose words the guards do not read for a command, such as `wc` or `grep`",
+    ))
 }
 
 /// [`check_git`] limited to what [`judge_agent_push`] needs: aliases
@@ -13076,6 +13386,14 @@ fn agent_push_walk(
             let redirected = words.len() != tokens.len();
             shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
         }
+        if let Some(v) = unresolved_push(&words) {
+            if !out
+                .iter()
+                .any(|f| f.rule == v.rule && f.message == v.message)
+            {
+                out.push(v);
+            }
+        }
         let Some((program, args)) = launched else {
             continue;
         };
@@ -13085,6 +13403,16 @@ fn agent_push_walk(
         if matches!(program_kind(program), ProgramKind::Git) {
             let moved = line.moves_for(&shell, top_level, &tokens);
             agent_push_git(args, &mut branches, &moved, ctx, out, 0, cwd);
+        }
+        // After a launcher option the guard does not read, each later word
+        // that may start a git call is judged too, as git-guard's walker
+        // does, so the push rule holds whichever word starts the command.
+        let chosen = words.len() - args.len() - 1;
+        for at in unread_starts(&words) {
+            if at != chosen && matches!(program_kind(&words[at]), ProgramKind::Git) {
+                let moved = line.moves_for(&shell, top_level, &tokens);
+                agent_push_git(&words[at + 1..], &mut branches, &moved, ctx, out, 0, cwd);
+            }
         }
     }
 }
@@ -15211,30 +15539,422 @@ fn redirect_operator_len(word: &str) -> Option<usize> {
 /// same one the launderer scan uses — so it covers `env FOO=1 bash -c …`,
 /// `command git …`, `/usr/bin/env git …`, etc., not an enumerated list.
 pub(crate) fn strip_launchers(tokens: &[String]) -> Option<(&str, &[String])> {
-    let (at, _) = launched_at(tokens)?;
+    let at = launch_walk(tokens).0?;
     Some((tokens[at].as_str(), &tokens[at + 1..]))
+}
+
+/// Where the command may start after a launcher option the guard does not
+/// read: every word after that launcher that is not option-shaped. The
+/// guard cannot tell which of them starts the command, so its readers
+/// judge each one, with the repository left unresolved by that launcher
+/// (TSK-1490). Empty when every launcher is read.
+pub(crate) fn unread_starts(tokens: &[String]) -> Vec<usize> {
+    let Some(unread) = launch_walk(tokens).1 else {
+        return Vec::new();
+    };
+    (unread + 1..tokens.len())
+        .filter(|&at| !tokens[at].starts_with('-'))
+        .collect()
+}
+
+/// [`strip_launchers`]' walk: the index of the program, `None` for `env
+/// -S` or no program, and the index of the first launcher with an option
+/// the guard does not read, past which the program is a guess.
+fn launch_walk(tokens: &[String]) -> (Option<usize>, Option<usize>) {
+    let walk = Walk::read(tokens);
+    (walk.program, walk.unread)
+}
+
+/// What the launcher grammar reads in front of a command (TSK-1490). The
+/// launchers it models are a closed list, each read by its own grammar
+/// ([`is_prefix_launcher`] and [`OPTION_LAUNCHERS`] through
+/// [`launch_after`], `busybox` and `env`); a launcher word in any form or
+/// mode the grammar does not resolve to a final program and its words
+/// makes the walk unresolved ([`Walk::unread`], [`Walk::why`]), and the
+/// readers then fail closed: every later word that may start the command
+/// is judged ([`unread_starts`]), the hook-integrity marker refuses
+/// ([`launcher_effects`]), and the agent push rule refuses the command in
+/// both guards ([`unresolved_push`]). Every reader of launcher context
+/// (the program, the split string, a shell's input, the directory effects,
+/// the repository's environment and the privilege transitions) reads this
+/// one result, so no two readers can disagree on where a command starts.
+#[derive(Debug, Default)]
+pub(crate) struct Walk {
+    /// The program's index; `None` for an `env -S` string or no program.
+    pub program: Option<usize>,
+    /// The first launcher the grammar cannot resolve, past which the
+    /// program is a guess.
+    pub unread: Option<usize>,
+    /// Why the walk is unresolved, in words for a refusal.
+    pub why: Option<String>,
+    /// The `env` whose `-S` string holds the command.
+    pub split: Option<usize>,
+    /// Every word the grammar read as a launcher, in order. Only these are
+    /// launcher positions: a launcher's name written as another
+    /// launcher's option value is not one.
+    pub launchers: Vec<usize>,
+    /// For each of [`Walk::launchers`], the index of the first word after
+    /// its own options and operands: the words it runs start there, after
+    /// any assignments.
+    pub ends: Vec<usize>,
+    /// The program is a privilege launcher given no command, which runs a
+    /// shell reading its commands from its input ([`Launch::Shell`]).
+    pub implicit_shell: bool,
+    /// Who read the words just before the program ([`launched_at_written`]):
+    /// `env` after its words, else the shell (TSK-1456).
+    pub taker: Taker,
+    /// The launcher whose program word is option-shaped: a launcher's
+    /// options end at its first word that is not one (env after an
+    /// assignment, the others at `--`, an operand or a verb), so it runs
+    /// that word, `env X=1 -p` runs `-p`. The program is read exactly, so
+    /// the walk is not a guess, but the agent push rule refuses the line in
+    /// both guards ([`unresolved_push`]) rather than admit a program the
+    /// guard would read as an option anywhere else (TSK-1490). A runner
+    /// read in its daily form (`xargs`, `find -exec`) whose command runs
+    /// such a word is recorded here too, with the runner's index
+    /// ([`runs_option_program`]), and stays read, never a guess.
+    pub option_program: Option<usize>,
+}
+
+impl Walk {
+    pub(crate) fn read(tokens: &[String]) -> Self {
+        Self::read_written(tokens, None)
+    }
+
+    /// [`Walk::read`] with the words as written ([`ShellWord::marked`]),
+    /// parallel to `tokens`, so a word whose name or `=` a quote made
+    /// literal is not skipped as an assignment (TSK-1456).
+    pub(crate) fn read_written(tokens: &[String], marks: Option<&[String]>) -> Self {
+        let mut walk = Self::default();
+        walk.program = launch_walk_into(tokens, marks, &mut walk);
+        // A program word a launcher runs that is option-shaped
+        // ([`Walk::option_program`]); a launcher left as the program is
+        // not one.
+        if walk
+            .program
+            .is_some_and(|at| tokens[at].starts_with('-') && !walk.launchers.contains(&at))
+        {
+            walk.option_program = walk.launchers.last().copied();
+        }
+        // A command runner whose mode runs a shell on its input, or runs
+        // a command its grammar here does not name, is unresolved too.
+        if let Some(at) = walk.program.filter(|_| !walk.implicit_shell) {
+            match runner_mode(launcher_name(&tokens[at]), &tokens[at + 1..]) {
+                // A runner's own command is read exactly; one that runs an
+                // option-shaped program is refused as the launcher's is.
+                RunnerMode::Named => {
+                    if runs_option_program(launcher_name(&tokens[at]), &tokens[at + 1..]) {
+                        walk.option_program = Some(at);
+                    }
+                }
+                RunnerMode::InputShell => {
+                    walk.visit(at, tokens.len());
+                    walk.unresolved(
+                        at,
+                        format!(
+                            "`{}` with no command, which runs a shell reading commands the guard may not see",
+                            tokens[at]
+                        ),
+                    );
+                    walk.implicit_shell = true;
+                }
+                RunnerMode::Unnamed => {
+                    walk.visit(at, tokens.len());
+                    walk.unresolved(
+                        at,
+                        format!(
+                            "`{}` in a form the guard keeps no grammar for, so the command it runs is not read",
+                            tokens[at]
+                        ),
+                    );
+                }
+            }
+        }
+        walk
+    }
+
+    /// Record a launcher at `at` whose own words end before `end`.
+    fn visit(&mut self, at: usize, end: usize) {
+        self.launchers.push(at);
+        self.ends.push(end);
+    }
+
+    /// Record the first word the grammar cannot resolve, and why.
+    fn unresolved(&mut self, at: usize, why: String) {
+        if self.unread.is_none() {
+            self.unread = Some(at);
+            self.why = Some(why);
+        }
+    }
+
+    /// Whether a launcher the grammar read runs the command as another
+    /// user, with that user's environment and configuration.
+    pub(crate) fn as_another_user(&self, tokens: &[String]) -> bool {
+        self.launchers
+            .iter()
+            .any(|&at| super::git_target::runs_as_another_user(&tokens[at]))
+    }
+}
+
+/// How a command runner that is the program runs what it runs.
+enum RunnerMode {
+    /// No runner, or one of the two daily forms the guard reads exactly
+    /// ([`xargs_literal`], [`find_literal`]), whose command is on the line.
+    Named,
+    /// A runner that runs a shell, or commands, read from its input: `su`
+    /// and `runuser` without a command option, `script` without one, and
+    /// `parallel` with neither a command nor inputs on the line. The walk
+    /// is unresolved, and the readers of a shell's input read that input.
+    InputShell,
+    /// Any other form of a runner or command carrier: the guard keeps no
+    /// grammar for it, so the walk is unresolved and the line refuses.
+    Unnamed,
+}
+
+/// The command runners and carriers the guard keeps no grammar for: any
+/// spelling of these as the program is unresolved ([`runner_mode`]). A
+/// runner added to the inventory later belongs here until a closed grammar
+/// that reads it exactly is written for it.
+pub(crate) const UNREAD_RUNNERS: &[&str] = &[
+    "parallel", "watch", "flock", "script", "setsid", "unbuffer", "su", "runuser",
+];
+
+/// The [`RunnerMode`] of the program `name` with `args`. `xargs` and `find`
+/// keep a closed grammar for their daily forms; `fd` and `fdfind` with an
+/// exec option, and every runner of [`UNREAD_RUNNERS`], are unresolved
+/// whatever their options say.
+fn runner_mode(name: &str, args: &[String]) -> RunnerMode {
+    let short = |a: &str, letter: char| {
+        a.strip_prefix('-')
+            .is_some_and(|f| !f.starts_with('-') && f.contains(letter))
+    };
+    let command = |a: &str| {
+        short(a, 'c')
+            || a == "--command"
+            || a.starts_with("--command=")
+            || a == "--session-command"
+            || a.starts_with("--session-command=")
+    };
+    let reads_input = match name {
+        "su" | "runuser" => !args.iter().any(|a| command(a)),
+        "script" => script_command(args).is_none(),
+        "parallel" => {
+            let line = parallel_line(args);
+            line.template == line.end && !line.files && !line.literal
+        }
+        _ => false,
+    };
+    match name {
+        _ if UNREAD_RUNNERS.contains(&name) && reads_input => RunnerMode::InputShell,
+        _ if UNREAD_RUNNERS.contains(&name) => RunnerMode::Unnamed,
+        "fd" | "fdfind" if args.iter().any(|a| fd_exec(a)) => RunnerMode::Unnamed,
+        "xargs" if !xargs_literal(args) => RunnerMode::Unnamed,
+        "find" if !find_literal(args) => RunnerMode::Unnamed,
+        _ => RunnerMode::Named,
+    }
+}
+
+/// Whether `word` is an exec option of `fd`: `-x`, `-X`, `--exec`,
+/// `--exec-batch`, or a short cluster holding `x` or `X`. A cluster such
+/// as `-etxt` that only holds the letter in a value is read as one too,
+/// which refuses rather than guesses.
+fn fd_exec(word: &str) -> bool {
+    if let Some(long) = word.strip_prefix("--") {
+        let name = long.split_once('=').map_or(long, |(name, _)| name);
+        return name == "exec" || name == "exec-batch";
+    }
+    word.strip_prefix('-')
+        .is_some_and(|cluster| cluster.contains(['x', 'X']))
+}
+
+/// The daily form of `xargs` the guard reads exactly: no option, or only
+/// `-0`, `-r` and `-n NUMBER` (`-nNUMBER`), then either no command (xargs
+/// runs `echo`) or a literal command ([`literal_command`]) whose program
+/// does not read its words for a push or a command
+/// ([`reads_command_words`]). xargs appends the items it reads from its
+/// input to that command, options among them, so a program whose words
+/// the guards read is unresolved here. Any other option, a replacement
+/// string (`-I`, `-J`, `-i`, `--replace`) included, is unresolved too.
+fn xargs_literal(args: &[String]) -> bool {
+    let Some(at) = xargs_command_at(args) else {
+        return false;
+    };
+    let command = &args[at..];
+    command.is_empty() || (literal_command(command) && !reads_command_words(command))
+}
+
+/// Where the command of the daily form of `xargs` starts, after `-0`, `-r`
+/// and `-n NUMBER`; `None` after any other option ([`xargs_literal`]).
+fn xargs_command_at(args: &[String]) -> Option<usize> {
+    let number = |w: &str| !w.is_empty() && w.chars().all(|c| c.is_ascii_digit());
+    let mut at = 0;
+    while let Some(word) = args.get(at).map(String::as_str) {
+        match word {
+            "-0" | "-r" => at += 1,
+            "-n" if args.get(at + 1).is_some_and(|n| number(n)) => at += 2,
+            _ if word.strip_prefix("-n").is_some_and(number) => at += 1,
+            _ if word.starts_with('-') => return None,
+            _ => break,
+        }
+    }
+    Some(at)
+}
+
+/// Whether a runner read in its daily form ([`RunnerMode::Named`]) runs a
+/// command whose program word is option-shaped: the command's first word,
+/// or the program a launcher in it runs ([`Walk::option_program`]). `xargs`
+/// and `find -exec` exec that word with no shell, as a launcher does, so
+/// the line is refused as for a launcher, with the command still read
+/// exactly (TSK-1490).
+fn runs_option_program(name: &str, args: &[String]) -> bool {
+    let shaped = |words: &[String]| {
+        words.first().is_some_and(|w| w.starts_with('-'))
+            || Walk::read(words).option_program.is_some()
+    };
+    match name {
+        "xargs" => xargs_command_at(args).is_some_and(|at| shaped(&args[at..])),
+        "find" => {
+            let mut at = 0;
+            while let Some(word) = args.get(at).map(String::as_str) {
+                at += 1;
+                if word != "-exec" && word != "-execdir" {
+                    continue;
+                }
+                let tail = &args[at..];
+                let end = tail
+                    .iter()
+                    .position(|w| w == ";" || w == "+")
+                    .unwrap_or(tail.len());
+                if shaped(&tail[..end]) {
+                    return true;
+                }
+                at += end + 1;
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// The daily form of `find` the guard reads exactly: each `-exec` or
+/// `-execdir` runs a literal command ([`literal_command`]), read with its
+/// `{}` words in place, whose found-path operand is a whole `{}` word,
+/// ended by `;` or by `{} +`. A `{}` as the utility or as a launcher's
+/// command word leaves no literal program, so it is unresolved. A `{}`
+/// given to a program that reads its words for a push or a command
+/// ([`reads_command_words`]) is unresolved too: a found path can be a
+/// start point named on the line, which can be a subcommand or an option
+/// value (BSD `find -f` takes any start point). An `-ok` or `-okdir`, an
+/// action with no terminator, or any other command is unresolved. A
+/// `find` with no action that runs a command is read as before.
+fn find_literal(args: &[String]) -> bool {
+    let mut at = 0;
+    while let Some(word) = args.get(at).map(String::as_str) {
+        at += 1;
+        match word {
+            "-ok" | "-okdir" => return false,
+            "-exec" | "-execdir" => {
+                let tail = &args[at..];
+                let Some(end) = tail.iter().position(|w| w == ";" || w == "+") else {
+                    return false;
+                };
+                let words = &tail[..end];
+                if tail[end] == "+" && words.last().is_none_or(|w| w != "{}") {
+                    return false;
+                }
+                // The words find runs, each `{}` in its place: a `{}` the
+                // walk reads as the program leaves no literal program.
+                if !literal_command(words) || words.iter().any(|w| w != "{}" && w.contains("{}")) {
+                    return false;
+                }
+                if words.iter().any(|w| w == "{}") && reads_command_words(words) {
+                    return false;
+                }
+                at += end + 1;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Whether a runner's command `words` is literal: the launcher grammar
+/// resolves it to a program word on the line, with no `env -S` string, the
+/// program is no shell, no runner the guard keeps no grammar for, and holds
+/// no `{`. A split string alone never counts as a fixed program, and a
+/// nested shell is never read here.
+fn literal_command(words: &[String]) -> bool {
+    if words.is_empty() {
+        return false;
+    }
+    let walk = Walk::read(words);
+    if walk.unread.is_some() || walk.split.is_some() {
+        return false;
+    }
+    let Some(at) = walk.program else {
+        return false;
+    };
+    let program = &words[at];
+    !program.contains('{') && !is_shell(basename(program))
+}
+
+/// Whether the program a runner's command `words` resolves to is one whose
+/// words the guards read for a push or a command they carry: Git and its
+/// runners, gh, a launcher left with no command, a command runner, a shell,
+/// `eval`, `source`, `sed` (its `e` command), a package runner, or a
+/// program of the option-command inventory. Words a runner adds at run
+/// time, from its input or from the paths it finds, would reach that
+/// reading unseen. An interpreter is not one: the push rule does not read
+/// an interpreter's code on the line either.
+fn reads_command_words(words: &[String]) -> bool {
+    use crate::security::launchers::{LAUNCHERS, PACKAGE_RUNNERS, SUPPLIERS};
+    use crate::security::option_commands::OPTION_COMMANDS;
+    let Some(at) = Walk::read(words).program else {
+        return false;
+    };
+    let program = words[at].as_str();
+    let base = basename(program);
+    let base = base.strip_suffix(".exe").unwrap_or(base);
+    let name = launcher_name(program);
+    runners::arguments(program, &[]).is_some()
+        || base == "gh"
+        || is_shell(base)
+        || matches!(name, "eval" | "source" | "." | "sed")
+        || is_prefix_launcher(program)
+        || OPTION_LAUNCHERS.contains(&name)
+        || LAUNCHERS.contains(&name)
+        || SUPPLIERS.contains(&name)
+        || PACKAGE_RUNNERS.contains(&name)
+        || UNREAD_RUNNERS.contains(&name)
+        || COMMAND_CARRIERS.contains(&name)
+        || OPTION_COMMANDS
+            .iter()
+            .any(|row| row.programs.contains(&name))
 }
 
 /// [`strip_launchers`] as the index of the program word, with who read the
 /// words just before it: [`Taker::Env`] after `env`'s words, else
-/// [`Taker::Shell`]. Only assignments ([`leading_word`]) are skipped
-/// (TSK-1456).
-pub(crate) fn launched_at(tokens: &[String]) -> Option<(usize, Taker)> {
-    launched_at_written(tokens, None)
-}
-
-/// [`launched_at`] with the words as written ([`ShellWord::marked`]),
-/// parallel to `tokens`, so a word whose name or `=` a quote made literal
-/// is not skipped as an assignment ([`leading_word_written`]).
+/// [`Taker::Shell`] (TSK-1456). `marks` are the words as written
+/// ([`ShellWord::marked`]), parallel to `tokens`, so a word whose name or
+/// `=` a quote made literal is not skipped as an assignment
+/// ([`leading_word_written`]). The program
+/// is the launcher walk's ([`Walk`]): past a launcher the grammar cannot
+/// resolve it is a first guess, as for [`strip_launchers`].
 pub(crate) fn launched_at_written(
     tokens: &[String],
     marks: Option<&[String]>,
 ) -> Option<(usize, Taker)> {
+    let walk = Walk::read_written(tokens, marks);
+    Some((walk.program?, walk.taker))
+}
+
+fn launch_walk_into(tokens: &[String], marks: Option<&[String]>, walk: &mut Walk) -> Option<usize> {
     let marks = marks.filter(|marks| marks.len() == tokens.len());
     let mut idx = 0;
     let mut taker = Taker::Shell;
     loop {
-        // Skip leading VAR=val assignments.
+        // Skip leading VAR=val assignments, as the reader in front of
+        // them reads them (TSK-1456).
         idx += match marks {
             Some(marks) => marks
                 .get(idx..)
@@ -15243,52 +15963,135 @@ pub(crate) fn launched_at_written(
                 .get(idx..)
                 .map_or(0, |rest| skip_leading(rest, taker)),
         };
+        // Every change of reader below is followed by the next turn of the
+        // loop, so the reader here is the one in front of the program.
+        walk.taker = taker;
         let t = tokens.get(idx)?.as_str();
-        if is_prefix_launcher(t) {
-            match skip_launcher_options(t, tokens, idx + 1) {
-                Some(next) => {
+        // A launcher with options of its own, read by its grammar
+        // (TSK-1490 AC-8). An option or mode the grammar does not resolve
+        // makes the walk unresolved: option-shaped words are skipped for a
+        // first guess at the command, [`launcher_effects`] refuses the
+        // launcher, the agent push rule refuses the command, and the
+        // readers judge every later word that may start it
+        // ([`unread_starts`]).
+        let option_launcher = OPTION_LAUNCHERS.contains(&launcher_name(t));
+        if is_prefix_launcher(t) || option_launcher {
+            let launch = if option_launcher {
+                launch_after(launcher_name(t), tokens, idx + 1)
+            } else {
+                prefix_launch(t, tokens, idx + 1)
+            };
+            match launch {
+                Launch::Runs(next) if !option_launcher || next < tokens.len() => {
+                    walk.visit(idx, next);
                     idx = next;
                     taker = Taker::Shell;
                     continue;
                 }
                 // `command -v git` only looks the name up; nothing runs.
-                None => return Some((idx, taker)),
+                Launch::Runs(_) | Launch::Nothing => {
+                    walk.visit(idx, tokens.len());
+                    return Some(idx);
+                }
+                // With no command after it, the launcher runs a shell that
+                // reads its input: the launcher stays the program, the
+                // readers of a shell's input judge that input, and the walk
+                // is unresolved, since what the shell reads may be beyond
+                // them.
+                Launch::Shell => {
+                    walk.visit(idx, tokens.len());
+                    walk.unresolved(
+                        idx,
+                        format!(
+                            "`{t}` with no command, which runs a shell reading commands the guard may not see"
+                        ),
+                    );
+                    walk.implicit_shell = true;
+                    return Some(idx);
+                }
+                Launch::Unread(why) => {
+                    let next = first_guess(tokens, idx + 1);
+                    walk.visit(idx, next);
+                    walk.unresolved(idx, why);
+                    idx = next;
+                    continue;
+                }
             }
         }
-        if basename(t) == "busybox"
-            && tokens
-                .get(idx + 1)
-                .is_some_and(|a| is_shell(a) || matches!(a.as_str(), "ln" | "link" | "cp" | "dd"))
-        {
-            idx += 1;
-            taker = Taker::Shell;
-            continue;
+        // `busybox` running a shell, a file copier or a launcher of the
+        // inventory runs that applet as the program. Any other applet, or
+        // an option, is a form the grammar keeps no reading for: the walk
+        // is unresolved, so the readers judge every later word that may
+        // start a command, and the program stays `busybox`, which the
+        // startup guard refuses by design. `busybox` alone runs nothing.
+        if basename(t) == "busybox" {
+            match tokens.get(idx + 1) {
+                Some(applet) if busybox_launches(applet) => {
+                    walk.visit(idx, idx + 1);
+                    idx += 1;
+                    taker = Taker::Shell;
+                    continue;
+                }
+                Some(applet) => {
+                    walk.unresolved(
+                        idx,
+                        format!(
+                            "`{t} {applet}`, an applet the guard keeps no grammar for, so the command it runs is not read"
+                        ),
+                    );
+                    return Some(idx);
+                }
+                None => {}
+            }
         }
         if launcher_name(t) == "env" {
             // env's options and assignments, up to the wrapped command, read
             // by its full grammar ([`env_words`]).
             match env_words(tokens, idx + 1) {
                 // `env -S 'cmd'` runs the command packed in that string,
-                // which [`expand_commands`] reads as its own segments; the
-                // string is never a program name.
-                Ok(words) if words.split.is_some() => return None,
-                Ok(words) => idx = words.end,
+                // which [`env_split_command`] rebuilds from this walk and
+                // [`expand_commands`] reads as its own segments, behind
+                // every launcher in front; the string is never a program
+                // name.
+                Ok(words) if words.split.is_some() => {
+                    walk.visit(idx, tokens.len());
+                    walk.split = Some(idx);
+                    return None;
+                }
+                Ok(words) => {
+                    walk.visit(idx, words.end);
+                    idx = words.end;
+                }
                 // An option the grammar does not hold: skip option-shaped
-                // words; [`launcher_effects`] refuses the launcher.
-                Err(_) => {
-                    idx += 1;
-                    while tokens.get(idx).is_some_and(|a| {
+                // words and the words env reads as assignments for a first
+                // guess.
+                Err(why) => {
+                    let mut next = idx + 1;
+                    while tokens.get(next).is_some_and(|a| {
                         a.starts_with('-') || leading_word(a, Taker::Env) == LeadingWord::Assignment
                     }) {
-                        idx += 1;
+                        next += 1;
                     }
+                    walk.visit(idx, next);
+                    walk.unresolved(idx, why);
+                    idx = next;
                 }
             }
             taker = Taker::Env;
             continue;
         }
-        return Some((idx, taker));
+        return Some(idx);
     }
+}
+
+/// The first guess at the command after a launcher whose options the
+/// grammar cannot read: the first word from `idx` that is not
+/// option-shaped.
+fn first_guess(tokens: &[String], mut idx: usize) -> usize {
+    while tokens.get(idx).is_some_and(|a| a.starts_with('-')) {
+        idx += 1;
+    }
+    idx
 }
 
 /// Whether `word` is a `timeout` duration: a number with an optional
@@ -15304,49 +16107,33 @@ fn is_duration(word: &str) -> bool {
 }
 
 /// The effects of the launchers in front of a command that change how it
-/// runs (TSK-216 round 4): each directory `env -C DIR` or `env
-/// --chdir[=]DIR` moves to, in order, and the first launcher word the
-/// guard cannot read with certainty: an `env` option it does not know, an
-/// `env -C` without a directory, or a `timeout` without a duration. `env
-/// -S`, which packs the command into one word, ends this walk;
-/// [`expand_commands`] reads the packed command as its own segments.
+/// runs, read from the one launcher walk
+/// ([`Walk::read`]): each directory `env -C DIR` or `env --chdir[=]DIR`
+/// moves to, in order, and why the walk is unresolved, or the first
+/// launcher that runs its command in a directory the guard does not follow
+/// ([`launcher_moves`]). `env -S`, which packs the command into one word,
+/// ends the walk; [`expand_commands`] reads the packed command as its own
+/// segments.
 pub(crate) fn launcher_effects(tokens: &[String]) -> (Vec<&str>, Option<String>) {
+    let walk = Walk::read(tokens);
     let mut dirs = Vec::new();
-    let mut idx = 0;
-    loop {
-        idx += tokens
-            .get(idx..)
-            .map_or(0, |rest| skip_leading(rest, Taker::Shell));
-        let Some(t) = tokens.get(idx).map(String::as_str) else {
-            return (dirs, None);
-        };
-        let name = launcher_name(t);
-        if is_prefix_launcher(t) {
-            let Some(next) = skip_launcher_options(t, tokens, idx + 1) else {
-                return (dirs, None);
-            };
-            if name == "timeout"
-                && !tokens
-                    .get(next.saturating_sub(1))
-                    .is_some_and(|d| is_duration(d))
-            {
-                return (
-                    dirs,
-                    Some("`timeout` without a duration the guard can read".to_string()),
-                );
-            }
-            idx = next;
-            continue;
+    for (&at, &end) in walk.launchers.iter().zip(&walk.ends) {
+        if walk.unread.is_some_and(|unread| at >= unread) {
+            break;
         }
+        let name = launcher_name(&tokens[at]);
         if name == "env" {
-            match env_options(tokens, idx + 1, &mut dirs) {
-                Ok(next) => idx = next,
-                Err(why) => return (dirs, Some(why)),
+            if let Ok(words) = env_words(tokens, at + 1) {
+                dirs.extend(words.dirs);
             }
-            continue;
+        } else if OPTION_LAUNCHERS.contains(&name) && walk.program != Some(at) {
+            // A launcher that is itself the program runs nothing here.
+            if let Some(why) = launcher_moves(name, &tokens[at + 1..end.min(tokens.len())]) {
+                return (dirs, Some(why));
+            }
         }
-        return (dirs, None);
     }
+    (dirs, walk.why)
 }
 
 /// What the words of an `env` launcher do, read by env's full option
@@ -15497,7 +16284,11 @@ pub(crate) fn env_words(tokens: &[String], mut idx: usize) -> Result<EnvWords<'_
                 continue;
             }
         }
+        // env's options end at its first word that is not one (GNU env's
+        // `+` option string; BSD getopt stops there too), so a word after
+        // an assignment is never an option: `env X=1 -p` runs `-p`.
         if assignment(a) {
+            options = false;
             idx += 1;
             continue;
         }
@@ -15574,7 +16365,7 @@ pub(crate) fn is_shell_modifier(name: &str) -> bool {
 /// program form (`/usr/bin/time`, `command time`), and `nice`, `timeout`,
 /// `stdbuf`, `ionice`, `caffeinate` and `xcrun`, any path form, and the
 /// GNU-prefixed names of the coreutils ones ([`launcher_name`]).
-fn is_prefix_launcher(t: &str) -> bool {
+pub(crate) fn is_prefix_launcher(t: &str) -> bool {
     is_shell_modifier(t) || PREFIX_LAUNCHERS.contains(&launcher_name(t))
 }
 
@@ -15601,77 +16392,534 @@ pub(crate) const COMMAND_CARRIERS: &[&str] = &[
     "flock", "script", "watch", "parallel", "setsid", "unbuffer", "xargs", "find",
 ];
 
-/// Skip the options of a prefix launcher starting at `idx` and return the
-/// index of the command it runs: `command -p`, `exec -c -l -a NAME`,
-/// `time -p -o FILE`, and `--` for all. `None` when the options make
-/// `command` only look the name up (`-v`, `-V`), so nothing after it runs.
-/// Any other option is skipped, never read as "runs nothing": a launcher's
-/// `--help` can be another option's value (`time --format --help git ...`),
-/// so a non-executing form such as `nohup --help git push` is judged as the
-/// command after it and may be refused, which fails closed.
-fn skip_launcher_options(launcher: &str, tokens: &[String], mut idx: usize) -> Option<usize> {
+/// What the prefix launcher `launcher` does with the words from `idx`, read
+/// by its own option grammar ([`launch_grammar`]): `command -p`, `exec -c
+/// -l -a NAME`, `time -p -o FILE`, `nice -n N`, `timeout DURATION` and the
+/// rest, and `--` for all. [`Launch::Nothing`] when the options make
+/// `command` only look the name up (`-v`, `-V`) or `xcrun` only print a
+/// path. Any option outside the grammar, an abbreviation of a long option
+/// included, is [`Launch::Unread`], so the walk fails closed rather than
+/// take an option's value as the command. A launcher's help or version
+/// option is read as a flag, never as "runs nothing": the command after it
+/// is still judged, which fails closed.
+pub(crate) fn prefix_launch(launcher: &str, tokens: &[String], idx: usize) -> Launch {
     if is_shell_modifier(launcher) {
-        return Some(idx);
+        return Launch::Runs(idx);
     }
-    let launcher = launcher_name(launcher);
-    while let Some(a) = tokens.get(idx).map(String::as_str) {
-        if a == "--" {
-            // The options end; `timeout`'s duration still follows.
+    launch_after(launcher_name(launcher), tokens, idx)
+}
+
+/// [`prefix_launch`] as the index of the command, for a reader that scans
+/// on past a launcher it cannot read: `None` when nothing runs, and the
+/// first word that is not option-shaped when the grammar cannot read the
+/// launcher's options, a guess that only adds words to judge. The launcher
+/// walk ([`Walk::read`]) refuses that launcher in the same line.
+pub(crate) fn skip_launcher_options(
+    launcher: &str,
+    tokens: &[String],
+    idx: usize,
+) -> Option<usize> {
+    match prefix_launch(launcher, tokens, idx) {
+        Launch::Runs(next) => Some(next),
+        Launch::Nothing => None,
+        Launch::Unread(_) | Launch::Shell => Some(first_guess(tokens, idx)),
+    }
+}
+
+/// The privilege and scheduling launchers of the inventory
+/// (`security/launchers.rs`) that take options of their own before the
+/// command they run; git-guard reads through each by its own grammar
+/// ([`launch_after`]) (TSK-1490 AC-8).
+pub(crate) const OPTION_LAUNCHERS: &[&str] =
+    &["sudo", "doas", "gsudo", "pkexec", "chrt", "taskset"];
+
+/// What an [`OPTION_LAUNCHERS`] launcher does with the words after it.
+pub(crate) enum Launch {
+    /// The command it runs starts at this index.
+    Runs(usize),
+    /// A mode that runs no command (`sudo -l`, `chrt -p`).
+    Nothing,
+    /// An option the reader does not parse exactly, or a mode whose command
+    /// the reader cannot name, with why in words for a refusal.
+    Unread(String),
+    /// A privilege launcher given no command, which runs a shell that reads
+    /// its commands from its input (`sudo -s`, `pkexec` alone).
+    Shell,
+}
+
+/// The privilege launchers of [`OPTION_LAUNCHERS`], which run a shell
+/// reading its input when no command follows their options.
+const SHELL_LAUNCHERS: &[&str] = &["sudo", "doas", "gsudo", "pkexec"];
+
+/// gsudo's verbs that run no user command (its `CommandLineParser.cs`).
+const GSUDO_QUIET_VERBS: &[&str] = &[
+    "help",
+    "config",
+    "status",
+    "cache",
+    "gsudoservice",
+    "gsudoelevate",
+    "gsudoctrlc",
+];
+
+/// One launcher's option grammar: the short letters that take a value
+/// (attached or the next word), take only an attached value and otherwise
+/// run nothing, run nothing, or take no value; the long names likewise;
+/// whether a one-dash word is a whole long name (`xcrun -sdk`, `arch
+/// -x86_64`); and whether one operand (a priority or a CPU mask) comes
+/// before the command. Long names match whole: an abbreviation, which a
+/// launcher's own parser may accept, is not read. Any other option is
+/// [`Launch::Unread`].
+struct LaunchGrammar {
+    valued: &'static str,
+    attached_only: &'static str,
+    stops: &'static str,
+    flags: &'static str,
+    valued_long: &'static [&'static str],
+    stops_long: &'static [&'static str],
+    flags_long: &'static [&'static str],
+    one_dash_long: bool,
+    operand: bool,
+}
+
+/// A grammar with no options, to fill in from.
+const NO_OPTIONS: LaunchGrammar = LaunchGrammar {
+    valued: "",
+    attached_only: "",
+    stops: "",
+    flags: "",
+    valued_long: &[],
+    stops_long: &[],
+    flags_long: &[],
+    one_dash_long: false,
+    operand: false,
+};
+
+/// The help and version options of the GNU launchers, read as flags: the
+/// command after them is still judged.
+const HELP_LONG: &[&str] = &["help", "version"];
+
+/// `sudo`'s grammar, from its manual and `parse_args.c`: `h` takes an
+/// attached host, or the next word when written alone and that word is
+/// not an option or an assignment; otherwise it prints help.
+const SUDO_GRAMMAR: LaunchGrammar = LaunchGrammar {
+    valued: "aCcDgpRrTtUu",
+    attached_only: "h",
+    stops: "eKlVv",
+    flags: "ABbEHikNnPSs",
+    valued_long: &[
+        "auth-type",
+        "close-from",
+        "chdir",
+        "login-class",
+        "group",
+        "host",
+        "prompt",
+        "chroot",
+        "role",
+        "type",
+        "command-timeout",
+        "other-user",
+        "user",
+    ],
+    stops_long: &[
+        "edit",
+        "help",
+        "list",
+        "remove-timestamp",
+        "version",
+        "validate",
+    ],
+    flags_long: &[
+        "askpass",
+        "background",
+        "bell",
+        "preserve-env",
+        "set-home",
+        "login",
+        "reset-timestamp",
+        "non-interactive",
+        "preserve-groups",
+        "stdin",
+        "shell",
+    ],
+    ..NO_OPTIONS
+};
+
+/// The grammar of the prefix launchers ([`PREFIX_LAUNCHERS`]), from the
+/// bash builtins, GNU coreutils, GNU time, util-linux `ionice` and the
+/// macOS manuals.
+#[allow(clippy::too_many_lines)] // One arm per prefix launcher, each from its own manual.
+fn prefix_grammar(name: &str) -> LaunchGrammar {
+    match name {
+        "command" => LaunchGrammar {
+            stops: "vV",
+            flags: "p",
+            ..NO_OPTIONS
+        },
+        "exec" => LaunchGrammar {
+            valued: "a",
+            flags: "cl",
+            ..NO_OPTIONS
+        },
+        "nohup" => LaunchGrammar {
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "time" => LaunchGrammar {
+            valued: "fo",
+            flags: "ahlpqvV",
+            valued_long: &["format", "output"],
+            flags_long: &[
+                "append",
+                "portability",
+                "quiet",
+                "verbose",
+                "help",
+                "version",
+            ],
+            ..NO_OPTIONS
+        },
+        "nice" => LaunchGrammar {
+            valued: "n",
+            valued_long: &["adjustment"],
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "timeout" => LaunchGrammar {
+            valued: "ks",
+            flags: "fpv",
+            valued_long: &["kill-after", "signal"],
+            flags_long: &[
+                "foreground",
+                "preserve-status",
+                "verbose",
+                "help",
+                "version",
+            ],
+            ..NO_OPTIONS
+        },
+        "stdbuf" => LaunchGrammar {
+            valued: "ioe",
+            valued_long: &["input", "output", "error"],
+            flags_long: HELP_LONG,
+            ..NO_OPTIONS
+        },
+        "ionice" => LaunchGrammar {
+            valued: "cnpPu",
+            flags: "thV",
+            valued_long: &["class", "classdata", "pid", "pgid", "uid"],
+            flags_long: &["ignore", "help", "version"],
+            ..NO_OPTIONS
+        },
+        "caffeinate" => LaunchGrammar {
+            valued: "tw",
+            flags: "disum",
+            ..NO_OPTIONS
+        },
+        "xcrun" => LaunchGrammar {
+            valued_long: &["sdk", "toolchain"],
+            stops_long: &["find", "f"],
+            flags_long: &[
+                "h",
+                "help",
+                "version",
+                "v",
+                "verbose",
+                "l",
+                "log",
+                "n",
+                "no-cache",
+                "k",
+                "kill-cache",
+                "r",
+                "run",
+                "show-sdk-path",
+                "show-sdk-version",
+                "show-sdk-build-version",
+                "show-sdk-platform-path",
+                "show-sdk-platform-version",
+            ],
+            one_dash_long: true,
+            ..NO_OPTIONS
+        },
+        "arch" => LaunchGrammar {
+            valued_long: &["arch", "d", "e"],
+            flags_long: &[
+                "32", "64", "c", "h", "i386", "x86_64", "x86_64h", "arm64", "arm64e", "arm64_32",
+            ],
+            one_dash_long: true,
+            ..NO_OPTIONS
+        },
+        // `builtin` and any other prefix launcher take no options.
+        _ => NO_OPTIONS,
+    }
+}
+
+/// The grammar of each launcher [`launch_after`] reads: the
+/// [`OPTION_LAUNCHERS`] and the [`PREFIX_LAUNCHERS`], from their manuals.
+fn launch_grammar(name: &str) -> LaunchGrammar {
+    match name {
+        "sudo" => SUDO_GRAMMAR,
+        "doas" => LaunchGrammar {
+            valued: "au",
+            stops: "CL",
+            flags: "ns",
+            ..NO_OPTIONS
+        },
+        "gsudo" => LaunchGrammar {
+            valued: "iu",
+            stops: "hv",
+            flags: "dknsw",
+            valued_long: &["integrity", "user"],
+            stops_long: &["help", "version"],
+            flags_long: &[
+                "new",
+                "wait",
+                "system",
+                "direct",
+                "reset-timestamp",
+                "ti",
+                "loadProfile",
+                "copyns",
+                "debug",
+            ],
+            ..NO_OPTIONS
+        },
+        "pkexec" => LaunchGrammar {
+            valued: "u",
+            valued_long: &["user"],
+            stops_long: &["help", "version"],
+            flags_long: &["disable-internal-agent", "keep-cwd"],
+            ..NO_OPTIONS
+        },
+        "chrt" => LaunchGrammar {
+            valued: "DPT",
+            stops: "hmpV",
+            flags: "abdefioRrv",
+            valued_long: &["sched-runtime", "sched-period", "sched-deadline"],
+            stops_long: &["pid", "max", "help", "version"],
+            flags_long: &[
+                "all-tasks",
+                "batch",
+                "deadline",
+                "fifo",
+                "idle",
+                "other",
+                "rr",
+                "reset-on-fork",
+                "verbose",
+            ],
+            operand: true,
+            ..NO_OPTIONS
+        },
+        "taskset" => LaunchGrammar {
+            stops: "hpV",
+            flags: "ac",
+            stops_long: &["pid", "help", "version"],
+            flags_long: &["all-tasks", "cpu-list"],
+            operand: true,
+            ..NO_OPTIONS
+        },
+        _ => prefix_grammar(name),
+    }
+}
+
+/// Whether the option word `a` of the prefix launcher `launcher` takes the
+/// next word as its value, by the launcher's grammar ([`launch_grammar`]).
+/// The caller passes only words the walk read as options (TSK-1490).
+pub(crate) fn takes_next_word(launcher: &str, a: &str) -> bool {
+    let grammar = launch_grammar(launcher);
+    let long = a.strip_prefix("--").or_else(|| {
+        if grammar.one_dash_long {
+            a.strip_prefix('-')
+        } else {
+            None
+        }
+    });
+    if let Some(long) = long {
+        return !long.contains('=') && grammar.valued_long.contains(&long);
+    }
+    let Some(cluster) = a.strip_prefix('-') else {
+        return false;
+    };
+    for (offset, letter) in cluster.char_indices() {
+        if grammar.attached_only.contains(letter) {
+            return false;
+        }
+        if grammar.valued.contains(letter) {
+            return offset + letter.len_utf8() == cluster.len();
+        }
+    }
+    false
+}
+
+/// Whether `word` is GNU nice's older adjustment form, `-N`, `--N` or
+/// `-+N`.
+fn nice_adjustment(word: &str) -> bool {
+    let digits = word
+        .strip_prefix('-')
+        .map(|rest| rest.strip_prefix(['-', '+']).unwrap_or(rest));
+    digits.is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Where the command after the launcher `name` starts, reading its options
+/// from `idx` by its grammar ([`launch_grammar`]): the
+/// [`OPTION_LAUNCHERS`] and, through [`prefix_launch`], the prefix
+/// launchers. A name that is not a whole option of the launcher (an
+/// abbreviation, an unknown letter) is [`Launch::Unread`], so the caller
+/// refuses rather than guess. `chrt`'s priority is skipped only when it is
+/// a number, since some policies let it be left out, and `timeout`'s
+/// duration must be one the guard reads.
+pub(crate) fn launch_after(name: &str, tokens: &[String], mut idx: usize) -> Launch {
+    let grammar = launch_grammar(name);
+    let unread = |form: &str| Launch::Unread(format!("{form}, an option the guard does not read"));
+    while let Some(word) = tokens.get(idx).map(String::as_str) {
+        if word == "--" {
             idx += 1;
             break;
         }
-        if !a.starts_with('-') || a.len() < 2 {
+        // sudo stores an environment assignment met before `--` and then
+        // resumes reading its options, so options may follow it
+        // (sudo's `parse_args.c`). The other launchers here stop at the
+        // first word that is not an option.
+        if name == "sudo" && sudo_assignment(word) {
+            idx += 1;
+            continue;
+        }
+        if !word.starts_with('-') || word.len() < 2 {
             break;
         }
-        if launcher == "command" && a.contains(['v', 'V']) {
-            return None;
+        idx += 1;
+        if name == "nice" && nice_adjustment(word) {
+            continue;
         }
-        // `xcrun --find tool` and `xcrun -f tool` only print a path.
-        if launcher == "xcrun" && matches!(a, "-f" | "--find") {
-            return None;
+        let long = word
+            .strip_prefix("--")
+            .or_else(|| grammar.one_dash_long.then(|| &word[1..]));
+        if let Some(long) = long {
+            let (option, attached) = long
+                .split_once('=')
+                .map_or((long, false), |(o, _)| (o, true));
+            if grammar.stops_long.contains(&option) {
+                return Launch::Nothing;
+            }
+            if grammar.valued_long.contains(&option) {
+                idx += usize::from(!attached);
+                continue;
+            }
+            if grammar.flags_long.contains(&option) && !attached {
+                continue;
+            }
+            return unread(&format!("`{name} {word}`"));
         }
-        idx += 1 + usize::from(takes_next_word(launcher, a));
+        let cluster = &word[1..];
+        for (offset, letter) in cluster.char_indices() {
+            let rest = &cluster[offset + letter.len_utf8()..];
+            if grammar.stops.contains(letter) {
+                return Launch::Nothing;
+            }
+            if grammar.attached_only.contains(letter) {
+                if !rest.is_empty() {
+                    break;
+                }
+                // sudo's `-h` written alone takes the next word as the host
+                // when it is not an option or an assignment; otherwise it
+                // asks for help (sudo's `parse_args.c`).
+                let host = tokens
+                    .get(idx)
+                    .is_some_and(|next| !next.starts_with('-') && !sudo_assignment(next));
+                if name == "sudo" && cluster.len() == 1 && host {
+                    idx += 1;
+                    break;
+                }
+                return Launch::Nothing;
+            }
+            if grammar.valued.contains(letter) {
+                idx += usize::from(rest.is_empty());
+                break;
+            }
+            if !grammar.flags.contains(letter) {
+                return unread(&format!("`{name} -{letter}`"));
+            }
+        }
     }
-    // `timeout [options] DURATION command`.
-    if launcher == "timeout" {
+    if grammar.operand
+        && tokens
+            .get(idx)
+            .is_some_and(|w| name != "chrt" || w.bytes().all(|b| b.is_ascii_digit()))
+    {
         idx += 1;
     }
-    Some(idx)
+    // `timeout [options] DURATION command`.
+    if name == "timeout" {
+        if !tokens.get(idx).is_some_and(|d| is_duration(d)) {
+            return Launch::Unread("`timeout` without a duration the guard can read".to_string());
+        }
+        idx += 1;
+    }
+    // gsudo reads a verb after its options: `run` runs the words after it,
+    // the quiet verbs run no command, a `!` verb reruns an earlier command
+    // the guard cannot name, and any other word is the command.
+    if name == "gsudo" {
+        match tokens.get(idx).map(String::as_str) {
+            Some("run") => idx += 1,
+            Some(verb) if GSUDO_QUIET_VERBS.contains(&verb) => return Launch::Nothing,
+            Some(verb) if verb.starts_with('!') => {
+                return Launch::Unread(format!(
+                    "`{name} {verb}`, a verb whose command the guard cannot name"
+                ));
+            }
+            _ => {}
+        }
+    }
+    if idx >= tokens.len() && SHELL_LAUNCHERS.contains(&name) {
+        return Launch::Shell;
+    }
+    Launch::Runs(idx)
 }
 
-/// `true` when the option `a` takes the next word as its value: `exec -a
-/// NAME` (a name attached as in `-aNAME` is its own value), `time -o FILE`
-/// or `--output FILE` (`--output=FILE` carries its own), `nice -n N`,
-/// `timeout -s SIG` or `-k DURATION`, `stdbuf -o MODE`, `ionice -c CLASS`,
-/// `caffeinate -t SECONDS` and `xcrun --sdk SDK`.
-fn takes_next_word(launcher: &str, a: &str) -> bool {
-    let long_valued: &[&str] = match launcher {
-        "time" => &["--output", "--format"],
-        "timeout" => &["--signal", "--kill-after"],
-        "nice" => &["--adjustment"],
-        "stdbuf" => &["--input", "--output", "--error"],
-        "ionice" => &["--class", "--classdata", "--pid", "--pgid", "--uid"],
-        "xcrun" => &["--sdk", "--toolchain"],
-        "arch" => &["-arch", "-e", "-d"],
-        _ => &[],
+/// Whether sudo reads `word` as an environment assignment. sudo hands each
+/// word to `getopt_long` first and tests for an assignment only when getopt
+/// finds no option there, so a word starting with `-` is always an option
+/// (an unknown one is a usage error), never an assignment. Of the words
+/// getopt leaves, an assignment holds `=` and starts with neither `/` nor
+/// `=` (`is_envar` in sudo's `parse_args.c`); sudo does not check the name
+/// before `=`, so neither does this.
+fn sudo_assignment(word: &str) -> bool {
+    word.contains('=') && !word.starts_with(['-', '/', '='])
+}
+
+/// Whether `busybox APPLET` runs `applet` as the program for the readers:
+/// a shell, `ln`, `link`, `cp` or `dd`, or a launcher of the inventory
+/// (`security/launchers.rs`), whose command the readers then read
+/// (TSK-1490 AC-8).
+fn busybox_launches(applet: &str) -> bool {
+    is_shell(applet)
+        || matches!(applet, "ln" | "link" | "cp" | "dd")
+        || (applet != "busybox"
+            && crate::security::launchers::LAUNCHERS.contains(&launcher_name(applet)))
+}
+
+/// Why the [`OPTION_LAUNCHERS`] launcher `name`, with the option words
+/// `options`, runs its command in a directory the guard does not follow:
+/// `sudo`'s login, directory and root options, and `pkexec`, which moves
+/// to the target user's home unless told to keep the directory. `None`
+/// for the others, which keep the directory.
+fn launcher_moves(name: &str, options: &[String]) -> Option<String> {
+    let moved = match name {
+        "sudo" => options.iter().any(|w| {
+            matches!(
+                w.split('=').next(),
+                Some("--login" | "--chdir" | "--chroot")
+            ) || (!w.starts_with("--")
+                && w.starts_with('-')
+                && w.trim_start_matches('-').contains(['i', 'D', 'R']))
+        }),
+        "pkexec" => !options.iter().any(|w| w == "--keep-cwd"),
+        _ => false,
     };
-    if long_valued.contains(&a) {
-        return true;
-    }
-    let Some(flags) = a.strip_prefix('-').filter(|f| !f.starts_with('-')) else {
-        return false;
-    };
-    let valued: &[char] = match launcher {
-        "exec" => &['a'],
-        "time" => &['o', 'f'],
-        "nice" => &['n'],
-        "timeout" => &['s', 'k'],
-        "stdbuf" => &['i', 'o', 'e'],
-        "ionice" => &['c', 'n', 'p', 'P', 'u'],
-        "caffeinate" => &['t', 'w'],
-        _ => return false,
-    };
-    flags.find(valued).is_some_and(|at| at + 1 == flags.len())
+    moved.then(|| format!("`{name}`, which can run the command in another directory"))
 }
 
 /// Known shell names, including versioned and Windows executable spellings.
@@ -18748,6 +19996,7 @@ mod tests {
         for cmd in [
             "env -S 'echo hi'",
             "env -S 'git config --global user.name Test'",
+            "FOO=1 env -S 'git config --global user.name Test'",
             "bash -c \"bash -c 'git status'\"",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
@@ -18760,6 +20009,16 @@ mod tests {
             expand_commands("env -S 'git status'")[1..],
             ["\"env\" git status".to_string()]
         );
+        // An assignment in front keeps its reading in the rebuilt text: a
+        // quoted `NAME=` would be a program to the shell (TSK-1456). The
+        // shell's reading of a quoted one is still judged on the line.
+        assert_eq!(
+            expand_commands("FOO=1 env -S 'git status'")[1..],
+            ["FOO=\"1\" \"env\" git status".to_string()]
+        );
+        let quoted = "\"FOO=1\" env -S 'git config --global user.name Test'";
+        let v = evaluate(quoted, &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.hook_integrity"), "{quoted}: {v:?}");
         // A body nested past the limit refuses instead of passing unread.
         let mut deep = "git status".to_string();
         for _ in 0..12 {
@@ -18847,22 +20106,177 @@ mod tests {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
         }
+        let cmd = "find . -name '*.rs' -exec ls {} \\;";
+        let v = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert!(v.is_empty(), "{cmd}: {v:?}");
+        // The runners the guard keeps no grammar for refuse whatever they
+        // run (TSK-1490); the way through is the inner command run directly.
         for cmd in [
             "flock /tmp/l -c 'git status'",
             "script -q /dev/null git status",
-            "script -q /dev/null git -c color.ui=never log",
             "watch git status",
             "parallel echo ::: a b",
             "setsid git config --global user.name Test",
-            "find . -name '*.rs' -exec ls {} \\;",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
-            assert!(v.is_empty(), "{cmd}: {v:?}");
+            assert!(has_rule(&v, AGENT_PUSH_RULE), "{cmd}: {v:?}");
         }
         // `xargs` and `find -exec` hand over only git or a command string:
         // another program's arguments come from input the guard cannot see.
         assert_eq!(expand_commands("printf x | xargs rm").len(), 2);
         assert_eq!(expand_commands("find . -exec rm {} +").len(), 1);
+    }
+
+    /// TSK-1490 AC-1: a command a program runs from one of its option
+    /// values gets every rule the command gets written bare. Each row names
+    /// the rule. A row may add a rule of its own: the carried words stay on
+    /// the line, and a closed rule refuses a line it cannot resolve beside
+    /// them.
+    #[test]
+    fn a_command_in_an_option_value_gets_the_bare_verdict() {
+        use crate::security::guard_forms::{
+            OPTION_BARE_GIT, OPTION_CARRIERS, OPTION_CLONE_CARRIERS, OPTION_CLONE_GIT,
+        };
+        let p = default_policy();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for (forms, values, bare_of) in [
+            (OPTION_CARRIERS, OPTION_BARE_GIT, "{}"),
+            (OPTION_CLONE_CARRIERS, OPTION_CLONE_GIT, "git clone {} o/r"),
+        ] {
+            for value in values {
+                let bare = rules(&bare_of.replace("{}", value));
+                assert!(!bare.is_empty(), "{value}");
+                for form in forms {
+                    let carried = form.replace("{}", value);
+                    let got = rules(&carried);
+                    if !bare.is_subset(&got) {
+                        failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 AC-1: a carried command gets the bare
+    /// command's rule at the level the policy sets it to, block, warn or
+    /// off, and nothing of that rule when the bare command gets nothing.
+    #[test]
+    fn a_command_in_an_option_value_takes_the_bare_rule_at_each_level() {
+        use crate::security::guard_forms::OPTION_CARRIERS;
+        let values = [
+            "git push --force origin main",
+            "git push origin --delete main",
+        ];
+        let wanted: std::collections::BTreeSet<String> = values
+            .iter()
+            .flat_map(|value| evaluate(value, &ctx(&default_policy(), "feat/x")))
+            .map(|v| v.rule)
+            .collect();
+        assert!(!wanted.is_empty());
+        let mut failed = Vec::new();
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let p = GitPolicy {
+                force_push_protected: level,
+                force_push_unprotected: level,
+                delete_protected: level,
+                ..default_policy()
+            };
+            let levels = |cmd: &str| -> std::collections::BTreeMap<String, PolicyLevel> {
+                evaluate(cmd, &ctx(&p, "feat/x"))
+                    .into_iter()
+                    .filter(|v| wanted.contains(&v.rule))
+                    .map(|v| (v.rule, v.level))
+                    .collect()
+            };
+            for value in values {
+                let want = levels(value);
+                for form in OPTION_CARRIERS {
+                    let carried = form.replace("{}", value);
+                    let got = levels(&carried);
+                    if got != want {
+                        failed.push(format!("{level:?} {carried}: {got:?}, want {want:?}"));
+                    }
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490: an option value in a command language
+    /// the guard does not read refuses under hook integrity; an ordinary
+    /// value, another option or a form the reader does not reach adds no
+    /// rule to the command without it (AC-2).
+    #[test]
+    fn an_option_value_the_guard_cannot_read_refuses_and_ordinary_values_keep_their_verdict() {
+        use crate::security::guard_forms::{OPTION_CONTROLS, OPTION_LANGUAGES};
+        let p = default_policy();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate(cmd, &ctx(&p, "feat/x"))
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for cmd in OPTION_LANGUAGES {
+            let got = rules(cmd);
+            if !got.contains("git.hook_integrity") {
+                failed.push(format!("refuse {cmd}: {got:?}"));
+            }
+        }
+        for (cmd, without) in OPTION_CONTROLS {
+            let (got, want) = (rules(cmd), rules(without));
+            if got != want {
+                failed.push(format!("keep {cmd}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490: a startup setting whose value sets the
+    /// startup-command setting again refuses under hook integrity with its
+    /// own reason, whatever the innermost setting names.
+    #[test]
+    fn a_startup_setting_nested_in_an_option_value_refuses() {
+        use crate::security::guard_forms::OPTION_NESTED_SETTINGS;
+        let p = default_policy();
+        let mut failed = Vec::new();
+        for cmd in OPTION_NESTED_SETTINGS {
+            let got = evaluate(cmd, &ctx(&p, "feat/x"));
+            if !got
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains("startup setting"))
+            {
+                failed.push(format!("{cmd}: {got:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
     }
 
     #[test]
@@ -20109,8 +21523,8 @@ mod tests {
         };
         let policy = default_policy();
         for command in [
-            "printf 'README.md/n' | xargs sort".to_string(),
-            "printf 'README.md/n' | xargs -I{} uniq {}".into(),
+            "printf 'README.md/n' | xargs wc -l".to_string(),
+            "printf 'README.md/n' | xargs uniq".into(),
             "rm -f README.md/child".into(),
             format!("rm -f {refused}"),
             format!("rm -f {refused}/child"),
@@ -22999,6 +24413,467 @@ mod tests {
         }
         let r = report("env FOO=1 git -C /scratch commit -m x", "main");
         assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // TSK-1490 AC-7: a carried command the program runs in another literal
+    // directory is judged in that directory's repository, as the command
+    // written bare after a change there is; one run in a directory the
+    // guard cannot establish refuses under hook integrity.
+    #[test]
+    fn a_carried_command_is_judged_where_it_runs() {
+        use crate::security::guard_forms::{
+            OPTION_RUN_DIRECTORIES, OPTION_UNKNOWN_RUN_DIRECTORIES,
+        };
+        let payload = "git commit -m x";
+        let bare = report(&format!("cd /scratch-main && {payload}"), "feat/s");
+        assert!(has_rule(&bare.violations, "git.commit_to_protected"));
+        let mut failed = Vec::new();
+        for form in OPTION_RUN_DIRECTORIES {
+            let cmd = form.replace("{}", payload);
+            let r = report(&cmd, "feat/s");
+            if !has_rule(&r.violations, "git.commit_to_protected") {
+                failed.push(format!("judge where it runs: {cmd}: {:?}", r.violations));
+            }
+        }
+        for form in OPTION_UNKNOWN_RUN_DIRECTORIES {
+            let cmd = form.replace("{}", payload);
+            let r = report(&cmd, "feat/s");
+            if !r
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.message.contains("directory"))
+            {
+                failed.push(format!("refuse: {cmd}: {:?}", r.violations));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490: a commit the guard cannot place keeps the protected-branch
+    // rule with hook integrity off as well as on: after a launcher option
+    // it does not read (a valued unknown option or an abbreviation), in a
+    // directory it cannot establish, through a manual program's pager, and
+    // in a directory option after a carried command's `--`. The same after
+    // environment assignments a launcher reads among its options, before
+    // or between them, and in a shell's command that a launcher runs as
+    // another user; behind a split string after any modelled launcher,
+    // behind a launcher's execution verb, and in the input of a shell a
+    // privilege launcher runs with no command; and behind any prefix
+    // launcher's option outside its grammar (an abbreviated long option or
+    // an unknown letter), a carrier hidden
+    // behind one, and a carried command whose directory option follows a
+    // `--` that another option takes as its value. A commit the guard can
+    // place still passes, including one whose launcher only names a
+    // privilege launcher as an option value, and each prefix launcher's
+    // documented options.
+    #[test]
+    fn an_unplaced_commit_keeps_the_protected_branch_rule() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let strict = default_policy();
+        let judged = |policy: &GitPolicy, cmd: &str| {
+            fixture_report(
+                cmd,
+                &ctx_with_dir_branch(policy, "feat/s", &fixture_resolver),
+            )
+        };
+        let mut failed = Vec::new();
+        for cmd in [
+            "taskset --cpu-l 0 git commit -m x",
+            "taskset --cpu-l 0 bash -c 'git commit -m x'",
+            "sudo --us root git commit -m x",
+            "sudo --us git git commit -m x",
+            "doas -Z x git commit -m x",
+            "chrt --rr-x 5 git commit -m x",
+            "env --bogus v git commit -m x",
+            "env --bogus v sh -c 'git commit -m x'",
+            "sudo -h host git commit -m x",
+            "fd -C \"$D\" -x git commit -m x",
+            "man -P 'git commit -m x' ls",
+            "fd x -x git commit -m x -- ';' --base-directory /scratch-main",
+            "sudo LC_ALL=C -n git commit -m x",
+            "sudo -n LC_ALL=C -u root git commit -m x",
+            "sudo A=1 B=2 -n -- git commit -m x",
+            "sudo LC_ALL=C -n sh -c 'git commit -m x'",
+            "sudo -n sh -c 'git commit -m x'",
+            "doas sh -c 'git commit -m x'",
+            "sudo -n -- LC_ALL=C git commit -m x",
+            "sudo -n env -S 'git commit -m x'",
+            "taskset -c 0 sudo -n env -S 'git commit -m x'",
+            "gsudo run git commit -m x",
+            "gsudo -n run sh -c 'git commit -m x'",
+            "sudo -s <<< 'git commit -m x'",
+            "doas -s <<'EOF'\ngit commit -m x\nEOF",
+            "printf 'git commit -m x' | pkexec",
+            "su <<< 'git commit -m x'",
+            "runuser -u root git commit -m x",
+            "nice --adjust 5 git commit -m x",
+            "/usr/bin/nice --adj 5 sh -c 'git commit -m x'",
+            "timeout --sig KILL 5 git commit -m x",
+            "/usr/bin/time --out /dev/null git commit -m x",
+            "stdbuf --out L git commit -m x",
+            "ionice --cl 3 git commit -m x",
+            "xcrun --sd macosx git commit -m x",
+            "exec -X git commit -m x",
+            "nice --adjust 5 man -P 'git commit -m x' ls",
+            "tar -cf -- -C /scratch-main -I 'git commit -m x' input.txt",
+            "watch --inter 1 git commit -m x",
+            "flock --conflict 75 /tmp/lock git commit -m x",
+            "setsid -f git commit -m x",
+            "gh repo clone o/r --upstream-remote-name -- -- -u 'git commit -m x'",
+        ] {
+            // With hook integrity off the protected-branch rule refuses on
+            // its own; with it on, the line refuses under either rule.
+            let off = judged(&relaxed, cmd);
+            if !has_rule(&off.violations, "git.commit_to_protected") {
+                failed.push(format!("hook integrity off: {cmd}: {:?}", off.violations));
+            }
+            let on = judged(&strict, cmd);
+            if !on.violations.iter().any(|v| {
+                v.level == PolicyLevel::Block
+                    && matches!(
+                        v.rule.as_str(),
+                        "git.commit_to_protected" | "git.hook_integrity"
+                    )
+            }) {
+                failed.push(format!("hook integrity block: {cmd}: {:?}", on.violations));
+            }
+        }
+        for cmd in [
+            "git commit -m x",
+            "taskset -c 0 git commit -m x",
+            "sudo -h",
+            "man -P cat ls",
+            "sudo LC_ALL=C -n ls",
+            "nice -n 5 sh -c 'git commit -m x'",
+            "taskset -c 0 env -S 'git commit -m x'",
+            "exec -a sudo sh <<< 'git commit -m x'",
+            "exec -a doas sh -c 'git commit -m x'",
+            "gsudo status",
+            "nice --adjustment 5 git commit -m x",
+            "nice -10 git commit -m x",
+            "timeout -k 5 10 git commit -m x",
+            "timeout --signal=KILL 5 git commit -m x",
+            "ionice -c 3 git commit -m x",
+            "caffeinate -i git commit -m x",
+        ] {
+            let r = judged(&relaxed, cmd);
+            if !r.violations.is_empty() {
+                failed.push(format!("pass: {cmd}: {:?}", r.violations));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490 AC-8: the location reader reads every launcher of the shared
+    // inventory in front of Git, each spelling, and the assignments after
+    // it; a launcher whose effect it does not model leaves the target
+    // unresolved, which refuses. Every launcher of the inventory has rows,
+    // by its name, its path and its GNU name; the zsh precommand modifiers
+    // are shell syntax, never a program path.
+    #[test]
+    fn every_inventory_launcher_keeps_the_repository_judged() {
+        use crate::security::launchers::LAUNCHERS;
+        let forms: &[(&str, &[&str])] = &[
+            ("-", &[""]),
+            ("builtin", &[""]),
+            ("busybox", &["nohup", "env", "timeout 5"]),
+            ("caffeinate", &["-i"]),
+            ("chrt", &["-f 10", "10", "--fifo 10"]),
+            ("command", &["-p"]),
+            ("doas", &["", "-u root", "-n"]),
+            ("env", &[""]),
+            ("exec", &["-a x"]),
+            ("gsudo", &["", "-n", "--integrity Medium"]),
+            ("ionice", &["-c 3"]),
+            ("nice", &["-n 5"]),
+            ("nocorrect", &[""]),
+            ("noglob", &[""]),
+            ("nohup", &[""]),
+            ("pkexec", &["", "--user root", "--keep-cwd"]),
+            ("setsid", &["-f"]),
+            ("stdbuf", &["-o L"]),
+            (
+                "sudo",
+                &["", "-u root", "-E", "--user=root", "-iu root", "-D /x"],
+            ),
+            ("taskset", &["0x1", "-c 0", "--cpu-list 0"]),
+            ("time", &["-p"]),
+            ("timeout", &["5"]),
+            ("unbuffer", &["-p"]),
+            ("xcrun", &[""]),
+        ];
+        let named: Vec<&str> = forms.iter().map(|(name, _)| *name).collect();
+        assert_eq!(named, LAUNCHERS, "every inventory launcher has rows");
+        let mut launchers = Vec::new();
+        for (name, args) in forms {
+            let mut spellings = vec![(*name).to_string()];
+            if !is_shell_modifier(name) {
+                spellings.push(format!("/usr/bin/{name}"));
+            }
+            if GNU_LAUNCHERS.contains(name) {
+                spellings.push(format!("g{name}"));
+            }
+            for spelling in &spellings {
+                for arg in *args {
+                    launchers.push(format!("{spelling} {arg}").trim_end().to_string());
+                }
+            }
+        }
+        let mut failed = Vec::new();
+        for launcher in &launchers {
+            for tail in [
+                "env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+                "GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            ] {
+                let cmd = format!("R=/scratch; {launcher} {tail}");
+                let r = report(&cmd, "feat/s");
+                if !has_rule(&r.violations, "git.commit_to_protected") {
+                    failed.push(format!("{cmd}: {:?}", r.violations));
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+        // An ordinary launcher with an ordinary assignment keeps its verdict;
+        // so does a scheduling launcher, which moves nothing, and a mode of
+        // a launcher that runs no command.
+        for cmd in [
+            "nohup env FOO=1 git -C /scratch commit -m x",
+            "timeout 5 git -C /scratch commit -m x",
+            "chrt -f 10 git -C /scratch commit -m x",
+            "taskset -c 0 git -C /scratch commit -m x",
+            "busybox nohup git -C /scratch commit -m x",
+            "sudo -l git commit -m x",
+            "chrt -p 1234",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // TSK-1490: a launcher option outside a launcher's closed grammar is
+    // never skipped to reach the command. Each launcher read by an option
+    // grammar, bare and as a path, with an unknown long option in front
+    // of a Git call: the walk is unresolved, or names the unknown word
+    // itself as the program, and never resolves to the Git call.
+    #[test]
+    fn every_launcher_grammar_leaves_an_unknown_option_unresolved() {
+        let mut names: Vec<&str> = PREFIX_LAUNCHERS.to_vec();
+        names.extend(OPTION_LAUNCHERS);
+        names.push("env");
+        let mut failed = Vec::new();
+        for name in names {
+            for spelling in [name.to_string(), format!("/usr/bin/{name}")] {
+                for unknown in ["--bogus-option", "--bogus-option=1", "--bogus-option 1"] {
+                    let line = format!("{spelling} {unknown} git push origin HEAD:refs/heads/x");
+                    let words: Vec<String> = line.split(' ').map(str::to_string).collect();
+                    let walk = Walk::read(&words);
+                    let reached_git = walk.program.is_some_and(|at| words[at] == "git");
+                    if walk.unread.is_none() && reached_git {
+                        failed.push(line);
+                    }
+                }
+            }
+        }
+        assert!(failed.is_empty(), "guessed past:\n{}", failed.join("\n"));
+    }
+
+    // TSK-1490: `busybox` is read only through the applets the walk
+    // models (a shell, a file copier, a launcher of the inventory). Any
+    // other applet, a runner among them, and any option leave the walk
+    // unresolved, and the agent push rule refuses the line.
+    #[test]
+    fn busybox_reads_only_the_applets_it_models() {
+        let push = "git push origin HEAD:refs/heads/integration/EPC-001-line";
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        for line in [
+            format!("busybox xargs {push}"),
+            format!("busybox watch {push}"),
+            format!("busybox flock /tmp/l {push}"),
+            format!("busybox find . -exec {push} ;"),
+            format!("busybox frobnicate {push}"),
+            format!("/bin/busybox chpst -u x {push}"),
+            format!("busybox --list {push}"),
+            "busybox ls".to_string(),
+        ] {
+            assert!(Walk::read(&words(&line)).unread.is_some(), "{line}");
+            assert!(unresolved_push(&words(&line)).is_some(), "{line}");
+        }
+        for (line, program) in [
+            ("busybox nohup git status", "git"),
+            ("busybox env FOO=1 git status", "git"),
+            ("busybox sh -c x", "sh"),
+            ("busybox ln -s a b", "ln"),
+        ] {
+            let all = words(line);
+            let walk = Walk::read(&all);
+            assert!(walk.unread.is_none(), "{line}");
+            assert_eq!(
+                walk.program.map(|at| all[at].as_str()),
+                Some(program),
+                "{line}"
+            );
+        }
+        assert!(Walk::read(&words("busybox")).unread.is_none());
+    }
+
+    // TSK-1490: a launcher's options end at its first word that is not one
+    // (env after an assignment, the others at `--`, an operand or a verb),
+    // and the word there is what the launcher runs. The walk reads an
+    // option-shaped word there exactly ([`Walk::option_program`]), and the
+    // agent push rule refuses the line with hook integrity off. The walk is
+    // not a guess, so a reader of the exact program, such as the headless
+    // check, still reads it: `env X=/bin/claude -p hello` runs `-p` with
+    // `X` set, and runs no peer.
+    #[test]
+    fn an_option_shaped_program_after_a_launcher_is_refused() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        let mut failed = Vec::new();
+        for line in [
+            "env X=1 -p",
+            "env -i X=1 -p",
+            "env X=1 -- git push origin HEAD:refs/heads/main",
+            "env -- -p",
+            "nice -- -p",
+            "nohup -p",
+            "noglob -p",
+            "timeout 5 -p",
+            "taskset 0x1 -p",
+            "chrt 10 -p",
+            "sudo -- -p",
+            "doas -- -p",
+            "gsudo run -p",
+            "/usr/bin/time -- -p",
+            "busybox nohup -p",
+        ] {
+            let walk = Walk::read(&words(line));
+            if walk.unread.is_none() && walk.option_program.is_none() {
+                failed.push(format!("walk admitted: {line}"));
+            }
+            let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+            if !has_rule(&v, AGENT_PUSH_RULE) {
+                failed.push(format!("not refused: {line}: {v:?}"));
+            }
+        }
+        // A guarded command after env's assignment is judged as written.
+        let line = "env X=1 git push origin HEAD:refs/heads/main";
+        let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+        if !has_rule(&v, AGENT_PUSH_RULE) {
+            failed.push(format!("not refused: {line}: {v:?}"));
+        }
+        // Main's headless row: the walk reads `-p` exactly, not as a guess.
+        let all = words("env X=/bin/claude -p hello");
+        let walk = Walk::read(&all);
+        if walk.unread.is_some() || walk.program.map(|at| all[at].as_str()) != Some("-p") {
+            failed.push(format!("control: env X=/bin/claude -p hello: {walk:?}"));
+        }
+        for (line, program) in [
+            ("env X=1 git status", "git"),
+            ("nice -n 5 git status", "git"),
+            ("timeout 5 git status", "git"),
+            ("sudo -- git status", "git"),
+        ] {
+            let all = words(line);
+            let walk = Walk::read(&all);
+            if walk.unread.is_some()
+                || walk.option_program.is_some()
+                || walk.program.map(|at| all[at].as_str()) != Some(program)
+            {
+                failed.push(format!("control: {line}: {walk:?}"));
+            }
+            let v = evaluate(line, &ctx(&relaxed, "feat/x"));
+            if !v.is_empty() {
+                failed.push(format!("control refused: {line}: {v:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    // TSK-1490: `xargs` and `find -exec` exec their command with no shell,
+    // as a launcher does. A command whose program is option-shaped, as its
+    // first word or behind a launcher in it, is refused with hook
+    // integrity off, and the runner's walk stays read, never a guess, so a
+    // reader of the exact program still reads it. A runner command with an
+    // ordinary program keeps its verdict.
+    #[test]
+    fn a_runner_running_an_option_shaped_program_is_refused() {
+        let relaxed = GitPolicy {
+            hook_integrity: PolicyLevel::Off,
+            ..default_policy()
+        };
+        let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_string).collect() };
+        let mut failed = Vec::new();
+        for (line, shell) in [
+            (
+                "find . -exec env X=/bin/claude -p hello {} ;",
+                "find . -exec env X=/bin/claude -p hello '{}' \\;",
+            ),
+            (
+                "find . -execdir nice -- -p {} +",
+                "find . -execdir nice -- -p {} +",
+            ),
+            ("find . -exec -p {} +", "find . -exec -p {} +"),
+            ("xargs env X=1 -p", "xargs env X=1 -p"),
+            ("xargs -0 nice -- -p", "xargs -0 nice -- -p"),
+            ("xargs -p", "xargs -p"),
+            (
+                "sudo find . -exec env X=1 -p {} ;",
+                "sudo find . -exec env X=1 -p {} \\;",
+            ),
+        ] {
+            let walk = Walk::read(&words(line));
+            // `xargs -p` is xargs' own prompt option, outside its daily
+            // form: unread, as before.
+            if line != "xargs -p" && (walk.unread.is_some() || walk.option_program.is_none()) {
+                failed.push(format!("walk: {line}: {walk:?}"));
+            }
+            let v = evaluate(shell, &ctx(&relaxed, "feat/x"));
+            if !has_rule(&v, AGENT_PUSH_RULE) {
+                failed.push(format!("not refused: {shell}: {v:?}"));
+            }
+        }
+        for line in [
+            "find . -exec env X=1 ls {} ;",
+            "xargs env X=1 wc -l",
+            "find . -name x -exec nice -n 5 ls {} +",
+        ] {
+            let walk = Walk::read(&words(line));
+            if walk.unread.is_some() || walk.option_program.is_some() {
+                failed.push(format!("control walk: {line}: {walk:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
     }
 
     // A git op nested in a substitution runs in a subshell whose own `cd`

@@ -666,8 +666,8 @@
   ],
   [
     "busybox ls",
-    0,
-    0
+    2,
+    2
   ],
   [
     "busybox sh -c 'ls'",
@@ -771,7 +771,7 @@
   ],
   [
     "script -q out.txt bash -c 'ls'",
-    0,
-    0
+    2,
+    2
   ]
 ]

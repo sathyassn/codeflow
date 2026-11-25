@@ -261,6 +261,11 @@ fn no_program_keeps_its_words_to_itself() {
         .chain(MODELED_LAUNCHERS)
         .chain(crate::hooks::git_guard::PREFIX_LAUNCHERS)
         .chain(crate::hooks::git_guard::COMMAND_CARRIERS)
+        .chain(
+            crate::security::option_commands::OPTION_COMMANDS
+                .iter()
+                .flat_map(|row| row.programs),
+        )
         .chain(&[
             "echo", "printf", "cd", "pushd", "popd", "chdir", "ls", "cat", "true", "[", "test",
             "wc", "grep", "head", "builtin", "sudo", "eval", "find",

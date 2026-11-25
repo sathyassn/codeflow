@@ -264,6 +264,7 @@ const ROWS: &[(&str, Proof)] = &[
     ("REGISTRY_UNWRITTEN", Runs),
     ("REGISTRY_ROOT_UNREADABLE", Runs),
     ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
+    ("OPTION_LANGUAGE", Runs),
 ];
 
 #[test]

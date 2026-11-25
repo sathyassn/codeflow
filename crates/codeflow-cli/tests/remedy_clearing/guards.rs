@@ -65,6 +65,25 @@ fn clears_secret_selection() {
     assert!(String::from_utf8(output.stdout).unwrap().contains("token"));
 }
 
+/// TSK-1490: a build tool setting that names a program refuses on the
+/// command line; set in the project's committed configuration, as the step
+/// says, the same build passes.
+#[test]
+fn clears_option_language() {
+    let dir = ci_repo(DEFAULTS);
+    let root = dir.path();
+    let printed = refused(
+        root,
+        "exec-guard",
+        "cargo --config target.x.runner=y build",
+        "git.hook_integrity",
+        "OPTION_LANGUAGE",
+    );
+    assert!(printed.contains(".cargo/config.toml"), "{printed}");
+    write(root, ".cargo/config.toml", "[target.x]\nrunner = \"y\"\n");
+    assert_passes(root, "exec-guard", "cargo build");
+}
+
 /// The block a guard prints for `bad`, checked against the row.
 fn refused(root: &Path, which: &str, bad: &str, finding: &str, row: &str) -> String {
     let out = guard(root, which, bad);

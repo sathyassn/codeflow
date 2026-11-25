@@ -104,9 +104,10 @@ impl Token {
 /// Who reads the words in front of a command (TSK-1456): the shell, at the
 /// start of a simple command, or `env` (and `sudo`), which read their own
 /// argument list up to the command they run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Taker {
     /// The shell's own words in front of a simple command.
+    #[default]
     Shell,
     /// The words a launcher such as `env` reads before its command.
     Env,

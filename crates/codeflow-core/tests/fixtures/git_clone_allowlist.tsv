@@ -2,6 +2,11 @@
 crates/codeflow-cli/tests/delegate_pty_stress.rs	expect("clone PTY reader")	1	Diagnostic for duplicating a PTY reader, unrelated to Git.
 crates/codeflow-cli/tests/remedy_clearing/records.rs	join("clone")	2	Fixture directory name only; not a command argument.
 crates/codeflow-core/src/hooks/git_guard.rs	"clone"	1	Git subcommand vocabulary used for command classification; never executes this literal.
+crates/codeflow-core/src/hooks/git_guard.rs	"git clone {} o/r"	1	TSK-1490 test template for the bare command a carried clone argument is compared with; judged as text, never executed.
+crates/codeflow-core/src/hooks/exec_guard.rs	"git clone {} o/r"	1	TSK-1490 test template for the bare command a carried clone argument is compared with; judged as text, never executed.
+crates/codeflow-core/src/security/option_commands.rs	"clone"	2	TSK-1490 inventory subcommand words that select which program arguments the guards read; never starts Git.
+crates/codeflow-core/src/security/option_commands.rs	"git clone"	1	TSK-1490 reader builds the text of the clone a program would run so the guards judge it; the text is judged, never executed.
+crates/codeflow-core/src/security/option_commands.rs	Command("git clone \"-u\" \"x\" \"o/r\"".into())	1	TSK-1490 unit test expectation for the judged clone text; never executed.
 crates/codeflow-core/src/hooks/git_guard.rs	matches!(verb,"clone"|"init")	1	Git creation classification only; never starts Git.
 crates/codeflow-core/src/hooks/git_guard.rs	is_none_or(|(verb,rest)|matchverb{"grep"=>replaced||!runners::closed_grep_options(rest),"branch"|"reset"|"config"|"worktree"|"update-ref"|"symbolic-ref"|"push"|"clean"|"checkout"|"switch"|"restore"|"rm"|"mv"|"commit"|"merge"|"cherry-pick"|"rebase"|"bisect"|"submodule"|"fast-import"|"clone"|"init"|"fetch"|"pull"|"stash"=>true,_=>expands(verb)||runners::command_options(verb)||!GIT_BUILTINS.contains(&verb),})	1	Classifies xargs Git verbs for refusal; never starts Git.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"clone /source"	1	Inert hook payload for the enforcement-directory refusal matrix; passed to CodeFlow for judgment, never executed as Git.
@@ -76,3 +81,4 @@ crates/codeflow-core/src/security/git_preflight.rs	unclassified_environment("GIT
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone 'ext::sh -c cat% ~/.codex/auth.json' copy"	1	Inert ext:: transport payload judged by the built hook; no Git clone executes.
 crates/codeflow-cli/tests/hooks_cli/target_repository.rs	"git clone -u 'cat ~/.codex/auth.json' ../.. copy"	1	Inert upload-pack command payload judged by the built hook; no Git clone executes.
 crates/codeflow-core/src/hooks/agent_transport_tests.rs	rows(&["git push origin HEAD:refs/heads/main","git push origin HEAD:refs/heads/integration/EPC-001-line","git ls-remote origin","git pull origin main","git fetch --all","git clone https://localhost/example/project.git copy","git credential fill",])	1	TSK-1479 AC-8: inert hook payloads that keep the account finding for the exact helper on lines that are not admitted; judged by exec-guard, no Git clone executes.
+crates/codeflow-core/src/security/option_commands.rs	clone("git clone \"-u\" \"X\" \"o/r\"")	4	TSK-1490 unit test expectations: the command strings the gh reader is expected to carry, compared as text; the fixture runs no clone.

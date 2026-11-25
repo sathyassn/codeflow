@@ -1874,3 +1874,369 @@ pub const XARGS_OPTION_FORMS: &[(&str, bool)] = &[
         true,
     ),
 ];
+
+/// Commands both guards refuse written bare, which the option forms below
+/// carry (TSK-1490 AC-1): git-guard's rules first, then exec-guard's.
+pub const OPTION_BARE_GIT: &[&str] = &[
+    "git push --force origin main",
+    "git config core.hooksPath /tmp/h",
+    "git push origin --delete main",
+    "git config --global alias.x !id",
+];
+
+/// The exec-guard commands for [`OPTION_CARRIERS`] (TSK-1490 AC-1).
+pub const OPTION_BARE_EXEC: &[&str] = &[
+    "cat ~/.ssh/id_rsa",
+    "echo x >> ~/.zshrc",
+    "rm -rf /",
+    "claude -p hi",
+    "sudo id",
+];
+
+/// A program that runs the command at `{}` from one of its option values
+/// (TSK-1490 AC-1). Each guard gives the form the rules of the command
+/// written bare and of the form with an ordinary value (`true`), no more.
+pub const OPTION_CARRIERS: &[&str] = &[
+    "ack --pager='{}' needle",
+    "ack --pager '{}' needle",
+    "ag --pager '{}' needle",
+    "ag --pager='{}' needle",
+    "man -P '{}' ls",
+    "man --pager='{}' ls",
+    "man -H'{}' ls",
+    "man --html='{}' ls",
+    "rg --pre '{}' needle",
+    "rg --pre='{}' needle",
+    "rg --hostname-bin '{}' needle",
+    "ssh -o 'ProxyCommand={}' host",
+    "ssh -o 'ProxyCommand {}' host",
+    "ssh -oProxyCommand='{}' host",
+    "ssh -o 'proxycommand = {}' host",
+    "ssh -vo 'LocalCommand={}' host",
+    "ssh -o 'KnownHostsCommand={}' host",
+    "scp -o 'ProxyCommand={}' a host:b",
+    "scp -S '{}' a host:b",
+    "sftp -o 'ProxyCommand={}' host",
+    "sftp -S '{}' host",
+    "sftp -D '{}'",
+    "rsync -e '{}' a host:b",
+    "rsync -avze '{}' a host:b",
+    "rsync --rsh='{}' a host:b",
+    "tar -I '{}' -cf x.tar d",
+    "tar -cf x.tar -I'{}' d",
+    "tar --use-compress-program='{}' -cf x.tar d",
+    "tar --to-command='{}' -xf x.tar",
+    "tar --checkpoint-action=exec='{}' -cf x.tar d",
+    "tar --checkpoint-action 'exec={}' -cf x.tar d",
+    "tar -F '{}' -cf x.tar d",
+    "tar --info-script='{}' -cf x.tar d",
+    "tar --new-volume-script='{}' -cf x.tar d",
+    "tar --rsh-command='{}' -cf h:x.tar d",
+    "tar cIf '{}' x.tar d",
+    "gtar -I '{}' -cf x.tar d",
+    "sort --compress-program='{}' f",
+    "split --filter='{}' f",
+    "install --strip-program='{}' -s a b",
+    "zip -TT '{}' -T a.zip f",
+    "zip -TT'{}' -T a.zip f",
+    "zip -TT='{}' -T a.zip f",
+    "zip --unzip-command '{}' -T a.zip f",
+    "flock /tmp/l -c '{}'",
+    "script -c '{}' /dev/null",
+    "npx -c '{}'",
+    "npx --call='{}'",
+    "npm exec -c '{}'",
+    "npm x --call '{}'",
+    "npm --prefix /tmp exec -c '{}'",
+    "npm --prefix /tmp x --call='{}'",
+    "npm -c '{}' exec",
+    "wget --use-askpass='{}' https://example.invalid",
+    "wget --use-askpass '{}' https://example.invalid",
+    "wget2 --use-askpass='{}' https://example.invalid",
+    "wget -e 'use_askpass = {}' https://example.invalid",
+    "wget --execute='useAskPass={}' https://example.invalid",
+    "wget -qe 'use-askpass={}' https://example.invalid",
+    "wget2 -e 'use_askpass={}' https://example.invalid",
+    "wget2 --execute 'use-askpass={}' https://example.invalid",
+    "su -c '{}'",
+    "su --command='{}' root",
+    "runuser -c '{}' x",
+    "fd -x {}",
+    "fd needle -x {}",
+    "fd --exec {}",
+    "fd -X {}",
+    "fd --exec-batch {}",
+    "fdfind -x {}",
+    "fd -x {} \\;",
+];
+
+/// `gh` subcommands that pass the words after `--` to `git clone`: `{}` is
+/// those words, judged as `git clone {} o/r` (TSK-1490 AC-1).
+pub const OPTION_CLONE_CARRIERS: &[&str] = &[
+    "gh repo clone o/r -- {}",
+    "gh repo clone o/r d -- {}",
+    "gh repo fork o/r --clone -- {}",
+    "gh gist clone 123 -- {}",
+];
+
+/// `git clone` arguments the clone forms carry: git-guard's, then
+/// exec-guard's.
+pub const OPTION_CLONE_GIT: &[&str] = &[
+    "--upload-pack='git config --global alias.x !id'",
+    "-u 'git config core.hooksPath /tmp/h'",
+];
+
+/// The exec-guard arguments for [`OPTION_CLONE_CARRIERS`].
+pub const OPTION_CLONE_EXEC: &[&str] = &["--upload-pack='rm -rf /'", "-u 'cat ~/.ssh/id_rsa'"];
+
+/// Option values the guard does not read as a command: an editor's
+/// commands, a Cargo setting naming a program it runs or a Cargo value that
+/// does not parse, and a spelling of an inventory option the reader does
+/// not parse exactly (an abbreviation, a case variant, a value glued inside
+/// a cluster). Both guards refuse them under `git.hook_integrity` (TSK-1490).
+pub const OPTION_LANGUAGES: &[&str] = &[
+    "script --comm 'true' /dev/null",
+    "flock /tmp/l --comm 'true'",
+    "man --pag 'true' ls",
+    "tar --use-comp 'true' -cf x.tar d",
+    "sort --compress-prog=true f",
+    "ack --PAGER=true needle",
+    "vim --cMd 'set nu' f",
+    "vim --CMD 'set nu' f",
+    "zip -qTT'true' a.zip f",
+    "wget --use-ask=true https://example.invalid",
+    "cargo --conf 'build.jobs=2' build",
+    "cargo --config 'doc.\"brow\\u0073er\"=\"id\"' doc --open",
+    "cargo --config 'credential-alias.local=[\"id\"]' publish",
+    "cargo --config 'build.rustflags=[\"-Clinker=id\"]' build",
+    "cargo --config 'registries.x.credential-provider=\"id\"' publish",
+    "cargo --config 'Build.Rustc_Wrapper=\"id\"' build",
+    "cargo --config 'alias.b=\"run\"' b",
+    "cargo --config 'a=' build",
+    "vim -c 'set nu' f",
+    "vim --cmd 'set nu' f",
+    "vim '+set nu' f",
+    "vi '+/x/|!id' f",
+    "nvim -c 'lua x()' f",
+    "view -c x f",
+    "less '+!id' f",
+    "less '++|id' f",
+    "emacs --eval '(x)' f",
+    "emacs -eval '(x)' f",
+    "emacs --batch -f x",
+    "emacsclient -e '(x)'",
+    "emacsclient --eval '(x)'",
+    "cargo --config 'target.x.runner=\"y\"' run",
+    "cargo run --config 'build.rustc-wrapper=\"y\"'",
+    "cargo build --config=target.x.linker=y",
+    "cargo --config 'target.\"cfg(unix)\".runner = \"y\"' run",
+    "cargo --config 'build={rustc-wrapper=\"y\"}' build",
+];
+
+/// Values that run an ordinary command or none, options outside the
+/// inventory, and forms the reader does not reach, each beside the same
+/// command without that option: both guards give the two the same rules,
+/// so the value adds no finding (TSK-1490 AC-2).
+pub const OPTION_CONTROLS: &[(&str, &str)] = &[
+    (
+        "ssh -o ProxyCommand='ssh -W %h:%p bastion' host",
+        "ssh host",
+    ),
+    ("ssh -o ProxyCommand=none host", "ssh host"),
+    ("ssh -o BatchMode=yes host", "ssh host"),
+    ("ssh -F ./ssh_config host", "ssh host"),
+    ("rsync -e 'ssh -p 2222' a host:b", "rsync a host:b"),
+    ("tar -I zstd -xf x.tar.zst", "tar -xf x.tar.zst"),
+    ("tar --checkpoint=10 -xf x.tar", "tar -xf x.tar"),
+    ("man -P cat ls", "man ls"),
+    ("ack --pager='less -R' needle", "ack needle"),
+    ("rg --pre pdftotext needle notes", "rg needle notes"),
+    ("sort -S 1G f", "sort f"),
+    ("install --strip a b", "install a b"),
+    ("zip -T a.zip", "zip a.zip"),
+    ("npx -y prettier .", "npx prettier ."),
+    ("vim +12 f", "vim f"),
+    ("vim + f", "vim f"),
+    ("less +G f", "less f"),
+    ("less +F f", "less f"),
+    ("cargo --config build.jobs=2 build", "cargo build"),
+    (
+        "cargo build --config profile.dev.opt-level=1",
+        "cargo build",
+    ),
+    ("cargo --config ci.toml build", "cargo build"),
+    (
+        "cargo --config 'env.APP_MODE=\"runner\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'build.target-dir=\"/tmp/runner/linker\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'env.APP_MODE={value=\"rustc-wrapper\",force=true}' build",
+        "cargo build",
+    ),
+    (
+        "wget -e robots=off https://example.invalid",
+        "wget https://example.invalid",
+    ),
+    (
+        "wget -Orelease.tar.gz https://example.invalid",
+        "wget https://example.invalid",
+    ),
+    ("tar --to-stdout -xf x.tar", "tar -xf x.tar"),
+    ("npm --prefix /tmp install", "npm install"),
+    ("npm -w app install", "npm install"),
+    ("tar -C /tmp -xf x.tar", "tar -xf x.tar"),
+    ("fd -C /tmp -e rs", "fd -e rs"),
+    ("find . -execdir wc -l {} ';'", "find . -exec wc -l {} ';'"),
+    (
+        "cargo --config 'env.APP_MODE=\"$(git config core.hooksPath /tmp/h)\"' build",
+        "cargo build",
+    ),
+    (
+        "cargo --config 'env.APP_MODE=\"`git config core.hooksPath /tmp/h`\"' build",
+        "cargo build",
+    ),
+];
+
+/// A carried command the program runs in another directory it is given as
+/// a literal path, beside the command written bare after a change to that
+/// directory, for git-guard's fixture repositories: the carried command is
+/// judged in that directory's repository, as the bare one is (TSK-1490
+/// AC-7). `{}` stands for the payload.
+pub const OPTION_RUN_DIRECTORIES: &[&str] = &[
+    "fd -C /scratch-main -x {}",
+    "fd --base-directory=/scratch-main -x {}",
+    "fdfind --base-directory /scratch-main --exec {}",
+    "fd x -x {} -- ';' --base-directory /scratch-main",
+    "fd x --exec {} -- ';' -C /scratch-main",
+    "tar -C /scratch-main -cf a.tar --checkpoint-action=exec='{}' .",
+    "tar --directory=/scratch-main -I '{}' -cf a.tar .",
+    "tar -cf a.tar -C /tmp -C /scratch-main --to-command='{}' .",
+    "npm --prefix /scratch-main exec -c '{}'",
+    "parallel --wd /scratch-main {} ::: x",
+    "parallel --workdir=/scratch-main {} ::: x",
+];
+
+/// Ordinary commands through the launchers the launcher grammar models,
+/// which keep passing both guards under the grammar's fail-closed default
+/// (TSK-1490): each modelled launcher with its documented options, a
+/// privilege launcher's name given only as another launcher's option
+/// value, a split string behind a modelled launcher, a privilege
+/// launcher's verb that runs no command, a carrier's real `--`, and the
+/// daily `xargs` and `find -exec` forms whose closed grammar the guard
+/// keeps, running a program that does not read its words for a push or
+/// a command. Every other command runner is refused in any form
+/// (`runners_without_a_grammar_refuse_in_any_spelling`).
+pub const LAUNCHER_ORDINARY: &[&str] = &[
+    "nice -n 5 git status",
+    "timeout 5 git status",
+    "time git status",
+    "nohup git status",
+    "stdbuf -oL git log -1",
+    "xcrun git status",
+    "command -v git",
+    "env A=1 git status",
+    "env -S 'git status'",
+    "taskset -c 0 git status",
+    "taskset -c 0 env -S 'git status'",
+    "FOO=1 env -S 'git config --global user.name Probe'",
+    "chrt -r 5 git status",
+    "nice -n 5 sh -c 'git status'",
+    "exec -a sudo sh <<< 'git status'",
+    "exec -a pkexec git status",
+    "taskset -c 0 cargo build",
+    "printf 'git status' | sh",
+    "nice --adjustment 5 git status",
+    "nice -10 git status",
+    "timeout --signal KILL 5 git status",
+    "timeout -k 5 10 git status",
+    "time -o /dev/null git status",
+    "ionice -c 3 git status",
+    "stdbuf --output L git status",
+    "caffeinate -i git status",
+    "xcrun --sdk macosx git status",
+    "tar -czf a.tar notes.txt",
+    "tar -cf a.tar -- notes.txt",
+    "xargs wc -l <<< a",
+    "find . -name x -exec grep -l y {} +",
+    "xargs <<< a",
+    "xargs -0 wc -l <<< a",
+    "xargs -r wc -l <<< a",
+    "find . -name x -exec wc -l {} ';'",
+    "find . -name x -print",
+];
+
+/// `xargs -n` forms that git-guard passes and exec-guard refuses under
+/// `security.dangerous_commands`: exec-guard's deletion reader does not
+/// model `-n`, so it fails closed on the command xargs builds. Checked by
+/// `ordinary_launcher_commands_stay_allowed`.
+pub const XARGS_COUNT_DELETION_UNPROVEN: &[&str] =
+    &["xargs -n 1 wc -l <<< a", "xargs -n2 nice -n 5 wc -l <<< a"];
+
+/// A carried command the program runs in a directory the guard cannot
+/// establish: one set at run time, per found path, by a spelling the reader
+/// does not parse, or by a login or workspace switch. Both guards refuse
+/// it under hook integrity (TSK-1490 AC-7). `{}` stands for the payload.
+pub const OPTION_UNKNOWN_RUN_DIRECTORIES: &[&str] = &[
+    "find . -execdir {} ';'",
+    "find . -name x -okdir {} '+'",
+    "fd -C \"$D\" -x {}",
+    "fd -C ~/w -x {}",
+    "tar xCf /scratch-main a.tar --checkpoint-action=exec='{}'",
+    "tar --dir=/scratch-main -I '{}' -cf a.tar .",
+    "npm -w app exec -c '{}'",
+    "npm --workspaces exec -c '{}'",
+    "npm -ws exec -c '{}'",
+    "su -l root -c '{}'",
+    "su - root -c '{}'",
+    "su -lc '{}' root",
+    "runuser --login u -c '{}'",
+    "parallel --wd ... {} ::: x",
+    "parallel --wd 'w{1}' {} ::: x",
+];
+
+/// A startup setting whose value sets the startup-command setting again,
+/// in each spelling and at more than one level: both guards refuse it
+/// under hook integrity, whatever program the innermost setting names
+/// (TSK-1490).
+pub const OPTION_NESTED_SETTINGS: &[&str] = &[
+    "wget2 --execute=execute=use-askpass=sudo https://example.invalid",
+    "wget --execute execute=use_askpass=sudo https://example.invalid",
+    "wget -e execute=use_askpass=sudo https://example.invalid",
+    "wget -qe 'execute = use-askpass=sudo' https://example.invalid",
+    "wget2 -e 'Execute=execute=use_askpass=sudo' https://example.invalid",
+    "wget2 -e '--execute=use_askpass=sudo' https://example.invalid",
+    "wget -e execute=robots=off https://example.invalid",
+];
+
+/// A Cargo `env` setting beside the same assignment written bare before
+/// Cargo, for exec-guard: the setting gets the assignment's verdict
+/// (TSK-1490). The spaced spelling keeps the raw text from
+/// matching the assignment itself.
+pub const OPTION_ASSIGNMENTS: &[(&str, &str)] = &[(
+    "cargo --config 'env.LD_PRELOAD = \"/tmp/x.so\"' build",
+    "LD_PRELOAD=/tmp/x.so cargo build",
+)];
+
+/// A carried relative read after a directory change the guard cannot
+/// establish, beside the read written bare, for exec-guard with the text
+/// rule relaxed: both refuse as a possible secret read (TSK-1490). The last
+/// row's name holds the text of the guard's former stand-in directory, so
+/// a finding that quotes it must still count.
+pub const OPTION_UNKNOWN_DIRECTORY: &[(&str, &str)] = &[
+    (
+        "cd \"$D\"; man -P 'cat auth.json' ls",
+        "cd \"$D\"; cat auth.json",
+    ),
+    (
+        "cd \"$D\" && rg --pre 'cat .codex/auth.json' needle",
+        "cd \"$D\" && cat .codex/auth.json",
+    ),
+    (
+        "cd \"$D\"; man -P 'cat auth.json.CODEFLOW_UNKNOWN_DIRECTORY' ls",
+        "cd \"$D\"; cat auth.json.CODEFLOW_UNKNOWN_DIRECTORY",
+    ),
+];

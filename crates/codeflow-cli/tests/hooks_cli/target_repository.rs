@@ -123,6 +123,14 @@ fn refused(out: &Output) -> bool {
         && String::from_utf8_lossy(&out.stderr).contains("git.hook_integrity")
 }
 
+/// Refused under the agent push rule: `xargs` appends the words it reads
+/// to a Git command, so neither guard can read the Git call it makes
+/// (TSK-1490). Hook integrity may or may not appear beside it.
+fn refused_as_unread_push(out: &Output) -> bool {
+    out.status.code() == Some(2)
+        && String::from_utf8_lossy(&out.stderr).contains("git.agent_push_refused_branches")
+}
+
 /// `Ok(true)` when the guard allowed the command, `Ok(false)` when it
 /// refused only because a Git child it runs to read state outlived its
 /// 3 s bound, as on a busy hosted runner, and `Err` for any other result.
@@ -1614,6 +1622,9 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "fd -L . clean -x cat",
         "fd --mystery . clean -x cat",
         "cd ~ && fd auth -x cat",
+        // `fd` with an exec option refuses in any directory (TSK-1490).
+        "fd . clean -x cat",
+        "fd -e md . clean -x wc -l",
         "cdpath=(~) cd .codex; cat auth.json",
         "cdpath=($HOME) cd .codex; cat auth.json",
         "cdpath=(~ /tmp) cd .codex; cat auth.json",
@@ -1645,8 +1656,6 @@ fn tsk1002_review16_carets_fd_walkers_and_cdpath_arrays() {
         "git log HEAD~^",
         "git show main^0",
         "git checkout HEAD^",
-        "fd . clean -x cat",
-        "fd -e md . clean -x wc -l",
         "fd notes",
         "cd clean; cat notes.md",
         "GIT_PROXY_COMMAND=connect cargo test",
@@ -1702,14 +1711,17 @@ fn tsk1002_review17_fd_values_help_programs_carets_and_backups() {
         "fd . ~/.codex --exec=env",
         "fd . ~/.codex -x env",
         "fd . ~/.codex -x nice",
+        // `fd` with an exec option is a runner the guards keep no grammar
+        // for, so it refuses whatever directory it searches (TSK-1490).
+        "fd . clean -x cat",
+        "fd . clean --exec=cat",
+        "fd -e md . clean -xwc",
     ]
     .iter()
     .map(ToString::to_string)
     .collect();
     let allowed: Vec<String> = [
-        "fd . clean -x cat",
-        "fd . clean --exec=cat",
-        "fd -e md . clean -xwc",
+        "fd . clean",
         "MANPAGER=less git help",
         "BROWSER=open git help --web",
         "cd clean && git rev-list ^main HEAD",
@@ -2442,30 +2454,16 @@ fn repair2_config_reads() {
 fn repair2_xargs_guarded_verbs() {
     let f = Fixture::new();
     for hook in ["git-guard", "exec-guard"] {
-        for command in ["git diff --name-only | xargs git add", "xargs git status"] {
+        // xargs appends the words it reads to the Git command, so the guards
+        // cannot read the Git call it makes: every form refuses (TSK-1490).
+        for command in [
+            "git diff --name-only | xargs git add",
+            "xargs git status",
+            "echo README.md | xargs git add",
+        ] {
             let out = f.command(&f.root, hook, command);
-            // Every `status` operand is judged since TSK-1002 review 11, so
-            // names supplied at run time are unknown files there too.
-            let unknown_files = hook == "exec-guard";
-            assert_eq!(
-                out.status.code(),
-                Some(if unknown_files { 2 } else { 0 }),
-                "{hook} {command}: {out:?}"
-            );
-            if unknown_files {
-                let diagnostic = String::from_utf8_lossy(&out.stderr);
-                assert!(
-                    diagnostic.contains("security.secret_reads")
-                        && diagnostic.contains("cannot verify")
-                );
-            }
+            assert!(refused_as_unread_push(&out), "{hook} {command}: {out:?}");
         }
-        let out = f.command(&f.root, hook, "echo README.md | xargs git add");
-        assert_eq!(
-            out.status.code(),
-            Some(0),
-            "literal file input: {hook}: {out:?}"
-        );
         for tail in [
             "",
             "config",
@@ -3533,6 +3531,15 @@ fn repair3_runner_filter_and_option_sources() {
             let out = f.command(&f.linked, hook, command);
             assert!(refused(&out), "{hook} {command}: {out:?}");
         }
+        // xargs appends file names to `git grep`, so the agent push rule
+        // refuses them in both guards (TSK-1490).
+        for command in [
+            "printf README.md | xargs git grep pattern",
+            "printf README.md | xargs git grep -e pattern --",
+        ] {
+            let out = f.command(&f.linked, hook, command);
+            assert!(refused_as_unread_push(&out), "{hook} {command}: {out:?}");
+        }
         // The exec floor owns unread xargs replacement before integrity runs.
         let replacement = f.command(
             &f.linked,
@@ -3553,8 +3560,6 @@ fn repair3_runner_filter_and_option_sources() {
             "git grep needle --literal-filename",
             "git rebase -x ./test.sh HEAD~3",
             "git filter-branch --tree-filter ./test.sh HEAD",
-            "printf README.md | xargs git grep pattern",
-            "printf README.md | xargs git grep -e pattern --",
             "git grep '$UNKNOWN' README.md",
         ] {
             let out = f.command(&f.linked, hook, command);

@@ -799,6 +799,102 @@ A program outside this list that moves the command it runs to another
 directory, or hands it paths it finds, is outside the text guard's
 promise; the qualified shell parser (TSK-1073, 4.0.0) owns that residual.
 
+A command a known program runs from one of its option values, such as a
+pager, a remote shell, a compression program or a filter, is judged by
+both guards as that command written bare, by the same rule and at the
+project's configured level (TSK-1490). Both guards read these values from
+one inventory in the code (`security/option_commands.rs`), and a test
+keeps its documented list equal to it. The reader accepts only the
+spellings it parses exactly, the option's full name with its value
+attached or in the next word; an abbreviated or differently cased
+spelling of such an option is refused under `git.hook_integrity`, so
+write the option's full documented name. A value in a command language
+the guards do not read, an editor's own commands or a build tool setting
+that names a program the tool runs, is refused under the same rule; the
+build tool's settings are decoded and judged by their names, never by
+their values, and an environment setting is judged as the same variable
+assigned before the tool, with its value read as literal data. A startup
+setting whose value sets the startup-command setting again is refused
+under the same rule; give each startup setting in its own option. A
+carried command the program runs in another directory, given by one of
+its options, is judged in that directory, with that directory's
+configuration, when the directory is a literal path; where the guard
+cannot establish it (a value filled in at run time, a directory per found
+path, a login's home or a workspace), the command is refused under the
+same rule, and every other rule still judges it as run in a directory the
+guard cannot establish, so a protected-branch commit there is refused with
+`git.hook_integrity` relaxed. The words of a carried command belong to it:
+an option among them is never read as the program's own, and a program's
+own directory option after them still counts. A manual program may run
+its pager in the manual's own directory, so a pager command is judged
+there as well, as in a directory the guard cannot establish. Edit files with the harness's file tool instead, and set such
+a program in the project's committed build configuration. A command a
+program reads from its own configuration files or environment is not read
+this way.
+
+git-guard reads a Git command through every launcher in the list above,
+by each of its spellings and its own options, the privilege and
+scheduling launchers included. A launcher that reads environment
+assignments among its own options is read by that grammar, so the
+command is found after the last of its options. The launchers the guards
+model are a closed list, each read by its own grammar, and the grammar
+fails closed: a command it cannot resolve to its final program and words,
+such as a launcher mode that runs a shell on its input or runs a command
+the line does not name, is refused under the agent push rule
+(`git.agent_push_refused_branches`) in both guards at every
+`git.hook_integrity` level, and under `git.hook_integrity`. A launcher's
+name given only as another launcher's option value is not a launcher.
+Every launcher's options are read whole: an option the grammar does not
+hold, an abbreviated long option included, leaves the command unresolved
+rather than taking that option's value as the program. `busybox` is read
+only through an applet that is a shell, a file copier or a launcher of
+the closed list; any other applet, or an option, leaves the command
+unresolved in the same way. The guard keeps
+no grammar for command runners except two daily forms. Any form of
+`parallel`, `watch`, `flock`, `script`, `setsid`, `unbuffer`, `su` or
+`runuser`, and `fd` or `fdfind` with an exec option, is unresolved in
+the same way, whatever its options and whatever command it runs, and so
+is a runner added to the inventory later. The two daily forms the guard
+reads exactly are `xargs` with no option or only
+`-0`, `-r` and `-n NUMBER`, and `find` whose `-exec` or `-execdir`
+actions each end in `;` or `{} +`, each running a literal command.
+Reading a form exactly does not allow it: exec-guard's deletion check
+does not model `-n`, so it still refuses a line such as
+`xargs -n 1 wc -l` under `security.dangerous_commands`, as before. Any
+other option, a replacement string (`-I` and its kin), `-ok` or `-okdir`,
+a found path inside a word, a shell, an `env -S` string, or a runner
+inside the command makes those forms unresolved too. `xargs` adds the
+words it reads from its input to the command it runs, and `find` puts a
+found path in each `{}`, so the guard does not read those words. A form
+whose command is a program whose words the guards read for a push or a
+command it runs is unresolved for that reason: Git and its runners, `gh`,
+a launcher left without a command, a command runner, a shell, `sed`, a
+package runner, or a program that runs a command from an option value. For
+`find`, that holds when the action holds a `{}`, and a `{}` as the
+program or as a launcher's command is unresolved for any program. A
+`find` action that gives a found path to any other program, such as
+`wc`, `grep` or `rm`, keeps its verdict. The way through is to run the inner
+command directly, one command per call. For a program that carries a
+command in an option value, a `--` right after another option may be
+that option's value, so it does not end the reading of options; gh's
+clone arguments are read after gh's own options, by a closed list, and
+any other option of gh there is refused under `git.hook_integrity`.
+When it decides the repository the
+command is judged in, it reads an assignment written after a launcher as
+the launcher passes it on. A launcher that runs the command as another
+user, with that user's environment and configuration, or whose options
+or environment the guard does not model, leaves the repository
+unresolved, which refuses; a shell's command run through a launcher that
+runs it as another user is judged the same way. After a launcher option the guard does not
+read, it cannot tell which later word starts the command, so it judges a
+Git or GitHub CLI call, and a command a shell runs, from every word where
+the command may start, with the repository unresolved; each rule then
+keeps its own verdict, the protected-branch rule included when
+`git.hook_integrity` is relaxed. The agent push rule
+(`git.agent_push_refused_branches`) reads the same starts in both guards,
+and a finding under another rule on the same command never hides it, at
+any `git.hook_integrity` level.
+
 ### Program variables the guards judge
 
 A variable whose value is a program is judged as a command before every
@@ -1805,17 +1901,13 @@ checked, so a symlink does not remove the target owner's protection.
   hooks, regardless of the config file or scope. Reads and command-local
   `git -c` settings keep their existing checks.
   Expanded config keys that cannot be proven literal refuse; explicit
-  config reads can still use regular expressions. Git commands fed by
-  xargs refuse when the subcommand is absent or guarded, because their
-  complete operands are unknown. Exec-guard refuses `xargs git status`
-  too, since every `status` operand is judged and these arrive at run
-  time; `xargs git ls-files` remains available. Exec-guard additionally refuses an unverified filename stream to a file
-  reader, including `git add` and `git grep`; literal ordinary input such as
-  `echo README.md | xargs git add` remains available. Git-guard's
-  `xargs git grep pattern` check keeps the pattern as data:
-  Git stops reading options at that first operand. With only `-e pattern`,
-  add `--` before stdin supplies filenames, or stdin could supply a pager
-  option. Replacement placeholders remain unread. Quoted search patterns
+  config reads can still use regular expressions. A Git command fed by
+  `xargs`, in the daily form or any other, is unresolved in both guards,
+  because `xargs` adds the words it reads from its input to the command,
+  so the guards cannot read every word Git runs. That holds for
+  every subcommand and every input, literal input included. The way
+  through is the Git command written directly, with its paths on the
+  line. Quoted search patterns
   stay data. The arch launcher and Git command runners
   receive the same checks as their command payloads. A shared catalog
   covers command-valued options, effective configuration and environment,

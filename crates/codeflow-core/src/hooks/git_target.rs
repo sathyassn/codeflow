@@ -380,40 +380,87 @@ pub(super) fn host_path(path: &str) -> String {
 pub(super) const GIT_LOCATION_VARS: &[&str] = &["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
 
 /// The environment a simple command's launchers give the program they run:
-/// leading `NAME=value` words and the assignments of `env`, through
-/// `command`, `builtin` and `exec`. `Err` for an `env` option, whose effect
-/// (`-C`, `-u`, `-S`, `-i`) the guard does not model.
-pub(super) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, String> {
-    let mut env = Vec::new();
-    let mut i = 0;
-    loop {
-        while let Some((name, value)) = tokens.get(i).and_then(|t| assignment(t)) {
-            env.push((name.to_string(), value.to_string()));
-            i += 1;
-        }
-        let Some(word) = tokens.get(i) else {
-            return Ok(env);
-        };
-        if matches!(word.as_str(), "command" | "builtin" | "exec") {
-            i += 1;
-            continue;
-        }
-        if word.rsplit('/').next() == Some("env") {
-            i += 1;
-            while let Some(arg) = tokens.get(i) {
-                if arg.starts_with('-') {
-                    return Err(format!("the `env` option `{arg}`"));
-                }
-                let Some((name, value)) = assignment(arg) else {
-                    break;
-                };
-                env.push((name.to_string(), value.to_string()));
-                i += 1;
-            }
-            continue;
-        }
-        return Ok(env);
+/// leading `NAME=value` words, the assignments of `env`, and those after
+/// every launcher of the closed list (`security/launchers.rs`) by any
+/// spelling. The launchers and where each one's own words end come from
+/// git-guard's one launcher walk ([`Walk::read`]), so this reader and the
+/// command reader always agree on where the command starts (TSK-1490 AC-8).
+/// `Err` when that walk is unresolved, for an `env` option, whose effect
+/// (`-C`, `-u`, `-S`, `-i`) the guard does not model, and for a launcher
+/// that runs the command as another user.
+pub(crate) fn launcher_env(tokens: &[String]) -> Result<Vec<(String, String)>, String> {
+    use super::git_guard::{launcher_name, Walk};
+    let walk = Walk::read(tokens);
+    if let Some(why) = walk.why {
+        return Err(why);
     }
+    let mut env = Vec::new();
+    let take = |words: &[String], env: &mut Vec<(String, String)>| {
+        for word in words {
+            if let Some((name, value)) = assignment(word) {
+                env.push((name.to_string(), value.to_string()));
+            }
+        }
+    };
+    let mut from = 0;
+    for (&at, &end) in walk.launchers.iter().zip(&walk.ends) {
+        // The words between the last launcher's own words and this one
+        // are assignments the walk skipped.
+        take(tokens.get(from..at).unwrap_or_default(), &mut env);
+        let word = &tokens[at];
+        if runs_as_another_user(word) {
+            // The privilege launchers run the command as another user, with
+            // that user's environment and configuration.
+            return Err(format!(
+                "the launcher `{word}`, which runs the command with an environment and configuration the guard does not read for the repository"
+            ));
+        }
+        let own = tokens.get(at + 1..end).unwrap_or_default();
+        if launcher_name(word) == "env" {
+            if let Some(option) = own.iter().find(|arg| arg.starts_with('-')) {
+                return Err(format!("the `env` option `{option}`"));
+            }
+            take(own, &mut env);
+        }
+        from = end;
+    }
+    let Some(program) = walk.program else {
+        take(tokens.get(from..).unwrap_or_default(), &mut env);
+        return Ok(env);
+    };
+    take(tokens.get(from..program).unwrap_or_default(), &mut env);
+    let name = launcher_name(&tokens[program]);
+    // A word of the closed list the walk did not read as a launcher (a
+    // path spelling of a shell modifier, or `busybox` with an applet that
+    // runs no other program) leaves the environment unread. `setsid` and
+    // `unbuffer` never reach here: the walk keeps no grammar for them, so
+    // it is unresolved above.
+    if crate::security::launchers::LAUNCHERS.contains(&name)
+        && walk.launchers.last() != Some(&program)
+    {
+        return Err(format!(
+            "the launcher `{}`, whose environment for the command the guard does not read",
+            tokens[program]
+        ));
+    }
+    Ok(env)
+}
+
+/// Whether `word` runs its command as another user, with that user's
+/// environment and configuration: every launcher of the closed list
+/// [`launcher_env`] does not read through, and the user switchers `su` and
+/// `runuser`. A Git command it runs, directly or in a shell's command, is
+/// judged with the repository unresolved.
+pub(crate) fn runs_as_another_user(word: &str) -> bool {
+    use super::git_guard::{is_prefix_launcher, launcher_name};
+    let name = launcher_name(word);
+    matches!(name, "su" | "runuser")
+        || (!is_prefix_launcher(word)
+            && !matches!(
+                name,
+                "env" | "chrt" | "taskset" | "setsid" | "unbuffer" | "busybox"
+            )
+            && crate::security::launchers::LAUNCHERS.contains(&name))
 }
 
 /// The directories the shell could be in: path expressions ("" is the
@@ -731,6 +778,19 @@ mod tests {
         );
         assert!(launcher_env(&t("env -u GIT_DIR git commit")).is_err());
         assert!(launcher_env(&t("/usr/bin/env -C /x git commit")).is_err());
+        // TSK-1490: the launchers and their own words come from the one
+        // launcher walk, so an option's value is never read as an
+        // assignment, and an option outside a launcher's grammar refuses.
+        assert_eq!(
+            launcher_env(&t("/usr/bin/time -f GIT_DIR=/x git commit")).unwrap(),
+            vec![]
+        );
+        assert_eq!(
+            launcher_env(&t("nice -n 5 GIT_DIR=/g git commit")).unwrap(),
+            vec![("GIT_DIR".to_string(), "/g".to_string())]
+        );
+        assert!(launcher_env(&t("nice --adjust 5 GIT_DIR=/g git commit")).is_err());
+        assert!(launcher_env(&t("timeout --sig KILL 5 git commit")).is_err());
     }
 
     #[test]

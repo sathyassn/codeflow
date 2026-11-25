@@ -1,4 +1,7 @@
 # file	normalized call span	count	reason
+crates/codeflow-core/src/security/guard_forms.rs	"less +G f"	1	TSK-1490 control row: a pager movement value judged as text by both guards; not Git configuration and never executed.
+crates/codeflow-core/src/security/option_commands.rs	"less +G"	1	TSK-1490 unit test row for a pager movement value the reader treats as inert; not Git configuration and never executed.
+crates/codeflow-core/src/security/option_commands.rs	matches!(value,"G"|"g"|"F")	1	TSK-1490 pager movement letters the reader allows as inert values; not Git configuration.
 crates/codeflow-cli/tests/hooks_cli/program_word.rs	"PATH=\"$PATH\" $G inspect"	1	TSK-1456 hook payload string sent only to the guards for judgment; never executed and never a process environment or Git configuration change.
 crates/codeflow-cli/tests/hooks_cli/program_word.rs	"G=git; PATH=\"$PATH\" $G inspect"	1	TSK-1456 hook payload string sent only to the guards for judgment; never executed and never a process environment or Git configuration change.
 crates/codeflow-cli/tests/hooks_cli/program_word.rs	"PATH=\"$PATH\" $G ship"	1	TSK-1456 hook payload string sent only to the guards for judgment; never executed and never a process environment or Git configuration change.

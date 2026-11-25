@@ -23,6 +23,25 @@ thread_local! {
     /// Set while a Git runner body is judged: the runner reader already
     /// read every nested body, so a body's own runners are not read again.
     static RUNNER_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a command an option value carries is judged: the line's
+    /// command reader already read every nested option value, so a body's
+    /// own option values are not read again (TSK-1490).
+    static OPTION_BODY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the judging of an option value's command until dropped.
+struct OptionBody(bool);
+
+impl OptionBody {
+    fn enter() -> Self {
+        Self(OPTION_BODY.replace(true))
+    }
+}
+
+impl Drop for OptionBody {
+    fn drop(&mut self) {
+        OPTION_BODY.set(self.0);
+    }
 }
 
 /// Marks the judging of a Git runner body until dropped.
@@ -267,6 +286,11 @@ pub fn evaluate_ruled(
             violations.push(violation);
         }
     }
+    // Commands carried in option values join after the line's own checks,
+    // so a rule both meet is reported once, at its strongest.
+    for finding in option_violations(command, posix, levels, integrity, cwd, root, outcome) {
+        merge_strongest(&mut violations, finding);
+    }
     // Interpreter code expands `~` with the home its process inherits: the
     // line's assigned home, judged besides the guard's own.
     let homes = std::iter::once(crate::portable_path::user_home())
@@ -320,6 +344,84 @@ fn program_violations(
         )],
     }
 }
+
+/// Every command a program on the line runs from an option value, read by
+/// the inventory both guards share (TSK-1490) through every nesting level
+/// git-guard's command reader follows, judged as a command of its own in
+/// each directory the line's commands may run in, so every check here,
+/// the raw-text ones included, sees it as written bare. A value in a
+/// command language the guard does not read refuses under hook integrity,
+/// as git-guard refuses it. Each body takes the call's outcome.
+fn option_violations(
+    command: &str,
+    posix: bool,
+    levels: &SecuritySection,
+    integrity: PolicyLevel,
+    cwd: &std::path::Path,
+    root: &std::path::Path,
+    outcome: &super::sandbox_state::Outcome,
+) -> Vec<Violation> {
+    use crate::security::option_commands::{option_commands, unread_violation, Carried};
+    if OPTION_BODY.get() {
+        return Vec::new();
+    }
+    let segments = super::git_guard::expand_commands(command);
+    let mut bodies: Vec<String> = Vec::new();
+    let mut found = Vec::new();
+    for segment in &segments {
+        let mut words = super::git_guard::command_argv(segment);
+        super::git_guard::strip_reserved_words(&mut words);
+        let Some((program, args)) = super::git_guard::strip_launchers(&words) else {
+            continue;
+        };
+        for carried in option_commands(program, args) {
+            match carried {
+                Carried::Command(body) => {
+                    let body = super::git_guard::launched_script(&words, &body);
+                    if !bodies.contains(&body) {
+                        bodies.push(body);
+                    }
+                }
+                refused => {
+                    if integrity.is_active() {
+                        found.extend(unread_violation(&refused, integrity));
+                    }
+                }
+            }
+        }
+    }
+    if bodies.is_empty() {
+        return found;
+    }
+    let run = super::git_guard::run_dirs(&segments, cwd);
+    let _body = OptionBody::enter();
+    for body in &bodies {
+        for directory in &run.dirs {
+            found.extend(evaluate_ruled(
+                body, posix, levels, integrity, directory, root, outcome,
+            ));
+        }
+        // Where the line may move to a directory the guard cannot establish,
+        // the body is judged after such a move too, so a relative name keeps
+        // the unknown directory the bare command would have. The move has
+        // no operand and adds no finding of its own, so every finding of
+        // this pass is the body's and none is dropped.
+        if run.unknown.is_some() {
+            let moved = format!("{UNKNOWN_MOVE}; {body}");
+            found.extend(evaluate_ruled(
+                &moved, posix, levels, integrity, cwd, root, outcome,
+            ));
+        }
+    }
+    found
+}
+
+/// The directory change [`option_violations`] puts before a carried
+/// command where the line's directory cannot be established: a return to
+/// the previous directory, which the guard never reads, so the command
+/// after it runs in an unknown directory. It has no operand, so no check
+/// finds anything in it at any level; the tests hold both properties.
+const UNKNOWN_MOVE: &str = "cd -";
 
 /// Every command a Git call on the line runs itself, read with its
 /// directory by git-guard's runner reader through every nesting level and
@@ -634,6 +736,364 @@ mod tests {
         }
     }
 
+    /// TSK-1490 AC-1: a command a program runs from one of its option
+    /// values gets every rule the command gets written bare. Each row names
+    /// the rule. A row may add a rule of its own: the carried words stay on
+    /// the line, and a closed rule refuses a line it cannot resolve beside
+    /// them.
+    #[test]
+    fn a_command_in_an_option_value_gets_the_bare_verdict() {
+        use crate::security::guard_forms::{
+            OPTION_BARE_EXEC, OPTION_CARRIERS, OPTION_CLONE_CARRIERS, OPTION_CLONE_EXEC,
+        };
+        // An owned, empty directory: a recursive reader walks nothing of
+        // this checkout.
+        let section = SecuritySection::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for (forms, values, bare_of) in [
+            (OPTION_CARRIERS, OPTION_BARE_EXEC, "{}"),
+            (OPTION_CLONE_CARRIERS, OPTION_CLONE_EXEC, "git clone {} o/r"),
+        ] {
+            for value in values {
+                let bare = rules(&bare_of.replace("{}", value));
+                assert!(!bare.is_empty(), "{value}");
+                for form in forms {
+                    let carried = form.replace("{}", value);
+                    let got = rules(&carried);
+                    if !bare.is_subset(&got) {
+                        failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+                    }
+                }
+            }
+        }
+        for (carried, bare_line) in crate::security::guard_forms::OPTION_ASSIGNMENTS {
+            let bare = rules(bare_line);
+            assert!(!bare.is_empty(), "{bare_line}");
+            let got = rules(carried);
+            if !bare.is_subset(&got) {
+                failed.push(format!("{carried}: {got:?}, want {bare:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 AC-1: a carried command gets the bare
+    /// command's rule at the level the policy sets it to, block, warn or
+    /// off, and nothing of that rule when the bare command gets nothing.
+    #[test]
+    fn a_command_in_an_option_value_takes_the_bare_rule_at_each_level() {
+        use crate::security::guard_forms::{OPTION_ASSIGNMENTS, OPTION_CARRIERS};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Each bare command with the one rule it meets; the carried form
+        // may meet other rules of its own (see the test above).
+        let mut triples: Vec<(String, String, &str)> = Vec::new();
+        for (value, rule) in [
+            ("cat ~/.ssh/id_rsa", "security.secret_reads"),
+            ("claude -p hi", "security.headless_peer_runs"),
+            ("sudo id", "security.privilege_escalation"),
+        ] {
+            for form in OPTION_CARRIERS {
+                triples.push((form.replace("{}", value), value.to_string(), rule));
+            }
+        }
+        for (carried, bare) in OPTION_ASSIGNMENTS {
+            triples.push((
+                (*carried).to_string(),
+                (*bare).to_string(),
+                "security.privilege_escalation",
+            ));
+        }
+        let mut failed = Vec::new();
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            // Outward actions are off, so a download tool's own outward
+            // finding stands apart from the rule compared.
+            let section = SecuritySection {
+                secret_reads: level,
+                headless_peer_runs: level,
+                privilege_escalation: level,
+                outward_actions: PolicyLevel::Off,
+                ..SecuritySection::default()
+            };
+            let level_of = |cmd: &str, rule: &str| -> Option<(PolicyLevel, bool)> {
+                evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                    .into_iter()
+                    .find(|v| v.rule == rule)
+                    .map(|v| (v.level, v.level_fixed))
+            };
+            for (carried, bare, rule) in &triples {
+                let (want, got) = (level_of(bare, rule), level_of(carried, rule));
+                if want != got {
+                    failed.push(format!(
+                        "{level:?} {rule} {carried}: {got:?}, want {want:?}"
+                    ));
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 AC-1: a carried relative read after a
+    /// directory change the guard cannot establish refuses as a possible
+    /// secret read, as the read written bare does, with the text rule
+    /// relaxed so that rule alone answers.
+    #[test]
+    fn a_carried_read_keeps_an_unknown_directory() {
+        use crate::hooks::policy::TextGuard;
+        use crate::security::guard_forms::OPTION_UNKNOWN_DIRECTORY;
+        let section = SecuritySection {
+            text_guard: TextGuard::Relaxed,
+            secret_reads: PolicyLevel::Block,
+            ..SecuritySection::default()
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let secret = |cmd: &str| {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .iter()
+                .any(|v| v.rule == "security.secret_reads")
+        };
+        for (carried, bare) in OPTION_UNKNOWN_DIRECTORY {
+            assert!(secret(bare), "{bare}");
+            assert!(secret(carried), "{carried}");
+        }
+    }
+
+    /// TSK-1490 AC-7: a carried command the program runs in another literal
+    /// directory is judged there, as the command written bare after a
+    /// change to that directory is; one run in a directory the guard cannot
+    /// establish refuses under hook integrity.
+    #[test]
+    fn a_carried_command_is_judged_where_it_runs() {
+        use crate::security::guard_forms::OPTION_UNKNOWN_RUN_DIRECTORIES;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let section = SecuritySection::default();
+        let found = |cmd: &str| evaluate_at(cmd, &section, PolicyLevel::Block, root, root);
+        let mut failed = Vec::new();
+        if let Some(home) = crate::portable_path::user_home() {
+            let ssh = home.join(".ssh");
+            let ssh = ssh.to_string_lossy();
+            let bare = format!("cd {ssh} && cat config");
+            assert!(
+                found(&bare)
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads"),
+                "{bare}"
+            );
+            for carried in [
+                format!("fd -C {ssh} -x cat config"),
+                format!("fd x -x cat config -- ';' -C {ssh}"),
+                format!("tar -C {ssh} -cf /tmp/a.tar -I 'cat config' ."),
+            ] {
+                if !found(&carried)
+                    .iter()
+                    .any(|v| v.rule == "security.secret_reads")
+                {
+                    failed.push(format!("judge where it runs: {carried}"));
+                }
+            }
+        }
+        // Findings merge one per rule, and the command is also judged as run
+        // in an unknown directory, whose Git runner reader may refuse first;
+        // git-guard's own test checks the directory reason.
+        for form in OPTION_UNKNOWN_RUN_DIRECTORIES {
+            let cmd = form.replace("{}", "git commit -m x");
+            let got = found(&cmd);
+            if !got
+                .iter()
+                .any(|v| v.rule == "git.hook_integrity" && v.level == PolicyLevel::Block)
+            {
+                failed.push(format!("refuse: {cmd}: {got:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490: a startup setting whose value sets the
+    /// startup-command setting again refuses under hook integrity with its
+    /// own reason at every privilege level, with outward actions off.
+    #[test]
+    fn a_startup_setting_nested_in_an_option_value_refuses() {
+        use crate::security::guard_forms::OPTION_NESTED_SETTINGS;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let mut failed = Vec::new();
+        for level in [PolicyLevel::Block, PolicyLevel::Warn, PolicyLevel::Off] {
+            let section = SecuritySection {
+                privilege_escalation: level,
+                outward_actions: PolicyLevel::Off,
+                ..SecuritySection::default()
+            };
+            for cmd in OPTION_NESTED_SETTINGS {
+                let got = evaluate_at(cmd, &section, PolicyLevel::Block, root, root);
+                if !got.iter().any(|v| {
+                    v.rule == "git.hook_integrity"
+                        && v.level == PolicyLevel::Block
+                        && v.message.contains("startup setting")
+                }) {
+                    failed.push(format!("{level:?} {cmd}: {got:?}"));
+                }
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
+    /// TSK-1490 AC-8 control: git-guard now reads Git through the
+    /// privilege launchers, and exec-guard's privilege rule still refuses
+    /// each of them at its default level; turning the rule off removes
+    /// only its own finding.
+    #[test]
+    fn a_privilege_launcher_before_git_keeps_the_privilege_rule() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for cmd in [
+            "sudo git -C /scratch commit -m x",
+            "doas git -C /scratch commit -m x",
+            "pkexec git -C /scratch commit -m x",
+        ] {
+            let default = evaluate_at(
+                cmd,
+                &SecuritySection::default(),
+                PolicyLevel::Block,
+                root,
+                root,
+            );
+            assert!(
+                default
+                    .iter()
+                    .any(|v| v.rule == "security.privilege_escalation"
+                        && v.level == PolicyLevel::Block),
+                "{cmd}: {default:?}"
+            );
+            let off = SecuritySection {
+                privilege_escalation: PolicyLevel::Off,
+                ..SecuritySection::default()
+            };
+            let got = evaluate_at(cmd, &off, PolicyLevel::Block, root, root);
+            assert!(
+                !got.iter()
+                    .any(|v| v.rule == "security.privilege_escalation"),
+                "{cmd}: {got:?}"
+            );
+        }
+    }
+
+    /// TSK-1490: the move a carried command is judged after, where the
+    /// line's directory is unknown, leaves the directory unknown and finds
+    /// nothing itself at any level, the strict text rule included, so the
+    /// carried command's findings are its own and none is dropped.
+    #[test]
+    fn the_unknown_directory_move_adds_no_finding_of_its_own() {
+        use crate::hooks::policy::TextGuard;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let blocking = SecuritySection {
+            text_guard: TextGuard::Strict,
+            secret_reads: PolicyLevel::Block,
+            headless_peer_runs: PolicyLevel::Block,
+            privilege_escalation: PolicyLevel::Block,
+            ..SecuritySection::default()
+        };
+        let alone = evaluate_at(
+            &format!("{UNKNOWN_MOVE}; true"),
+            &blocking,
+            PolicyLevel::Block,
+            root,
+            root,
+        );
+        assert!(alone.is_empty(), "{alone:?}");
+        let relaxed = SecuritySection {
+            text_guard: TextGuard::Relaxed,
+            ..blocking.clone()
+        };
+        let moved = evaluate_at(
+            &format!("{UNKNOWN_MOVE}; cat auth.json"),
+            &relaxed,
+            PolicyLevel::Block,
+            root,
+            root,
+        );
+        assert!(
+            moved.iter().any(|v| v.rule == "security.secret_reads"),
+            "{moved:?}"
+        );
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate_at(cmd, &blocking, PolicyLevel::Block, root, root)
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let carried = "cd \"$D\"; man -P 'cat notes.txt' ls";
+        let bare = "cd \"$D\"; man ls";
+        assert_eq!(rules(carried), rules(bare), "{carried}");
+    }
+
+    /// TSK-1490: an option value in a command language
+    /// the guard does not read refuses under hook integrity; an ordinary
+    /// value, another option or a form the reader does not reach adds no
+    /// rule to the command without it (AC-2).
+    #[test]
+    fn an_option_value_the_guard_cannot_read_refuses_and_ordinary_values_keep_their_verdict() {
+        use crate::security::guard_forms::{OPTION_CONTROLS, OPTION_LANGUAGES};
+        let section = SecuritySection::default();
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let rules = |cmd: &str| -> std::collections::BTreeSet<String> {
+            evaluate_at(cmd, &section, PolicyLevel::Block, root, root)
+                .into_iter()
+                .map(|v| v.rule)
+                .collect()
+        };
+        let mut failed = Vec::new();
+        for cmd in OPTION_LANGUAGES {
+            let got = rules(cmd);
+            if !got.contains("git.hook_integrity") {
+                failed.push(format!("refuse {cmd}: {got:?}"));
+            }
+        }
+        for (cmd, without) in OPTION_CONTROLS {
+            let (got, want) = (rules(cmd), rules(without));
+            if got != want {
+                failed.push(format!("keep {cmd}: {got:?}, want {want:?}"));
+            }
+        }
+        assert!(
+            failed.is_empty(),
+            "{} rows:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+    }
+
     /// TSK-397 design D: where the strict rule applies, a run-time word
     /// given to `rm` or `find` refuses under the directory check, never as a
     /// dangerous deletion; the baseline allows these, as the line did.
@@ -693,6 +1153,46 @@ mod tests {
             assert_eq!(found[0].level, PolicyLevel::Block, "{found:?}");
             assert!(found[0].message.contains("NUL byte"), "{found:?}");
         }
+    }
+
+    /// TSK-1490: an option-shaped word a launcher runs as its program
+    /// (after env's assignments, or after `--`, an operand or a verb) is
+    /// never taken as a program the guard read, so exec-guard's agent push
+    /// rule refuses it with hook integrity off, as git-guard does. A Git
+    /// push after env's assignment is judged as written.
+    #[test]
+    fn an_option_shaped_program_after_a_launcher_refuses() {
+        use super::super::git_guard::AGENT_PUSH_RULE;
+        let section = SecuritySection::default();
+        let root = std::env::current_dir().unwrap();
+        let mut failed = Vec::new();
+        for command in [
+            "env X=1 -p",
+            "env -i X=1 -p",
+            "env X=1 -- git push origin HEAD:refs/heads/main",
+            "env X=1 git push origin HEAD:refs/heads/main",
+            "nice -- -p",
+            "nohup -p",
+            "timeout 5 -p",
+            "sudo -- -p",
+            "find . -exec env X=/bin/claude -p hello '{}' \\;",
+            "find . -exec -p {} +",
+            "xargs env X=1 -p",
+        ] {
+            let found = evaluate_ruled(
+                command,
+                true,
+                &section,
+                PolicyLevel::Off,
+                &root,
+                &root,
+                &super::super::sandbox_state::Outcome::Relaxed,
+            );
+            if !found.iter().any(|v| v.rule == AGENT_PUSH_RULE) {
+                failed.push(format!("{command}: {found:?}"));
+            }
+        }
+        assert!(failed.is_empty(), "not refused:\n{}", failed.join("\n"));
     }
 
     #[test]

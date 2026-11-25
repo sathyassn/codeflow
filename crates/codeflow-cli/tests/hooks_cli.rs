@@ -712,15 +712,21 @@ fn git_guard_refuses_enforcement_writes_through_xargs_and_find() {
             "find . -type d -name .codeflow -exec rm -rf {} +",
             r"find . -name settings.json -execdir rm {} \;",
             r"find . -maxdepth 0 -exec sh -c 'rm -rf .codeflow' \;",
+            // A replacement string makes `xargs` a form the guards keep no
+            // grammar for (TSK-1490).
+            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            // `sed` reads its words for a command (`e`), so a runner that
+            // adds words or found paths to it is unresolved (TSK-1490).
+            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
+            "git ls-files -z | xargs -0 sed -i '' 's/a/b/'",
         ],
         &[
-            r"find . -name '*.md' -exec sed -i '' 's/a/b/' {} \;",
             r"find docs -exec rm {} \;",
             "find docs -delete",
             "printf x | xargs echo",
             "git ls-files | xargs grep -n a",
             "git ls-files | xargs rm -f",
-            "git ls-files -z | xargs -0 -I{} sed -i '' 's/a/b/' {}",
+            "git ls-files -z | xargs -0 wc -l",
             "find . -name '*.md' -print0 | xargs -0 grep -n a",
         ],
         "git.hook_integrity",
@@ -962,8 +968,8 @@ const REVIEWER_ALLOWED: &[&str] = &[
     "git clean --dry-run --force --force .claude/worktrees",
     "sed -n '1,5p' .codeflow/policy.json",
     "find .codeflow -exec grep -n a {} +",
-    r"printf 'README.md\n' | xargs sort",
-    r"printf 'README.md\n' | xargs -I{} uniq {}",
+    r"printf 'README.md\n' | xargs wc -l",
+    r"printf 'README.md\n' | xargs uniq",
     "nice -n 5 sed -n p README.md",
     "timeout 10 sed -i '' s/a/b/ README.md",
     "sed -i '' 's/.*//' README.md",
@@ -2234,6 +2240,59 @@ fn edit_guard_refuses_a_case_different_remote_tracking_path() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
+}
+
+/// TSK-1490 AC-6: through each hook entry, a command a program runs from
+/// an option value is refused by the rule the command meets written bare,
+/// and the same program with an ordinary value passes.
+#[test]
+fn a_command_in_an_option_value_is_refused_through_both_hook_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let run = |hook: &str, command: &str| {
+        run_with_stdin(
+            codeflow().args(["hook", hook]).current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    // Each carried line, then the command it carries written bare, refuses
+    // by the same rule.
+    for (hook, lines, rule) in [
+        (
+            "git-guard",
+            [
+                "man -P 'git config --global alias.x !id' ls",
+                "git config --global alias.x '!id'",
+            ],
+            "git.hook_integrity",
+        ),
+        (
+            "exec-guard",
+            ["man -P 'cat ~/.ssh/id_rsa' ls", "cat ~/.ssh/id_rsa"],
+            "security.secret_reads",
+        ),
+        // A value in a command language the guards do not read.
+        ("git-guard", ["vim -c 'set nu' f"; 2], "git.hook_integrity"),
+        ("exec-guard", ["vim -c 'set nu' f"; 2], "git.hook_integrity"),
+    ] {
+        for line in lines {
+            let out = run(hook, line);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(2), "{hook}: {line}: {stderr}");
+            assert!(
+                stderr.contains(&format!("policy rule {rule}")),
+                "{hook}: {line}: {stderr}"
+            );
+        }
+    }
+    for hook in ["git-guard", "exec-guard"] {
+        let out = run(hook, "man -P cat ls");
+        assert!(
+            line_allows(&out),
+            "{hook}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[test]
@@ -9446,13 +9505,11 @@ fn guards_read_a_search_pattern_as_text() {
     let mut allowed = vec![
         "rg --files | rg '/CHANGELOG.md$'".to_string(),
         "grep -rn '/etc/hosts' docs/".to_string(),
-        "rg --files | xargs rg '.claude/settings.json'".to_string(),
-        "rg --files | xargs rg -e x -e '.codeflow/policy.json'".to_string(),
-        "find docs -exec rg -l '.claude/settings.json' {} +".to_string(),
-        // A wrapped `git grep` reads its pattern as plain `git grep` does.
-        "rg --files | xargs git grep '/CHANGELOG.md$'".to_string(),
-        "rg --files | xargs git grep -e '/CHANGELOG.md$' --".to_string(),
-        "find docs -exec git grep '/CHANGELOG.md$' {} +".to_string(),
+        // A runner hands `grep` its paths; `rg` and `git grep` read their
+        // words for a command, so a runner refuses them since TSK-1490.
+        "rg --files | xargs grep '.claude/settings.json'".to_string(),
+        "rg --files | xargs grep -e x -e '.codeflow/policy.json'".to_string(),
+        "find docs -exec grep -l '.claude/settings.json' {} +".to_string(),
         // A preprocessor over a root that holds nothing protected.
         "rg --pre pdftotext needle docs/".to_string(),
     ];
@@ -9487,7 +9544,9 @@ fn guards_read_a_search_pattern_as_text() {
                     allowed.push(long);
                 }
             }
-            if tool != "git grep" {
+            // `rg`, `ag` and `git grep` read their words for a command, so
+            // an `xargs` that appends words to them refuses (TSK-1490).
+            if !matches!(tool, "git grep" | "rg" | "ag") {
                 let appended = format!("rg --files | xargs {tool} {form}");
                 if run_time {
                     cost.push(appended);
