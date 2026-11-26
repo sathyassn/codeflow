@@ -11,6 +11,7 @@ import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./exce
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { launchOrExplain } from "./browser-start.mjs";
 import { renderFigure } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -150,7 +151,9 @@ const figureCanonical = await (async () => {
 
 try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
-    const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
+    // A start that fails or times out throws a message that names the
+    // browser build and the host (TSK-1552); the check still fails there.
+    const chromeBrowser = name === 'chromium' ? browser : await launchOrExplain(name, engine);
     try { await checkSavedAppearance(chromeBrowser, origin, name); }
     finally { if (chromeBrowser !== browser) await closeOwned(name, chromeBrowser); }
   }
@@ -170,7 +173,7 @@ try {
   for (const name of (process.env.CF_PRESENT_CHIP_ENGINES ?? "").split(",").filter(Boolean)) {
     const engine = { firefox, webkit }[name];
     if (!engine) throw new Error(`Unknown engine ${name}`);
-    const other = await engine.launch();
+    const other = await launchOrExplain(name, engine);
     try {
       reviewPosts.length = 0;
       await checkInteractiveSurface(other, origin, reviewPosts);
