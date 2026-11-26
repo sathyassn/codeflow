@@ -1705,3 +1705,133 @@ fn a_home_move_through_no_planning_landing_stays_refused() {
 fn a_home_move_off_the_checked_line_stays_refused() {
     home_moves_refused(&[("second parent", MOVED), ("twice bad", MOVED)]);
 }
+
+/// Land `text` at `path` on `onto` as a merge of the planning branch `side`.
+fn land_record(root: &Path, onto: &str, side: &str, path: &str, text: &str) {
+    git(root, &["switch", "-c", side, onto]);
+    write(root, path, text);
+    commit(root, "docs: plan a change");
+    git(root, &["switch", onto]);
+    merge(root, side);
+}
+
+/// TSK-1605 AC-5: `codeflow ci` from the built binary, as the hosted check
+/// of a pull request that syncs `main` into the line. The line took TSK-001
+/// from `main` and merged a branch that lacked it, and `main` amended its
+/// criteria after the fork. With `line_amends`, the line also landed one of
+/// `main`'s two criteria changes on its own, so git's merge is clean and the
+/// head holds `main`'s exact record either way. Run with `--nocapture` for
+/// the evidence log: `codeflow --version` prints `source=`.
+fn journey_sync(line_amends: bool) -> (i32, String) {
+    const SYNC: &str = "chore/sync-main-into-epc-001";
+    let dir = repo(&[("TSK-002", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let path = record_path("TSK-001");
+    let planned = task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n");
+    let on_line = planned.replace(
+        "shall succeed.\n",
+        "shall succeed.\n- AC-3 When rerun, the system shall still work.\n",
+    );
+    let on_main = on_line.replace("the system shall work.", "the system shall always work.");
+    // TSK-002 keeps the line a verified epic line.
+    write(
+        root,
+        &record_path("TSK-002"),
+        &task("TSK-002", "todo", OWN_JOURNEY, "Pending.\n").replace(
+            "integration_target: main",
+            &format!("integration_target: {LINE}"),
+        ),
+    );
+    commit(root, "docs: target the receiving line");
+    git(root, &["switch", "-c", "docs/older"]);
+    write(root, "docs/older.md", "Work from before the plan.\n");
+    commit(root, "docs: work that forked before the plan");
+    land_record(root, "main", "plan/task", &path, &planned);
+    git(root, &["switch", "-c", LINE]);
+    merge(root, "docs/older");
+    if line_amends {
+        land_record(root, LINE, "plan/line-amends", &path, &on_line);
+    }
+    land_record(root, "main", "plan/main-amends", &path, &on_main);
+    // A change no planning pull request may carry, so the range is a sync.
+    write(root, "src/lib.rs", "pub fn main_moved() {}\n");
+    commit(root, "fix: main moves on");
+    publish_sources(root, "main");
+    git(root, &["switch", "-c", SYNC, LINE]);
+    merge(root, "main");
+    assert_eq!(
+        std::fs::read_to_string(root.join(&path)).unwrap(),
+        on_main,
+        "the sync carries main's exact record"
+    );
+    let body = root.join(".git/pr-body.md");
+    std::fs::write(
+        &body,
+        "## Summary\nThe line takes main's landed work.\n\n- one merge of main\n\nTask: EPC-001\n\n## Changes\n- merge main into the line\n\n## Testing\n- focused test\n\n## Release impact\n- Impact: none\n- Breaking: no\n- Rationale: main's own work, already reviewed there\n- Migration: none\n",
+    )
+    .unwrap();
+    let main = git_out(root, &["rev-parse", "main"]);
+    let result = check_as(
+        root,
+        LINE,
+        Some(SYNC),
+        false,
+        &[
+            "--into",
+            LINE,
+            "--policy-from",
+            &main,
+            "--pr-body-file",
+            body.to_str().unwrap(),
+        ],
+    );
+    let version = codeflow().arg("--version").output().unwrap();
+    let version = String::from_utf8_lossy(&version.stdout);
+    assert!(version.contains("source="), "{version}");
+    println!(
+        "TSK-1605 AC-5, line amends: {line_amends}\nbinary: {}\nversion: {}\nexit: {}\n{}",
+        env!("CARGO_BIN_EXE_codeflow"),
+        version.trim(),
+        result.0,
+        result.1
+    );
+    assert!(
+        result
+            .1
+            .contains("pull request class: sync of the default branch into"),
+        "{}",
+        result.1
+    );
+    result
+}
+
+/// TSK-1605 AC-5: a line that only inherits the criteria takes `main`'s
+/// amendment, and the whole run passes as a clean sync does.
+#[test]
+fn a_sync_into_a_line_that_inherits_the_criteria_passes_ci() {
+    let result = journey_sync(false);
+    assert_passes(&result, "the line inherits the criteria");
+    assert!(!result.1.contains("work.import_authority"), "{}", result.1);
+}
+
+/// TSK-1605 AC-5: the same sync is refused when the line amended the
+/// criteria, and by no other rule.
+#[test]
+fn a_sync_into_a_line_that_amended_the_criteria_is_refused_by_ci() {
+    let result = journey_sync(true);
+    assert_blocks(
+        &result,
+        "the line amended the criteria",
+        &["TSK-001: ", "accepted criteria cannot be resolved"],
+    );
+    let blocks: Vec<&str> = result
+        .1
+        .lines()
+        .filter(|line| line.contains("(block)"))
+        .collect();
+    assert!(
+        matches!(blocks.as_slice(), [only] if only.contains("work.import_authority")),
+        "{}",
+        result.1
+    );
+}

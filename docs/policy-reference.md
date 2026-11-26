@@ -70,6 +70,7 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.document_indexes` | string list | `[]` | an array of exact repository-relative documentation files (.md, .mdx, .rst or .adoc; case-insensitive extension), without globs or dot components | Document index files a planning amendment may update alongside records and plans. | Empty by default. Declare the files in a prior task pull request. The hosted check reads the target policy. On a re-push of a plan/ branch, pre-push can fall back to the earlier pushed tip; with an advertised work target it judges from the merge base with that target. The hosted check enforces the target-policy boundary. A declaration is a reviewed policy change on the target and must not name a file a harness or build tool loads. Product and watched paths, hidden paths and non-regular files stay excluded. Index file names beginning AGENT., AGENTS., CLAUDE., GEMINI., WARP., QWEN. or CRUSH., and SKILL.md, CONVENTIONS.md and llms*.md, are excluded without case. A file name stem containing a tilde followed by a digit is refused as a possible short-name alias. Root AGENTS.md keeps its separate project-section exception. The shipped policy file omits this key. |
 | `git.direct_changes` | enum | `allow` | allow \| forbid | Not supported, has no effect. Retired compatibility key; accepted and ignored. | Every pull request names its task or epic (R-70), regardless of this retained key. |
 | `git.release_branch_pattern` | string | `absent` | a branch glob (e.g. release/*); absent means integration/release-* | Names release branches, whose ranges are judged commit by commit where each change was introduced (SPC-013 R-120). | Read only from the policy at the default target's tip at the destination, so a pushed branch or a pull request cannot set its own scope; a change takes effect once it lands on the default target. A default target with no policy uses the built-in pattern only when no commit in its history has carried one (a first adoption); a removed policy, or history that cannot prove the absence, refuses. A pattern that could match a protected branch or an epic line name (`integration/EPC-*`) is refused, so the default target and epic lines keep their own rules. |
+| `git.import_authority_settled_before` | string | `absent` | 40 lowercase hex commit SHA on the default target's first-parent history; absent by default | Marks historical default-branch completions at or before this SHA as settled when synced into an integration line (TSK-1605). | Read only from the policy at the trusted default tip, never from the receiving branch or head. Absent by default for adopters. Exact blob matching (a merge's second parent included), owned-path checks, clean remerge, and home history checks still run; completions landing after this SHA still undergo full completion proof. |
 | `git.branch_naming` | Level | `block` | off \| warn \| allow \| block | Branch names must match `{prefix}/{kebab-name}` with a sanctioned prefix. | Protected branches are exempt (governed by the protection rules, not naming); prefixes come from branch_prefixes. |
 | `git.branch_prefixes` | string list | `["feat/","fix/","docs/","refactor/","test/","chore/","ci/","hotfix/","plan/","task/","spike/","experiment/","integration/"]` | an array of prefixes, each ending with `/` (e.g. feat/) | The sanctioned branch-name prefixes. | A prefix missing its trailing `/` never matches a `{prefix}/{name}` branch. |
 | `git.path_policy` | Level | `block` | off \| warn \| allow \| block | Refuse blocked names and protected prefixes in staged changes and introduced commits. | Reads landed policy for pre-commit and target policy for CI. Off removes only this gate; the secret scan remains separate. The shipped policy file does not list it, so an older binary never meets the key. |
@@ -2412,9 +2413,6 @@ that take the next word as their value (`-C`, `-c`, `--git-dir`,
   workspace sandbox were not probed there.
 - **Sourced files.** The guards do not follow what a startup file sources.
 
-<!-- No table here: the portal's row count for this page expects every table
-to be generated from the schema or checked against the hook dispatcher. -->
-
 ## Prose the exec-guard certifies
 
 The exec-guard's privilege, headless-peer and dangerous-command checks match
@@ -2483,10 +2481,22 @@ ledger changes no verdict.
 Local hooks protect only the operations that run them. The layers left for
 a protected branch depend on the skipped stage:
 
-| Skipped stage | What still applies locally | What stops a forced update or deletion on the remote |
-|---|---|---|
-| Commit hooks | With the reference hook still installed and `git.local_ref_protection` set to `block`, it refuses the new commit's local ref move. The reference hook also judges other local protected-ref moves and deletions under their policy levels; an exact remote-head sync remains allowed. | The remote host's protection applies to any later push. Local refusal is no evidence of those host rules. |
-| Push hook | The reference hook judges local ref transactions, not the remote destination. A push need not move the local branch. | Only the remote's protection. Without it, no local layer refuses this remote change once the push hook is skipped. |
+- **Commit hooks skipped.**
+  - What still applies locally: with the reference hook still installed and
+    `git.local_ref_protection` set to `block`, it refuses the new commit's
+    local ref move. The reference hook also judges other local
+    protected-ref moves and deletions under their policy levels; an exact
+    remote-head sync remains allowed.
+  - What stops a forced update or deletion on the remote: the remote host's
+    protection applies to any later push. Local refusal is no evidence of
+    those host rules.
+- **Push hook skipped.**
+  - What still applies locally: the reference hook judges local ref
+    transactions, not the remote destination. A push need not move the
+    local branch.
+  - What stops a forced update or deletion on the remote: only the remote's
+    protection. Without it, no local layer refuses this remote change once
+    the push hook is skipped.
 
 In-session guards can refuse skips they see; commands outside the session
 do not run those guards. CI supplies a verdict and needs required host
@@ -2510,6 +2520,8 @@ query that the shims use to check the binary. Each shim in
 names are checked against the binary's dispatcher, and the descriptions are
 written by hand.
 
+<!-- codeflow-hook-stages begin -->
+
 | Stage | What it checks | Detail |
 |---|---|---|
 | `pre-commit` | A commit on a protected branch, or in the root checkout while it is off its root branch; staged secrets or `.env` files; staged conflict markers | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
@@ -2517,6 +2529,8 @@ written by hand.
 | `pre-merge-commit` | A merge commit onto a protected branch that is not a fast forward | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `reference-transaction` | A fast-forward merge, hard reset or branch delete on a protected branch | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
 | `pre-push` | A push, force-push or delete to a protected branch, and branch naming | [git client hooks](architecture/enforcement-planes.md#git-client-hooks) |
+
+<!-- codeflow-hook-stages end -->
 
 ## Read-only git while the policy authority is unresolved
 

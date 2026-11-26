@@ -7,7 +7,7 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
-  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, tableRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks, wrapLookupTables,
+  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, derivedLookupRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks, wrapLookupTables,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, LOOKUP_COLUMNS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
@@ -285,7 +285,7 @@ for (const page of pages) {
     panel: binding.panel ?? null,
     anchor: binding.anchor ?? null,
   }));
-  page.lookup = !page.stale && page.page_class === PAGE_CLASSES.derivedLookup.id ? { derive: page.derive, rows: page.derive === "capability-registry" ? capabilityRows.length : tableRowCount(page.body) } : null;
+  page.lookup = !page.stale && page.page_class === PAGE_CLASSES.derivedLookup.id ? { derive: page.derive, rows: page.derive === "capability-registry" ? capabilityRows.length : derivedLookupRowCount(page.body, page.derive) } : null;
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });

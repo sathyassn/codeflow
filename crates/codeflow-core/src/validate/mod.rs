@@ -123,22 +123,22 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
     let record_sets = [
         (
             crate::workgraph::layout::epic_record_files(&pm_root),
-            validate_epic
+            validate_epic_frontmatter
                 as fn(
                     &Path,
                     &ValidateOptions,
-                )
-                    -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError>,
+                    Frontmatter,
+                ) -> (Vec<ValidationError>, Vec<ValidationWarning>),
             is_valid_epic_format_id as fn(&str) -> bool,
         ),
         (
             crate::workgraph::layout::spec_record_files(&pm_root),
-            validate_spec,
+            validate_spec_frontmatter,
             is_valid_spec_format_id,
         ),
         (
             crate::workgraph::layout::task_record_files(&pm_root),
-            validate_task,
+            validate_task_frontmatter,
             is_valid_task_format_id,
         ),
     ];
@@ -156,20 +156,24 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
             report.checked_records += 1;
             let relative = path.strip_prefix(repo_root).unwrap_or(&path);
             let display = crate::git::display_key(&crate::portable_path::slashed(relative));
-            if let Ok(content) = std::fs::read(&path) {
-                if let Ok((data, _)) = parse_frontmatter(&content) {
-                    if let Some(identity) = supported_identity(&data, valid_identity) {
-                        if let Some(first) = identities.get(&identity) {
-                            report.issues.push(format!(
-                                "duplicate work id {identity}: {first} and {display}"
-                            ));
-                        } else {
-                            identities.insert(identity, display.clone());
-                        }
+            // One read and one parse serve the identity check and the
+            // validator; a read or parse failure is the validator's error,
+            // as when the validator read the record itself (TSK-1516).
+            let parsed = std::fs::read(&path)
+                .map_err(ValidateError::from)
+                .and_then(|content| parse_frontmatter(&content));
+            if let Ok((data, _)) = &parsed {
+                if let Some(identity) = supported_identity(data, valid_identity) {
+                    if let Some(first) = identities.get(&identity) {
+                        report.issues.push(format!(
+                            "duplicate work id {identity}: {first} and {display}"
+                        ));
+                    } else {
+                        identities.insert(identity, display.clone());
                     }
                 }
             }
-            match validator(&path, &opts) {
+            match parsed.map(|frontmatter| validator(&path, &opts, frontmatter)) {
                 Ok((errors, warnings)) => {
                     report.issues.extend(
                         errors
@@ -233,6 +237,10 @@ impl Default for ValidateOptions {
 // ---------------------------------------------------------------------------
 // Frontmatter parsing
 // ---------------------------------------------------------------------------
+
+/// A record's parsed front matter and the body after it, as
+/// [`parse_frontmatter`] returns them.
+type Frontmatter = (HashMap<String, serde_yaml::Value>, Vec<u8>);
 
 /// Parse YAML frontmatter from markdown content.
 ///
@@ -576,8 +584,21 @@ pub fn validate_task(
     opts: &ValidateOptions,
 ) -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError> {
     let content = std::fs::read(path)?;
-    let (data, body) = parse_frontmatter(&content)?;
+    Ok(validate_task_frontmatter(
+        path,
+        opts,
+        parse_frontmatter(&content)?,
+    ))
+}
 
+/// [`validate_task`] on a record already read and parsed, for a caller that
+/// has the parsed front matter for another check (TSK-1516).
+#[allow(clippy::needless_pass_by_value)]
+fn validate_task_frontmatter(
+    path: &Path,
+    opts: &ValidateOptions,
+    (data, body): Frontmatter,
+) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     let mut errs = Vec::new();
     let mut warns = Vec::new();
 
@@ -690,7 +711,7 @@ pub fn validate_task(
         }
     }
 
-    Ok((errs, warns))
+    (errs, warns)
 }
 
 /// An open task names what it delivers and where it goes; a closed record
@@ -916,8 +937,21 @@ pub fn validate_epic(
     opts: &ValidateOptions,
 ) -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError> {
     let content = std::fs::read(path)?;
-    let (data, body) = parse_frontmatter(&content)?;
+    Ok(validate_epic_frontmatter(
+        path,
+        opts,
+        parse_frontmatter(&content)?,
+    ))
+}
 
+/// [`validate_epic`] on a record already read and parsed, for a caller that
+/// has the parsed front matter for another check (TSK-1516).
+#[allow(clippy::needless_pass_by_value)]
+fn validate_epic_frontmatter(
+    path: &Path,
+    opts: &ValidateOptions,
+    (data, body): Frontmatter,
+) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     let mut errs = Vec::new();
     let mut warns = Vec::new();
 
@@ -970,7 +1004,7 @@ pub fn validate_epic(
     errs.extend(outcome_errors);
     warns.extend(outcome_warnings);
 
-    Ok((errs, warns))
+    (errs, warns)
 }
 
 // ---------------------------------------------------------------------------
@@ -992,7 +1026,21 @@ pub fn validate_spec(
     opts: &ValidateOptions,
 ) -> Result<(Vec<ValidationError>, Vec<ValidationWarning>), ValidateError> {
     let content = std::fs::read(path)?;
-    let (data, body) = parse_frontmatter(&content)?;
+    Ok(validate_spec_frontmatter(
+        path,
+        opts,
+        parse_frontmatter(&content)?,
+    ))
+}
+
+/// [`validate_spec`] on a record already read and parsed, for a caller that
+/// has the parsed front matter for another check (TSK-1516).
+#[allow(clippy::needless_pass_by_value)]
+fn validate_spec_frontmatter(
+    path: &Path,
+    opts: &ValidateOptions,
+    (data, body): Frontmatter,
+) -> (Vec<ValidationError>, Vec<ValidationWarning>) {
     let mut errors = validate_required_fields(&data, SPEC_REQUIRED_FIELDS);
     let mut warnings = Vec::new();
     errors.extend(check_template_sentinels(&data, &["id", "title"]));
@@ -1026,7 +1074,7 @@ pub fn validate_spec(
         }
         Ok(_) => {}
     }
-    Ok((errors, warnings))
+    (errors, warnings)
 }
 
 /// The questions a spec still leaves open, read from its `open_questions`

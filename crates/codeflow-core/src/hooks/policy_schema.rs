@@ -163,7 +163,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 84] = [
+pub const SCHEMA: [KeySpec; 85] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -823,6 +823,18 @@ pub const SCHEMA: [KeySpec; 84] = [
                 default target and epic lines keep their own rules.",
     },
     KeySpec {
+        path: "git.import_authority_settled_before",
+        kind: KeyKind::String,
+        valid: "40 lowercase hex commit SHA on the default target's first-parent history; absent by default",
+        purpose: "Marks historical default-branch completions at or before this SHA as settled when synced into an integration line (TSK-1605).",
+        notes: "Read only from the policy at the trusted default tip, never from \
+                the receiving branch or head. Absent by default for adopters. \
+                Exact blob matching (a merge's second parent included), \
+                owned-path checks, clean remerge, and home history checks \
+                still run; completions landing after this SHA still undergo \
+                full completion proof.",
+    },
+    KeySpec {
         path: "git.branch_naming",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
@@ -1328,6 +1340,7 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
     }
 
     release_pattern_errors(obj, &mut errors);
+    settled_before_errors(obj, &mut errors);
 
     // Backstop: catch anything the schema walk did not model (a structural
     // error, or a registry gap) rather than let the enforcement loader
@@ -1373,6 +1386,28 @@ fn release_pattern_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec
         errors.push(PolicyError {
             key: "git.release_branch_pattern".to_string(),
             message: format!("invalid value '{pattern}' for git.release_branch_pattern; {problem}"),
+        });
+    }
+}
+
+/// Refuse a `git.import_authority_settled_before` value that is not an exact
+/// 40 lowercase hex commit SHA (TSK-1605).
+fn settled_before_errors(obj: &serde_json::Map<String, Value>, errors: &mut Vec<PolicyError>) {
+    let Some(sha) = obj
+        .get("git")
+        .and_then(Value::as_object)
+        .and_then(|git| git.get("import_authority_settled_before"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    let valid = sha.len() == 40 && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !valid {
+        errors.push(PolicyError {
+            key: "git.import_authority_settled_before".to_string(),
+            message: format!(
+                "invalid value '{sha}' for git.import_authority_settled_before; expected 40 lowercase hex digits"
+            ),
         });
     }
 }
@@ -1876,13 +1911,14 @@ mod tests {
     fn test_schema_covers_every_policy_leaf_both_ways() {
         // Keys that are absent by default serialize nothing; they are still
         // schema keys the file may carry.
-        const OPTIONAL: [&str; 12] = [
+        const OPTIONAL: [&str; 13] = [
             "security.text_guard",
             "git.pr_section_mapping",
             "git.ignored_files",
             "git.max_file_bytes",
             "git.release_branch_pattern",
             "git.clean_regenerable",
+            "git.import_authority_settled_before",
             "security.interpreter_scan",
             "security.enforcement_baseline",
             "security.workflow_pushes",

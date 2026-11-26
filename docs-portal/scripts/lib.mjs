@@ -1041,10 +1041,32 @@ export function altitudeWords(text) {
   return words;
 }
 
-// The body rows of every table on a page: the row count a generated lookup
-// records, which the validator compares with the rows it regenerates.
+// The body rows of every table in the selected Markdown.
 export function tableRowCount(markdown) {
   return markdownNodes(markdownTree(markdown), "table").reduce((total, table) => total + Math.max(table.children.length - 1, 0), 0);
+}
+
+// Policy evidence counts the same two marked regions the binary verifies.
+// Other lookup derivations keep their existing counting rule.
+export function derivedLookupRowCount(markdown, derive) {
+  if (derive !== "policy-reference") return tableRowCount(markdown);
+  const region = (begin, end, prefix = false) => {
+    const lines = markdown.split(/\r?\n/);
+    const starts = lines.flatMap((line, index) => (prefix ? line.startsWith(begin) : line === begin) ? [index] : []);
+    const ends = lines.flatMap((line, index) => line === end ? [index] : []);
+    if (starts.length !== 1 || ends.length !== 1 || starts[0] >= ends[0]) {
+      throw new Error("policy-reference requires one ordered pair of " + begin + " markers");
+    }
+    return lines.slice(starts[0] + 1, ends[0]).join("\n");
+  };
+  return tableRowCount(region(
+    "<!-- codeflow-derived policy-reference begin: ",
+    "<!-- codeflow-derived policy-reference end -->",
+    true,
+  )) + tableRowCount(region(
+    "<!-- codeflow-hook-stages begin -->",
+    "<!-- codeflow-hook-stages end -->",
+  ));
 }
 
 // Whether an as-is region still carries a level-one heading once the title

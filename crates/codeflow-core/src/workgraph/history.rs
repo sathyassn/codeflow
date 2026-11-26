@@ -78,17 +78,33 @@ fn snapshot(repo: &Repository) -> Snapshot {
 #[cfg(test)]
 thread_local! { static SNAPSHOT_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+/// Test only: restart this thread's count of snapshot reads.
+#[cfg(test)]
+pub(crate) fn reset_snapshot_reads() {
+    SNAPSHOT_READS.with(|reads| reads.set(0));
+}
+
+/// Test only: how many snapshots this thread has read since the last reset.
+#[cfg(test)]
+pub(crate) fn snapshot_reads() -> usize {
+    SNAPSHOT_READS.with(std::cell::Cell::get)
+}
+
 fn read_snapshot(repo: &Repository) -> Snapshot {
     #[cfg(test)]
     SNAPSHOT_READS.with(|reads| reads.set(reads.get() + 1));
     if let Some(overlay) = super::release_line::history_overlay(repo)? {
-        return Err(format!(
-            "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
-        ));
+        return Err(overlay_refusal(&overlay));
     }
     let graph = Rc::new(super::history_graph::verify(repo)?);
     let boundary = Rc::new(super::release_line::shallow_boundary(repo)?);
     Ok(Rc::new(Metadata { boundary, graph }))
+}
+
+fn overlay_refusal(overlay: &str) -> String {
+    format!(
+        "this clone overlays its recorded history with {overlay}; remove it or judge from a clean clone"
+    )
 }
 
 use git2::{Commit, Error, ErrorCode, Oid, Repository, Sort};
@@ -325,12 +341,15 @@ pub fn merge_base_many(repo: &Repository, commits: &[Oid]) -> Result<Oid, Error>
 /// Build a judging Git subprocess bound to its explicit directory.
 /// Call `check_command` before history queries; this constructor also serves
 /// their supporting object and ref lookups. Never inherit an object store
-/// or repository redirect that the reader did not check.
+/// or repository redirect that the reader did not check. Children read
+/// objects as recorded: a replace ref added after the last guard cannot
+/// change what this process sees (`GIT_NO_REPLACE_OBJECTS`).
 #[must_use]
 pub fn command() -> std::process::Command {
     let mut command = crate::git::command();
     command
         .args(["-c", "core.commitGraph=false"])
+        .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env_remove("GIT_DIR")
         .env_remove("GIT_COMMON_DIR")
         .env_remove("GIT_OBJECT_DIRECTORY")
@@ -352,11 +371,7 @@ pub fn check_command(root: &std::path::Path) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .is_empty()
     {
-        return Err(crate::remedy::Finding::new(
-            unverified("this clone is shallow").to_string(),
-            crate::remedy::CI_RANGE_UNREADABLE.remedy(),
-        )
-        .to_string());
+        return Err(shallow_refusal());
     }
     if let Some(file) = std::env::var_os("GIT_SHALLOW_FILE") {
         // Git treats an empty override as an explicitly complete history.
@@ -385,6 +400,47 @@ pub fn check_command(root: &std::path::Path) -> Result<(), String> {
             .to_string());
         }
         return Ok(());
+    }
+    Ok(())
+}
+
+fn shallow_refusal() -> String {
+    crate::remedy::Finding::new(
+        unverified("this clone is shallow").to_string(),
+        crate::remedy::CI_RANGE_UNREADABLE.remedy(),
+    )
+    .to_string()
+}
+
+/// Guard one spawned history query, reading the overlay state for it.
+///
+/// [`check_command`] inside a judgment reuses the snapshot read at the
+/// judgment's first query. Each spawned Git process reads replace refs,
+/// graft files and the shallow file itself, so this guard reads those
+/// again for every query, from the same sources and with the same
+/// refusals as a query outside a judgment. Only the commit-graph
+/// verification stays shared; its identity is still checked per query.
+/// Outside a judgment the snapshot is already read per query, so this is
+/// [`check_command`].
+///
+/// # Errors
+/// Refuses overlays, shallow clones or unreadable repository metadata.
+pub fn check_query(root: &std::path::Path) -> Result<(), String> {
+    check_command(root)?;
+    if !JUDGMENT.with(|memo| memo.borrow().is_some()) {
+        return Ok(());
+    }
+    let repo = Repository::discover(root).map_err(|error| unverified(error).to_string())?;
+    if let Some(overlay) = super::release_line::history_overlay(&repo)
+        .map_err(|error| unverified(error).to_string())?
+    {
+        return Err(unverified(overlay_refusal(&overlay)).to_string());
+    }
+    if !super::release_line::shallow_boundary(&repo)
+        .map_err(|error| unverified(error).to_string())?
+        .is_empty()
+    {
+        return Err(shallow_refusal());
     }
     Ok(())
 }

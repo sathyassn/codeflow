@@ -330,11 +330,9 @@ fn an_invalid_base_policy_verifies_nothing() {
     assert!(said.contains("judged with the policy at "), "{said}");
 }
 
-/// Point a replace ref for `main`'s commit at an object that does not
-/// exist, so git stops on the base the way git 2.55 stops on a
-/// `GIT_REPLACE_REF_BASE` without a trailing slash. Git refuses to write
-/// such a ref, so the file is written directly.
-fn break_the_base(root: &Path) {
+/// Plant a replace ref on `main` for the history-overlay check. Git
+/// refuses to write a ref to a missing object, so write it directly.
+fn replace_the_base_with_a_missing_object(root: &Path) {
     let out = std::process::Command::new("git")
         .args(["rev-parse", "main"])
         .current_dir(root)
@@ -354,12 +352,38 @@ fn a_base_git_refuses_is_reported_with_git_s_cause() {
     let root = dir.path();
     write(root, "y.txt", "y\n");
     commit(root, "feat: add y");
-    break_the_base(root);
+    // Keep the ref valid and the history free of overlays, but truncate
+    // main's loose commit object so Git itself refuses to resolve it.
+    let sha = object_of(root, "main");
+    remove_object(root, &sha);
+    write(
+        root,
+        &format!(".git/objects/{}/{}", &sha[..2], &sha[2..]),
+        "",
+    );
     let out = ci(root);
     let said = said(&out);
     assert_ne!(out.status.code(), Some(0), "{said}");
     assert!(
-        said.contains("cannot read revision main: fatal: replacement"),
+        said.contains("cannot read revision main: error: object file ")
+            && said.contains(" is empty"),
+        "{said}"
+    );
+    assert!(!said.contains("fetch the base branch"), "{said}");
+}
+
+#[test]
+fn a_replace_ref_on_the_base_is_reported_as_a_history_overlay() {
+    let dir = fixture(Some("{}"));
+    let root = dir.path();
+    write(root, "y.txt", "y\n");
+    commit(root, "feat: add y");
+    replace_the_base_with_a_missing_object(root);
+    let out = ci(root);
+    let said = said(&out);
+    assert_ne!(out.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("overlays its recorded history with the replace ref refs/replace/"),
         "{said}"
     );
     assert!(!said.contains("fetch the base branch"), "{said}");

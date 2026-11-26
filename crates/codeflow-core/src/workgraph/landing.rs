@@ -104,6 +104,10 @@ pub(super) struct TaskJudgement {
     pub(super) criteria: Authority,
     /// The source of the criteria, kept apart from the run's policy authority.
     pub(super) criteria_source: String,
+    /// Whether the criteria are unknown only because versions compete, with
+    /// no doubt in the whole history of any point that holds one
+    /// ([`Disagreement::Diverged`], TSK-1605).
+    pub(super) diverged: bool,
 }
 
 impl TaskJudgement {
@@ -113,6 +117,7 @@ impl TaskJudgement {
             landing: Landing::Unreadable(reason.clone()),
             criteria_source: format!("criteria authority unreadable: {reason}"),
             criteria: Authority::Unknown(reason),
+            diverged: false,
         }
     }
 
@@ -220,6 +225,17 @@ struct Held {
     /// Why the tree's answer cannot be trusted, when it cannot: a record
     /// that may be the task does not parse, or the identity is ambiguous.
     doubt: Option<String>,
+}
+
+/// Why the judged points agree on no version ([`RecordStore::agreed`]).
+enum Disagreement {
+    /// The points hold competing versions, or an absent point's history
+    /// holds an earlier version with other criteria, and the whole history
+    /// of each holding point was read with no unreadable or ambiguous record.
+    Diverged(String),
+    /// Anything else: a doubt, or history that cannot be read or cannot
+    /// tell which version an absent point keeps.
+    Unproved(String),
 }
 
 /// One task file as the store parsed it, shared by every tree and task
@@ -556,6 +572,7 @@ impl<'r> RecordStore<'r> {
                 break;
             }
         }
+        let mut diverged = false;
         let at_points = if let Some((_, held)) = newest {
             match (&held.doubt, held.records.first()) {
                 (Some(doubt), _) => Err(doubt.clone()),
@@ -563,7 +580,14 @@ impl<'r> RecordStore<'r> {
                 (None, None) => Ok(None),
             }
         } else {
-            self.agreed(task, &points)
+            match self.agreed(task, &points) {
+                Ok(version) => Ok(version),
+                Err(Disagreement::Unproved(reason)) => Err(reason),
+                Err(Disagreement::Diverged(reason)) => {
+                    diverged = true;
+                    Err(reason)
+                }
+            }
         };
         let criteria = match at_points {
             Ok(Some(record)) => Authority::Held(Box::new(record)),
@@ -581,6 +605,7 @@ impl<'r> RecordStore<'r> {
                 landing: Landing::Landed { witness },
                 criteria,
                 criteria_source,
+                diverged,
             };
         }
         let landing = match history.doubt {
@@ -591,6 +616,7 @@ impl<'r> RecordStore<'r> {
             landing,
             criteria,
             criteria_source,
+            diverged,
         }
     }
 
@@ -609,13 +635,20 @@ impl<'r> RecordStore<'r> {
     /// Returns why the criteria cannot be told: a point's doubt, held
     /// versions with different criteria, or an absent point whose history
     /// holds a version with other criteria or cannot prove which version
-    /// it keeps ([`Self::recovered`]).
+    /// it keeps ([`Self::recovered`]). Held versions that compete, and an
+    /// absent point's earlier version with other criteria, are
+    /// [`Disagreement::Diverged`] once the whole history of every holding
+    /// point was read without doubt; every other reason is
+    /// [`Disagreement::Unproved`]. Neither proves that a point decided
+    /// nothing: the caller proves that ([`Self::inherits_criteria`]).
     fn agreed(
         &mut self,
         task: &Identity,
         points: &[(Oid, Held)],
-    ) -> Result<Option<RecordView>, String> {
+    ) -> Result<Option<RecordView>, Disagreement> {
         let context = held_context(points);
+        let unproved =
+            |reason: String| Disagreement::Unproved(format!("{reason}; judged points: {context}"));
         let differ = || {
             format!("the judged points hold different versions of this task, and none of them is newer than the others: {context}")
         };
@@ -623,7 +656,7 @@ impl<'r> RecordStore<'r> {
         let mut absent: Vec<Oid> = Vec::new();
         for (point, held) in points {
             if let Some(doubt) = &held.doubt {
-                return Err(format!("{doubt}; judged points: {context}"));
+                return Err(unproved(doubt.clone()));
             }
             match held.records.first() {
                 Some((blob, record)) => versions.push((*point, *blob, record)),
@@ -647,9 +680,7 @@ impl<'r> RecordStore<'r> {
                 for &(other, other_blob, version) in &versions {
                     let newer = Holding::new(other, other_blob, Version::criteria(version));
                     if held.version != newer.version
-                        && self
-                            .yields(task, &held, &newer)
-                            .map_err(|reason| format!("{reason}; judged points: {context}"))?
+                        && self.yields(task, &held, &newer).map_err(unproved)?
                     {
                         older = true;
                         break;
@@ -662,22 +693,29 @@ impl<'r> RecordStore<'r> {
             versions = remaining;
         }
         let Some((_, _, first)) = versions.first() else {
-            return Err(differ());
+            return Err(Disagreement::Unproved(differ()));
         };
         let signature = first.criteria.signature();
         if versions
             .iter()
             .any(|(_, _, record)| record.criteria.signature() != signature)
         {
-            return Err(differ());
+            return Err(Disagreement::Diverged(differ()));
         }
         if !absent.is_empty() {
-            if let Some(earlier) = self
-                .recovered(task, &absent)
-                .map_err(|reason| format!("{reason}; judged points: {context}"))?
-            {
+            if let Some(earlier) = self.recovered(task, &absent).map_err(unproved)? {
                 if earlier.criteria.signature() != signature {
-                    return Err(differ());
+                    // `recovered` read only the absent points, so each
+                    // holding point's whole history is read here too.
+                    for (point, held) in points {
+                        let Some((blob, record)) = held.records.first() else {
+                            continue;
+                        };
+                        let holder = Holding::new(*point, *blob, Version::criteria(record));
+                        self.introductions(task, holder.commit, &holder.version)
+                            .map_err(|reason| unproved(holder.context(&reason)))?;
+                    }
+                    return Err(Disagreement::Diverged(differ()));
                 }
             }
         }
@@ -865,6 +903,118 @@ impl<'r> RecordStore<'r> {
             return Err("no introduction of this version could be proved".to_string());
         }
         Ok(introduced)
+    }
+
+    /// Whether `base` only inherits its criteria for the task (TSK-1605):
+    /// `landed` holds the task, `base` holds the criteria its one merge base
+    /// with `landed` holds, or neither of those two holds the task, and no
+    /// commit that `base` reaches and `landed` does not decided them
+    /// ([`Self::inherited`]). An amendment is a decision even when a later
+    /// commit restored the earlier wording, so equal criteria at the two
+    /// ends never prove this alone. This reads `landed`, the merge base, the
+    /// commits outside `landed`'s history, their parents and the merge bases
+    /// of merged parents; a judgement that `diverged` read all of
+    /// `landed`'s history.
+    ///
+    /// # Errors
+    ///
+    /// Returns why inheritance cannot be proved: an overlay, a shallow cut,
+    /// unreadable history or an ambiguous identity at any commit read.
+    pub(super) fn inherits_criteria(
+        &mut self,
+        task: &Identity,
+        base: Oid,
+        landed: Oid,
+    ) -> Result<bool, String> {
+        if let Some(overlay) = &self.overlay {
+            return Err(overlay.clone());
+        }
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let shared = history::merge_bases(self.repo, base, landed).map_err(unreadable)?;
+        let [shared] = shared.as_slice() else {
+            return Ok(false);
+        };
+        let mut uids: BTreeSet<String> = task.uid.iter().cloned().collect();
+        if self.criteria_at(task, landed, &mut uids)?.is_none() {
+            return Ok(false);
+        }
+        let carried = self.criteria_at(task, *shared, &mut uids)?;
+        if self.criteria_at(task, base, &mut uids)? != carried {
+            return Ok(false);
+        }
+        let mut walk = history::revwalk(self.repo).map_err(unreadable)?;
+        walk.push(base).map_err(unreadable)?;
+        walk.hide(landed).map_err(unreadable)?;
+        for commit in walk {
+            let commit = commit.map_err(unreadable)?;
+            if !self.inherited(task, commit, &mut uids)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Whether `commit` takes the task's criteria, or its absence, from its
+    /// parents without deciding them. A commit that agrees with every
+    /// parent inherits. A merge of two parents that differ inherits only
+    /// the side that changed since their merge base, as an automatic merge
+    /// does. Anything else is a decision: a direct change, an introduction,
+    /// a removal, a resolution that keeps the unchanged side, and criteria
+    /// neither parent holds.
+    fn inherited(
+        &mut self,
+        task: &Identity,
+        commit: Oid,
+        uids: &mut BTreeSet<String>,
+    ) -> Result<bool, String> {
+        let unreadable =
+            |error: git2::Error| format!("cannot read the history: {}", error.message());
+        let own = self.criteria_at(task, commit, uids)?;
+        let parents = history::parents(
+            self.repo,
+            &self.repo.find_commit(commit).map_err(unreadable)?,
+        )
+        .map_err(unreadable)?;
+        if parents.is_empty() {
+            return Ok(own.is_none());
+        }
+        let mut held = Vec::new();
+        for parent in &parents {
+            held.push(self.criteria_at(task, *parent, uids)?);
+        }
+        if held.iter().all(|version| *version == own) {
+            return Ok(true);
+        }
+        let ([left, right], [ours, theirs]) = (parents.as_slice(), held.as_slice()) else {
+            return Ok(false);
+        };
+        let mut forks = Vec::new();
+        for fork in history::merge_bases(self.repo, *left, *right).map_err(unreadable)? {
+            forks.push(self.criteria_at(task, fork, uids)?);
+        }
+        let Some((fork, rest)) = forks.split_first() else {
+            return Ok(false);
+        };
+        if rest.iter().any(|other| other != fork) {
+            return Ok(false);
+        }
+        Ok((ours == fork && own == *theirs) || (theirs == fork && own == *ours))
+    }
+
+    /// The task's criteria in the tree at `commit`, or `None` when that
+    /// tree holds no record of the task.
+    fn criteria_at(
+        &mut self,
+        task: &Identity,
+        commit: Oid,
+        uids: &mut BTreeSet<String>,
+    ) -> Result<Option<Version>, String> {
+        let held = self.history_at(task, commit, uids)?;
+        Ok(held
+            .records
+            .first()
+            .map(|(_, record)| Version::criteria(record)))
     }
 
     /// A historical tree must be readable before it can prove inheritance.

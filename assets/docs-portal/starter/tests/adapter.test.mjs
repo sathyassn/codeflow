@@ -24,6 +24,42 @@ const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 // Windows can hold a fixture briefly after a child exits; retry busy removals.
 const treeRemoval = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 };
 
+test("policy lookup evidence ignores authored tables outside its marked regions", async () => {
+  const source = await readFile(new URL("./fixtures/policy-reference-prose.md", import.meta.url), "utf8");
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, { page_classes: [{ source: "docs/policy-reference.md", class: "derived-lookup", derive: "policy-reference" }] });
+    await writeFile(path.join(root, "docs/policy-reference.md"), source);
+    commitFixture(root, "add policy reference with authored tables");
+    runAdapter(root);
+    const { pages } = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    const page = pages.find((entry) => entry.source_path === "docs/policy-reference.md");
+    // One schema row and the dispatcher's five stages, independent of prose.
+    assert.equal(page.lookup.rows, 6);
+  } finally { await rm(root, treeRemoval); }
+});
+
+test("policy lookup markers select rows independently of headings and prose", async () => {
+  const { derivedLookupRowCount, tableRowCount } = await import(libUrl);
+  const source = await readFile(new URL("./fixtures/policy-reference-prose.md", import.meta.url), "utf8");
+  assert.equal(tableRowCount(source), 17);
+  assert.equal(derivedLookupRowCount(source, "policy-reference"), 6);
+  assert.equal(derivedLookupRowCount(source.replace("## Git hook stages", "## Renamed stages"), "policy-reference"), 6);
+  assert.equal(derivedLookupRowCount(source.replaceAll("\n", "\r\n"), "policy-reference"), 6);
+  assert.equal(derivedLookupRowCount(source, "skill-catalog"), 17);
+  for (const [begin, end] of [
+    ["<!-- codeflow-derived policy-reference begin: ", "<!-- codeflow-derived policy-reference end -->"],
+    ["<!-- codeflow-hook-stages begin -->", "<!-- codeflow-hook-stages end -->"],
+  ]) {
+    for (const invalid of [
+      source.replace(begin, ""), source.replace(end, ""),
+      `${source}\n${begin}\n`, `${source}\n${end}\n`,
+      `${end}\n${source.replace(end, "")}`,
+    ]) assert.throws(() => derivedLookupRowCount(invalid, "policy-reference"), /one ordered pair/);
+  }
+  assert.throws(() => derivedLookupRowCount(source.replace("<!-- codeflow-hook-stages begin -->", "<!-- codeflow-hook-stages begin --> extra"), "policy-reference"), /one ordered pair/);
+});
+
 test("failed fixture initialization removes its owned root and preserves siblings", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "codeflow-fixture-cleanup-"));
   let allocated;
