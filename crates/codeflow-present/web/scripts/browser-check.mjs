@@ -11,7 +11,7 @@ import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./exce
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
-import { launchOrExplain } from "./browser-start.mjs";
+import { cleanUpAfter, launchOrExplain } from "./browser-start.mjs";
 import { renderFigure } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -149,6 +149,7 @@ const figureCanonical = await (async () => {
   } finally { await page.close(); }
 })();
 
+const checkOutcome = { failed: false, error: undefined };
 try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
     // A start that fails or times out throws a message that names the
@@ -182,11 +183,18 @@ try {
   }
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
-} finally {
+} catch (error) {
+  checkOutcome.failed = true;
+  checkOutcome.error = error;
+}
+// A cleanup failure never replaces a check failure, such as a Firefox or
+// WebKit start failure (TSK-1552): with both, the error names both, the
+// check failure first. Either one still fails the check.
+await cleanUpAfter(checkOutcome, async () => {
   await closeOwned("chromium", browser);
   await rm(browserHome, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
-}
+});
 
 async function checkSavedAppearance(browser, origin, engine) {
   for (const [key, saved, skin, face] of [
