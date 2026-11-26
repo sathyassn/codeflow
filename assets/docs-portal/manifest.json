@@ -387,6 +387,10 @@
       "ownership": "managed"
     },
     {
+      "path": "tests/fixtures/policy-reference-prose.md",
+      "ownership": "managed"
+    },
+    {
       "path": "tests/fixtures/pre-paint-script.json",
       "ownership": "managed"
     },
