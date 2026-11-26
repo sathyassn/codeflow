@@ -11,6 +11,7 @@ import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./exce
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
+import { cleanUpAfter, launchOrExplain } from "./browser-start.mjs";
 import { renderFigure } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -148,9 +149,12 @@ const figureCanonical = await (async () => {
   } finally { await page.close(); }
 })();
 
+const checkOutcome = { failed: false, error: undefined };
 try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
-    const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
+    // A start that fails or times out throws a message that names the
+    // browser build and the host (TSK-1552); the check still fails there.
+    const chromeBrowser = name === 'chromium' ? browser : await launchOrExplain(name, engine);
     try { await checkSavedAppearance(chromeBrowser, origin, name); }
     finally { if (chromeBrowser !== browser) await closeOwned(name, chromeBrowser); }
   }
@@ -170,7 +174,7 @@ try {
   for (const name of (process.env.CF_PRESENT_CHIP_ENGINES ?? "").split(",").filter(Boolean)) {
     const engine = { firefox, webkit }[name];
     if (!engine) throw new Error(`Unknown engine ${name}`);
-    const other = await engine.launch();
+    const other = await launchOrExplain(name, engine);
     try {
       reviewPosts.length = 0;
       await checkInteractiveSurface(other, origin, reviewPosts);
@@ -179,11 +183,18 @@ try {
   }
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
-} finally {
+} catch (error) {
+  checkOutcome.failed = true;
+  checkOutcome.error = error;
+}
+// A cleanup failure never replaces a check failure, such as a Firefox or
+// WebKit start failure (TSK-1552): with both, the error names both, the
+// check failure first. Either one still fails the check.
+await cleanUpAfter(checkOutcome, async () => {
   await closeOwned("chromium", browser);
   await rm(browserHome, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
-}
+});
 
 async function checkSavedAppearance(browser, origin, engine) {
   for (const [key, saved, skin, face] of [
