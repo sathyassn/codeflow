@@ -170,6 +170,54 @@ EPC-056 (the epic graph and the landing answers) and EPC-057
     `whole-epic` after the TSK-1513 sync and its next checkpoint. Every
     other epic line is a whole-epic line, marked by a planning range into
     `main`.
+- 2026-11-26, about 03:00 EST. Sathya ruled on the CI/CD target
+  placement, with the clean plan of the records audit. Orca Chief's
+  relayed text of the approved rulings reads:
+  1. "Heavy suites (full Linux gate; CodeFlow Windows) run nightly on
+     main, skipped when the tip already has a green full run. An epic PR
+     runs them only if it touches gate, build or workflow files. Short
+     checks on every PR to main."
+  2. "Push to main reuses every PR check, security, policy and admission
+     included (strict equality on the tree)."
+  3. "Per-task bar in all three: targeted tests + quick gate +
+     cross-family review before a task lands on its line; one local full
+     gate on the line tip before the epic PR (result in the PR body)."
+  4. "'Zero failing tests' (not 'zero new'). Records-only PRs run short
+     checks only. No merge queue; no line triggers."
+  - Ruling 1 supersedes the ruling of 2026-11-11 that every Windows job
+    runs on every pull request into `main`. For CodeFlow's own repository
+    and the shipped templates it replaces the Decision's sentence "The
+    Linux gates and every Windows job run only on the pull request into
+    `main`", the table row "Pull request into `main` (a task alone, a
+    marked epic, a checkpoint)", and the Consequences item that a
+    Windows-only break is first seen on the pull request into `main`: a
+    Windows-only break is now first seen on the nightly run, or on a
+    pull request into `main` that touches the gate, build or workflow
+    paths that `docs/releasing.md` "Where CI suites run" names. It
+    also replaces ADR-0097's row for a pull request into `main` and its
+    daily-run row for `main`, whose skip of an already-tested tip it
+    keeps.
+  - Ruling 2 amends the fresh secret-scan rescan on the push to `main`. It
+    replaces the Decision's clause "and the secret scan runs on every push"
+    and the clause "the secret scan always" of the table row "Push to
+    `main`": the secret scan and its gitleaks canary, the security review,
+    the policy and admission jobs are reused under the same strict
+    equality as every other job, which means the same tree and the same
+    workflow files and trust inputs, read from the trusted base. On a
+    reuse miss the scan runs in full, as every other job does. It does not
+    change the 2026-11-11 entry above for the scans that run outside a
+    push: the full-range secret scan with its allowlist canary still runs
+    locally on every landing and on `main`'s scheduled run, and the hosted
+    secret scan still runs on every pull request. For the shipped
+    templates TSK-1444 carries the same change (its AC-2, AC-3, AC-7 and
+    AC-9).
+  - A skipped heavy job is never proof and never reuse evidence. A pull
+    request run that ran only the short checks has no heavy result for
+    the push to reuse; the nightly run covers it.
+  - The maintainer page, `docs/releasing.md` "Where CI suites run", states
+    the rulings as the target placement. They take effect for CodeFlow's
+    own `main` with TSK-1452's restore; the shipped templates take them
+    through TSK-1352 and TSK-1444. The text above is unchanged.
 
 ## Architecture impact
 

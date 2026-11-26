@@ -90,7 +90,8 @@ Merge:
 
 - PR CI checks the actual proposed merge tree, which is more than the absence
   of conflicts.
-- Main-push and integration-line CI repeat the state check without writing.
+- Main-push CI repeats the state check without writing. A push to an
+  integration line starts no run ("Where CI suites run").
 - These release jobs live in `codeflow-release.yml`, outside the managed
   `codeflow-ci.yml` that every adopter receives. No scaffold installs them.
 - A PR check tests the merge with `main` as it was when the run started, so
@@ -130,11 +131,16 @@ Local-artifact authority job:
     coverage shards and their report, which applies the line floor.
   - `windows` is the one verdict over the Windows build, checks, test
     partitions and journeys.
-  - On a push to main or to an integration line whose merge commit has
+  - On a push to main whose merge commit has
     exactly the tree of a pull request head whose `codeflow-ci` run passed
     every job, both verdicts pass by naming that run and the gate and
-    Windows jobs are skipped (`scripts/ci-reuse.py`, TSK-265, TSK-359). The
-    run must be the one for the merged pull request into that line, and its
+    Windows jobs are skipped (`scripts/ci-reuse.py`, TSK-265, TSK-359). A
+    line push starts no run, so this applies to main only. This is the
+    reuse the workflows run today; after TSK-1452's restore, ruling 2 of
+    "Where CI suites run" widens it to every check, the security, policy
+    and admission jobs included, and a run that ran only the short checks
+    gives the push no heavy result to reuse. The
+    run must be the one for the merged pull request into main, and its
     own recorded provenance (pull request number, base line, head, merge
     tree, workflow file and Ubuntu and Windows runner images) must equal the
     push's, with a recorded base the line already held. Every job the push
@@ -233,8 +239,76 @@ runs only the short checks below (Director ruling, 2026-11-11). While
 `main` runs the same short checks, and the full Linux and Windows suites
 run only on the daily run of `main`'s tip and on a manual dispatch.
 [ADR-0097](decisions/ADR-0097-ci-suite-placement-by-event.md) records the
-placement by event and its dated history. Changing where a suite runs is
-an operator decision; agents and Coordinators never rule on it.
+placement by event and its dated history, and
+[ADR-0102](decisions/ADR-0102-a-marked-epic-reaches-main-once-and-complete-and.md)
+records the rulings that replace parts of it. Changing where a suite runs
+is an operator decision; agents and Coordinators never rule on it.
+
+Sathya ruled on the target placement on 2026-11-26. It replaces the
+earlier target of every Linux gate and every Windows job on every pull
+request into `main` (ADR-0102, 2026-11-11), and applies once `main`'s
+relaxed checks are restored (TSK-1452):
+
+1. The heavy suites (the full Linux gate and the Windows jobs) run nightly
+   on `main`, skipped when `main`'s tip already has a green full run. An
+   epic's pull request into `main` runs them only when it touches gate,
+   build or workflow files. Every pull request into `main` runs the short
+   checks.
+2. A push to `main` reuses every check of its pull request's run, the
+   security, policy and admission jobs included, only when the tree is
+   strictly equal; anything else runs in full.
+3. Before a task lands on its line: its targeted tests, the quick gate
+   (`codeflow test --mode quick`) and a cross-family review. Before the
+   epic's pull request into `main`: one local full gate on the line tip,
+   with its result in the pull request body. No full gate runs per task
+   landing.
+4. The bar is zero failing tests, not zero new failing tests. A
+   records-only pull request runs the short checks only. There is no merge
+   queue and no hosted trigger on a line.
+
+How the rulings apply:
+
+- **Gate, build or workflow files** (ruling 1) are exactly these paths. A
+  pull request into `main` that touches any of them runs the heavy suites;
+  one that touches none runs the short checks only. TSK-1445 builds this
+  list into the workflow's path filter and its parity check, and changing
+  the list is an operator decision.
+  - Workflow files: every file under `.github/workflows/`.
+  - Gate files: `.codeflow/test-config.json`,
+    `.codeflow/test-config.schema.json`, `scripts/gate-binary.py`,
+    `scripts/gate-parity.py`, `scripts/journey-gate.py`,
+    `scripts/contract-scans.py`, `scripts/coverage-merge.py`,
+    `scripts/coverage-shards.py`, `scripts/coverage-test-times.json`,
+    `scripts/windows-partitions.py`, `scripts/windows-test-times.json`,
+    `scripts/windows-daily.py`, `scripts/ci-reuse.py`,
+    `scripts/policy-admission.py` and `scripts/with-node.py`.
+  - Build files: `Cargo.toml`, `Cargo.lock`, each crate's `Cargo.toml`
+    under `crates/`, `rust-toolchain.toml`, `.cargo/config.toml` and
+    `dist-workspace.toml`.
+- **Reuse** (ruling 2) means the same tree and the same workflow files,
+  with trust inputs read from the trusted base, never from the pushed
+  tree. On a reuse miss the job runs in full. A pull request run that ran
+  only the short checks has no heavy result to reuse; the nightly run
+  covers it.
+- **A skipped heavy job is never proof**, on a pull request, on a push or
+  on the nightly run. A skipped nightly run names the green full run it
+  relies on.
+- **The daily records sync pull request** into `main`, which brings the
+  lines' landed records to `main`, runs the short checks only. It never
+  counts as a proof pull request, and it is never the "first pull request
+  after switch-on" that a proof of the restored checks needs.
+
+| Event, after the restore | Short checks | Linux gates and Windows jobs |
+|---|---|---|
+| Push to an integration line | no run | no run |
+| Pull request into `main`, records only, the daily records sync included | yes | no; never a proof |
+| Pull request into `main` that touches a gate, build or workflow file above | yes | yes |
+| Any other pull request into `main` | yes | no |
+| Push to `main` | reused from the pull request's run under strict equality, else run | when the pull request's run had them, reused under strict equality, else run; when it did not, the nightly run covers them |
+| Nightly run, `main`'s tip | as the daily run below | yes, skipped when the tip already has a green full run |
+| Manual dispatch | as the daily run below | yes |
+
+The table below is what the workflows run today, while `main` is relaxed.
 
 | Event | Short checks | Linux build, lint, tests and coverage | Windows checks, journeys and partitions | Release gates |
 |---|---|---|---|---|
@@ -257,18 +331,21 @@ an operator decision; agents and Coordinators never rule on it.
   required check, since GitHub treats a skipped required check as a
   success. So a required list names only checks that run on every ready
   pull request into that branch: `commit standards`, `release impact`,
-  `secret scan` and `security review`. `codeflow gates` and `windows`
-  return to `main`'s list only after their jobs run on pull requests into
-  `main` again.
-- A line has no hosted run of its own. A landing on a line is proven by the
-  local evidence on the landing candidate (quick and targeted tests and the
-  security scans, run locally and recorded in the pull request body)
-  together with the pull request checks of each member. The full gate runs
-  locally, alone, on `main`'s tip after each landed group. Windows proof
-  comes from the daily run or a manual dispatch on `main`.
-- Verdict reuse applies only to a push, and while `main` is relaxed a push
-  runs no suite, so nothing is reused for now. The daily run and a manual
-  dispatch run the suites.
+  `secret scan` and `security review`. Under ruling 1, `codeflow gates`
+  and `windows` run only on some pull requests into `main`, so they do not
+  return to `main`'s required list while that holds.
+- A line has no hosted run of its own. A task lands on its line on its
+  targeted tests, the quick gate and a cross-family review (ruling 3). One
+  local full gate runs on the line tip before the epic's pull request into
+  `main`, and its result goes in that pull request's body. The bar is zero
+  failing tests. Windows proof comes from the nightly (today, daily) run or
+  a manual dispatch on `main`, and from any pull request into `main` that
+  touches gate, build or workflow files.
+- Verdict reuse applies only to a push to `main`. While `main` is relaxed a
+  push runs no suite, so nothing is reused for now; the daily run and a
+  manual dispatch run the suites. After the restore, the push reuses every
+  check its pull request's run passed, the security, policy and admission
+  jobs included, only under strict equality (ruling 2).
 - A push to an integration line starts no run (permanent placement,
   operator ruling 2026-11-11), so no line push run is cancelled. A newer
   pull request run on a ref cancels the older one (the `concurrency` block
@@ -487,7 +564,7 @@ Three planes check release state, from cheapest to authoritative:
 |---|---|---|
 | Pre-push | `release.py preflight` for each pushed branch | only a push that breaks a release tree its base kept valid |
 | `codeflow integrate` | `release.py check-state --structural` in the test stage | an invalid tree |
-| CI, `codeflow-release.yml` | `release impact` (full `check-pr`) on pull requests; `release state` on pushes to `main` and `integration/**` | yes |
+| CI, `codeflow-release.yml` | `release impact` (full `check-pr`) on pull requests; `release state` on pushes to `main`; a line push starts no run | yes |
 
 The first two planes are the local planes:
 
