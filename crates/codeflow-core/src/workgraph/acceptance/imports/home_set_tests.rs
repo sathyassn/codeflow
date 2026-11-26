@@ -4,7 +4,8 @@
 
 use super::home::line_landing;
 use super::home_tests::{
-    docs_move, moved, passes, path_of, refused, task, todo, Fixture, LINE, MOVED, OTHER, THIRD,
+    docs_move, moved, non_planning_move, passes, path_of, refused, task, todo, Fixture, LINE,
+    MOVED, OTHER, THIRD,
 };
 use super::{
     admissible_planning_landing_with, Graph, HomeAnchor, Repository, PLANNING_LANDING_PATHS,
@@ -18,10 +19,10 @@ fn docs_admitted() -> bool {
     PLANNING_LANDING_PATHS.contains(&AmendmentPath::Doc)
 }
 
-/// AC-11: production admits records only until the operator decides.
+/// AC-11 / TSK-1605: production admits records and docs (the aligned set).
 #[test]
-fn the_live_set_is_records_only() {
-    assert_eq!(PLANNING_LANDING_PATHS, NARROW);
+fn the_live_set_is_records_and_docs() {
+    assert_eq!(PLANNING_LANDING_PATHS, ALIGNED);
 }
 
 /// AC-11: each landing moves the record beside one other path. Records
@@ -613,13 +614,13 @@ fn a_kept_home_no_line_commit_set_is_refused() {
 
 /// AC-13 negative (1): a reviewed records-only merge that adopts `main`'s
 /// exact version but never landed on the line sets no anchor, so `main`'s
-/// docs-bearing move is judged and refused.
+/// product-bearing move is judged and refused.
 #[test]
 fn a_claimed_adoption_with_no_landing_is_refused() {
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
     let path = path_of("TSK-001");
     let after = moved("TSK-001", "main");
-    docs_move(&fixture, &after);
+    non_planning_move(&fixture, &after);
     fixture.git(&["branch", "plan/unlanded", LINE]);
     fixture.land("plan/unlanded", &[(&path, &after)]);
     fixture.sync();
@@ -639,10 +640,10 @@ fn an_adoption_or_move_reachable_only_by_a_second_parent_is_refused() {
     let after = moved("TSK-001", "main");
 
     let fixture = Fixture::new(&[("TSK-001", todo("TSK-001", OTHER))]);
-    docs_move(&fixture, &after);
+    non_planning_move(&fixture, &after);
     fixture.git(&["branch", "plan/adopt", LINE]);
     fixture.land("plan/adopt", &[(&path, &after)]);
-    fixture.direct("plan/adopt", &[("docs/line.md", "The line's note.\n")]);
+    fixture.direct("plan/adopt", &[("src/line.rs", "pub fn line() {}\n")]);
     fixture.git(&["switch", "-q", LINE]);
     fixture.git(&[
         "merge",

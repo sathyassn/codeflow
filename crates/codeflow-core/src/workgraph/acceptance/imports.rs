@@ -32,11 +32,10 @@ pub struct ImportedRecord {
 }
 
 /// The path classes a planning landing may carry when it moves a task's
-/// home (TSK-1378 AC-11): records and plans only, until the operator
-/// decides otherwise. The line's own planning move and the walk of the
-/// default branch's moves use it; a line's adoption anchor and a shared
-/// planning introduction always admit records only.
-pub const PLANNING_LANDING_PATHS: &[AmendmentPath] = &[AmendmentPath::Record];
+/// home or introduces a task on `main` targeting a line (TSK-1378 AC-11,
+/// TSK-1605): records and docs. A line's adoption anchor and a shared
+/// planning introduction stay records-only.
+pub const PLANNING_LANDING_PATHS: &[AmendmentPath] = &[AmendmentPath::Record, AmendmentPath::Doc];
 
 /// Why the import check refuses, before it can name each record.
 const UNENUMERATED: &str = "the imported records could not be enumerated, so this refusal may not name every refused record";
@@ -125,6 +124,7 @@ fn compute_imports(
         Err(error) => return Err(unenumerated(error)),
     };
     let syncs = home::takes_default(repo, anchor, head, default_tip).map_err(unenumerated)?;
+    let cutover = Cutover::new(repo, default_tip);
     // Each refusal names its record; the check never stops at the first.
     let mut refusals = Vec::new();
     let refuse = |id: &str, place: &str, reason: &str| refusal(&default.name, id, place, reason);
@@ -279,6 +279,7 @@ fn compute_imports(
                 base,
                 head,
                 walk,
+                Some(&cutover),
             ) {
                 Ok(result) => {
                     imported.insert(record.id.clone(), result);
@@ -889,6 +890,7 @@ fn prove_retired_record(
         base,
         head,
         None,
+        None,
     )?;
     Ok(Some(ImportedRecord {
         path: record.path.clone(),
@@ -899,6 +901,30 @@ fn prove_retired_record(
     }))
 }
 
+/// The head a completed task's home landing took: the second parent of a
+/// two-parent merge, which must hold the exact record, else the landing
+/// itself. A clean merge can combine two edits into a record neither parent
+/// holds, so no reviewed source holds that result.
+///
+/// # Errors
+/// The second parent does not hold the exact record, or cannot be read.
+fn exact_source(
+    repo: &Repository,
+    record: &RecordView,
+    landed: Oid,
+    parents: &[Oid],
+) -> Result<Oid, String> {
+    let [_, second] = parents else {
+        return Ok(landed);
+    };
+    if record_at(repo, *second, record)?.is_none_or(|old| old.content != record.content) {
+        return Err("the home merge does not carry the exact source record".into());
+    }
+    Ok(*second)
+}
+
+/// Prove the completion of a task that landed at `landed` from the head
+/// `span` ([`exact_source`]).
 fn prove_task_completion(
     repo: &Repository,
     record: &RecordView,
@@ -906,7 +932,7 @@ fn prove_task_completion(
     tip: Oid,
     default_tip: Oid,
     landed: Oid,
-    parents: &[Oid],
+    span: Oid,
 ) -> Result<CompletionProof, String> {
     let block = active_block(record).expect("active block checked");
     let introduced = introduced_at(repo, record, &block, landed)?;
@@ -914,15 +940,6 @@ fn prove_task_completion(
     // Judge the entire task head that landed, including changes made
     // after its completion block was written. The block's introduction
     // alone cannot prove that the home accepted the reviewed result.
-    let span = if parents.len() == 2 {
-        let second = parents[1];
-        if record_at(repo, second, record)?.is_none_or(|old| old.content != record.content) {
-            return Err("the home merge does not carry the exact source record".into());
-        }
-        second
-    } else {
-        landed
-    };
     let run = RunBases::new([landed]);
     let source_graph = Graph::from_revision(repo, &landed.to_string())?;
     let bound = bind_completion_with_amendment(
@@ -948,7 +965,7 @@ fn prove_task_completion(
     let mut proof = bound
         .proof
         .ok_or("the home completion has no binding proof")?;
-    if parents.len() == 2 {
+    if span != landed {
         proof.landing_merge = Some(landed);
     }
     Ok(proof)
@@ -962,6 +979,75 @@ struct Walk {
     default_tip: Oid,
 }
 
+/// Read and validate `git.import_authority_settled_before` from the trusted
+/// default tip's policy (TSK-1605). Returns `Ok(None)` when absent. Fails
+/// closed if the policy is unreadable, the SHA is not 40 lowercase hex, or
+/// the commit is not on `default_tip`'s first-parent history.
+fn settled_before_cutover(repo: &Repository, default_tip: Oid) -> Result<Option<Oid>, String> {
+    if home::entry_at(repo, default_tip, ".codeflow/policy.json")?.is_none() {
+        return Ok(None);
+    }
+    let policy = crate::hooks::landed_policy::checked_policy_at(repo, default_tip)?;
+    let Some(raw) = policy.git.import_authority_settled_before.as_deref() else {
+        return Ok(None);
+    };
+    let valid_hex = raw.len() == 40 && raw.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    if !valid_hex {
+        return Err(format!(
+            "git.import_authority_settled_before '{raw}' is not 40 lowercase hex digits"
+        ));
+    }
+    let cutover = Oid::from_str(raw).map_err(|error| {
+        format!("git.import_authority_settled_before '{raw}' is invalid: {error}")
+    })?;
+    let mut at = default_tip;
+    loop {
+        if at == cutover {
+            return Ok(Some(cutover));
+        }
+        let Some(parent) = first_parent(repo, at)? else {
+            break;
+        };
+        at = parent;
+    }
+    Err(format!(
+        "git.import_authority_settled_before {cutover} is not on the default target's first-parent history at {default_tip}"
+    ))
+}
+
+/// The settled-history cutover of one import run (TSK-1605), read only when
+/// a completion could use it and at most once, its error included.
+struct Cutover<'r> {
+    repo: &'r Repository,
+    default_tip: Oid,
+    read: std::cell::OnceCell<Result<Option<Oid>, String>>,
+}
+
+impl<'r> Cutover<'r> {
+    fn new(repo: &'r Repository, default_tip: Oid) -> Self {
+        Self {
+            repo,
+            default_tip,
+            read: std::cell::OnceCell::new(),
+        }
+    }
+
+    /// Whether `landed` is at or before the cutover; never, when none is set.
+    ///
+    /// # Errors
+    /// The cutover or the history cannot be read ([`settled_before_cutover`]).
+    fn settles(&self, landed: Oid) -> Result<bool, String> {
+        let read = self
+            .read
+            .get_or_init(|| settled_before_cutover(self.repo, self.default_tip));
+        match read {
+            Ok(Some(cutover)) => is_ancestor_or_same(self.repo, landed, *cutover),
+            Ok(None) => Ok(false),
+            Err(reason) => Err(reason.clone()),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn prove_record(
     repo: &Repository,
@@ -973,6 +1059,7 @@ fn prove_record(
     base: Oid,
     head: Oid,
     walk: Option<Walk>,
+    cutover: Option<&Cutover<'_>>,
 ) -> Result<ImportedRecord, String> {
     let commit = repo
         .find_commit(landed)
@@ -1017,18 +1104,31 @@ fn prove_record(
             origin,
             source,
             None,
+            None,
         )?
         .completion
     } else if record.kind == RecordKind::Task && active_block(record).is_some() {
-        Some(prove_task_completion(
-            repo,
-            record,
-            home,
-            tip,
-            default_tip,
-            landed,
-            &parents,
-        )?)
+        // The cutover settles the completion's proof only: the landing must
+        // still carry its source's exact record. A cutover that cannot be
+        // read refuses the record and never counts as no cutover.
+        let span = exact_source(repo, record, landed, &parents)?;
+        let settled_default_landing = match (walk, cutover) {
+            (Some(_), Some(cutover)) => cutover.settles(landed)?,
+            _ => false,
+        };
+        if settled_default_landing {
+            None
+        } else {
+            Some(prove_task_completion(
+                repo,
+                record,
+                home,
+                tip,
+                default_tip,
+                landed,
+                span,
+            )?)
+        }
     } else {
         if record.kind == RecordKind::Epic {
             let origin = active_block(record)
@@ -1104,21 +1204,36 @@ fn verify_record_home(
     }
     // Divergent, independently introduced criteria do not become stale just
     // because the source has the same record as the receiving head.
+    // The receiving base is set aside only when the full judgement finds
+    // competing versions with no doubt in the history it read, and the base
+    // is proved to inherit its criteria, or the task's absence, from its
+    // merge base with the landing (TSK-1605): a merge of a branch that
+    // lacked the record is no decision of the base. The landing's whole
+    // history is read, and every commit of the base outside it. Any other
+    // unknown, an ambiguous or unreadable record in either history
+    // included, refuses, and so does a base that amended and restored the
+    // criteria.
     if record.kind == RecordKind::Task {
         use super::super::landing::{Authority, Identity, Outside, RecordStore};
+        let identity = Identity::of(record);
+        let outside = Outside {
+            head,
+            tips: &[],
+            at: None,
+            own: &[],
+            replaced: None,
+        };
         let mut store = RecordStore::new(repo);
-        let judged = store.judge(
-            &Identity::of(record),
-            &[base, landed],
-            &Outside {
-                head,
-                tips: &[],
-                at: None,
-                own: &[],
-                replaced: None,
-            },
-        );
-        match judged.criteria {
+        let full = store.judge(&identity, &[base, landed], &outside);
+        let mut criteria = full.criteria;
+        if full.diverged
+            && store
+                .inherits_criteria(&identity, base, landed)
+                .unwrap_or(false)
+        {
+            criteria = store.judge(&identity, &[landed], &outside).criteria;
+        }
+        match criteria {
             Authority::Held(source)
                 if source.criteria.signature() == record.criteria.signature() => {}
             Authority::Unknown(reason) => {
