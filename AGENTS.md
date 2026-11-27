@@ -129,39 +129,34 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
     makes. That portal check refuses until the files it reads, `docs/`, its
     figures, config and published records, match HEAD, so commit those edits
     first.
-  - The primary runs one full gate on each landing candidate. That gate does
+  - No full gate runs per task landing (Sathya's CI/CD ruling 3,
+    2026-11-26). The primary runs one local full gate on the line tip
+    before the epic's pull request into `main` (`codeflow test --all`) and
+    puts its result in that pull request's body; the bar is zero failing
+    tests. That gate does
     not cover a target defined only in essential. Workspace lints: clippy all
     = deny, pedantic = warn. Edition 2021, workspace-managed dependency
     versions in the root `Cargo.toml`.
-- **Landings batch, with hosted green once per candidate.** When a line
-  lands, every pull request into it that is reviewed and ready at that
-  moment goes onto one landing candidate, in dependency order, with one full
-  gate and one hosted run for the whole batch. Each line has one candidate
-  at a time, and different lines land in parallel. A pull request that
-  becomes ready later joins the next candidate; it is never held behind
-  another pull request's landing or hosted run.
-  - The candidate lands when its own hosted "codeflow gates" and "windows"
-    verdicts are green and the line's current tip, which it was built on,
-    has green verdicts too.
-  - Recovery exception: while the tip is red or lacks evidence, a candidate
-    may carry only the repair of the failure and the work needed to produce
-    the evidence, such as a workflow fix without which the jobs cannot run;
-    other ready pull requests wait for the next candidate. Such a fix does
-    not skip, weaken or remove the failing check, and it still takes its own
-    review and its candidate's full gate. After such a landing, the next
-    candidate waits for green verdicts on the new tip.
-  - Pending (a run still in progress) is not green: wait for it.
-  - Cancelled, skipped and missing (no run for the candidate or the tip) are
-    not green: start or rerun the run. A skip counts only when it is a reuse
-    that names a green run (TSK-359).
-  - Stale (a green verdict for an earlier tip or candidate) is not evidence
-    for the current one.
+- **Landings batch on the local bar (Sathya's CI/CD ruling 3,
+  2026-11-26).** A task lands on its line on its targeted tests, the quick
+  gate and a cross-family review; a line push starts no hosted run
+  (ADR-0102). When a line lands, every reviewed, completed head at that
+  moment goes onto one landing candidate, in dependency order. Each line
+  has one candidate at a time, and different lines land in parallel. A head
+  that becomes ready later joins the next candidate. One local full gate
+  runs on the line tip before the epic's pull request into `main`.
+  - Recovery exception: while the line tip's local full gate is red, a
+    candidate may carry only the repair of the failure and the work needed
+    to produce the evidence; other ready heads wait for the next candidate.
+    Such a fix does not skip, weaken or remove the failing check, and it
+    still takes its own review.
   - A failure shown to come from runner infrastructure is rerun, never read
     as a pass. A failure shown to be unrelated to the candidate still
     blocks it until repaired, under the recovery exception.
-  - Once TSK-358 lands, a pull request into a line also needs its own green
-    "codeflow gates" and "windows" verdicts at the exact head that lands;
-    TSK-358 updates this sentence when it lands.
+  - Hosted verdicts on a pull request into `main` follow `docs/releasing.md`
+    "Where CI suites run": pending, cancelled, missing and stale verdicts
+    are not green; a skipped heavy job is never proof; a skip counts only
+    when it is a reuse that names a green run (TSK-359).
 - **Direct heavy Cargo work uses `codeflow reserve -- <command>` while another worktree may be gating; keep its target directory inside this worktree.**
 - **Hook and policy tasks run the worktree's own binary.** For a task that
   changes the policy schema or a hook check, point `CODEFLOW_HOOK_BINARY`
@@ -176,7 +171,7 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   harness directories, so the next build re-embeds revision and dirty
   state after a docs-only edit too. Path and version alone identify the
   binary; they do not prove its source.
-- **This repo lands only through PRs (ADR-0006):** use a feature branch, the PR
+- **`main` lands only through PRs (ADR-0006):** use a feature branch, the PR
   template, green CI and a human merge; agents never merge protected branches.
   `codeflow integrate` remains shipped for offline use, not this
   repo's daily path. Keep release state in each work PR; see
@@ -189,3 +184,28 @@ Also `/cf-stack`, `/cf-customize`, `/cf-docs-portal`.
   remote-perimeter`). Where CI is not required, the human who merges confirms
   that CI is green; where branches need not be up to date, that it ran on the
   current `main`; never merge on red.
+- **Records travel with the work (Sathya, 2026-11-26):**
+  - A task's record changes go in the same pull request, or the same line
+    landing, as the code they describe; never in a separate records-only
+    pull request. One exception: the daily records sync pull request into
+    `main` carries a snapshot of records already landed on their lines,
+    with their reviewed line evidence. It runs the short checks only, never
+    counts as a proof pull request, and is never the first pull request
+    after a switch-on that a proof needs. A record states "landed on its
+    line" separately from "code on `main`".
+  - The named routing exceptions stand: EPC-022's milestone checkpoint
+    pull requests (ADR-0102) and an adopter's unmarked lines on their
+    shipped route.
+  - Proof that exists only after a landing goes in the epic's pull request
+    into `main`, never in a separate proof pull request or proof task.
+  - An epic's records are on `main` from its breakdown: the planning pull
+    request that files the epic and its tasks reaches `main` before their
+    work starts.
+  - Once a task branch's merge is proven, it is deleted, locally and on the
+    remote, by whoever landed it.
+- **New records and review rounds (Sathya, 2026-11-26):**
+  - No new task or epic is filed without Orca Chief's approval. This
+    covers splits and follow-ups.
+  - A unit gets one review and one confirm of its repairs. If the confirm
+    still finds a material problem, cut a smaller slice or stop and report;
+    there is no third round.
